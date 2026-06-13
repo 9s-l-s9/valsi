@@ -1,0 +1,13 @@
+# Emacs
+*.elc
+*~
+\#*\#
+.\#*
+
+# Valsi runtime (agent sessions, auth) — files-over-formats, but machine-local
+.valsi/
+
+
+# Build / doc artifacts
+*.info
+/doc/*.html
