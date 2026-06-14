@@ -144,6 +144,36 @@
     (valsi-plan--insert-dep-on-line "T002")
     (should (string-match-p "(depends on T001, T002)" (buffer-string)))))
 
+(ert-deftest valsi-test-plan-lint-issues ()
+  "The pure lint function flags dangling deps, duplicates, cycles, and
+interior-state contradictions."
+  (let* ((content (concat "# Plan\n"
+                          "- [ ] T001 a (depends on T999)\n"   ; dangling
+                          "- [ ] T002 b (depends on T003)\n"   ; cycle w/ T003
+                          "- [ ] T003 c (depends on T002)\n"
+                          "- [ ] T002 dup\n"))                 ; duplicate id
+         (issues (valsi-plan--lint-issues (valsi-plan-parse content))))
+    (should (cl-some (lambda (s) (string-match-p "dangling dep T999" s)) issues))
+    (should (cl-some (lambda (s) (string-match-p "duplicate id T002" s)) issues))
+    (should (cl-some (lambda (s) (string-match-p "dependency cycle" s)) issues))))
+
+(ert-deftest valsi-test-plan-lint-interior-state ()
+  "A parent marked done with an unfinished child is flagged."
+  (let* ((content (concat "# Plan\n"
+                          "- [x] 1 parent\n"
+                          "  - [ ] 1.1 child\n"))
+         (issues (valsi-plan--lint-issues (valsi-plan-parse content))))
+    (should (cl-some (lambda (s) (string-match-p "marked done but has an unfinished child" s))
+                     issues))))
+
+(ert-deftest valsi-test-plan-lint-clean ()
+  "A well-formed plan produces no structural issues."
+  (let* ((content (concat "# Plan\n"
+                          "- [x] T001 a\n"
+                          "- [ ] T002 b (depends on T001)\n"))
+         (issues (valsi-plan--lint-issues (valsi-plan-parse content))))
+    (should (null issues))))
+
 ;;;; Capability advertisement (degradation ladder)
 
 (ert-deftest valsi-test-capabilities ()

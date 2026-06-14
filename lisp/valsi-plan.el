@@ -512,11 +512,12 @@ Refuses on non-speckit dialects (positional ids are meaningful there)."
 
 ;;;; Lint (rung 3+)
 
-(defun valsi-plan-lint ()
-  "Report plan health: dangling deps, duplicate ids, placeholders, unknown states."
-  (interactive)
-  (let* ((root (valsi-tree))
-         (tasks (valsi-node-of-type root 'task))
+(defun valsi-plan--lint-issues (root)
+  "Return a list of structural lint issue strings for parse tree ROOT.
+Pure over the tree (no buffer): duplicate ids, dangling deps, unknown state
+chars, dependency cycles, and interior-state contradictions.  Buffer-only
+checks (placeholders) are added by `valsi-plan-lint'."
+  (let* ((tasks (valsi-node-of-type root 'task))
          (ids (delq nil (mapcar (lambda (tk) (valsi-node-prop tk :id)) tasks)))
          (issues nil))
     ;; duplicate ids
@@ -526,32 +527,51 @@ Refuses on non-speckit dialects (positional ids are meaningful there)."
       (maphash (lambda (id n) (when (> n 1)
                                 (push (format "duplicate id %s (%d)" id n) issues)))
                seen))
-    ;; dangling deps
     (dolist (tk tasks)
-      (dolist (d (valsi-node-prop tk :deps))
-        (unless (member d ids)
-          (push (format "%s: dangling dep %s"
-                        (or (valsi-node-prop tk :id) "?") d) issues)))
-      (when (eq (valsi-node-prop tk :state) 'unknown)
-        (push (format "%s: unknown state char %S"
-                      (or (valsi-node-prop tk :id) "?")
-                      (valsi-node-prop tk :char)) issues)))
-    ;; placeholders
+      (let ((id (or (valsi-node-prop tk :id) "?")))
+        ;; dangling deps
+        (dolist (d (valsi-node-prop tk :deps))
+          (unless (member d ids)
+            (push (format "%s: dangling dep %s" id d) issues)))
+        ;; unknown state char
+        (when (eq (valsi-node-prop tk :state) 'unknown)
+          (push (format "%s: unknown state char %S" id
+                        (valsi-node-prop tk :char))
+                issues))
+        ;; dependency cycle: a task that transitively depends on itself
+        (let ((self (valsi-node-prop tk :id)))
+          (when (and self (valsi-plan--reaches-p self self tasks))
+            (push (format "%s: dependency cycle" self) issues)))
+        ;; interior-state contradiction: marked done but a child is not done
+        (when (and (eq (valsi-node-prop tk :state) 'done)
+                   (not (eq (valsi-plan-effective-state tk) 'done)))
+          (push (format "%s: marked done but has an unfinished child" id)
+                issues))))
+    (nreverse issues)))
+
+(defun valsi-plan-lint ()
+  "Report plan health: dangling deps, duplicate ids, cycles, interior-state
+contradictions, placeholders, and unknown state chars."
+  (interactive)
+  (let* ((root (valsi-tree))
+         (tasks (valsi-node-of-type root 'task))
+         (placeholders nil))
     (save-excursion
       (goto-char (point-min))
       (while (re-search-forward "TXXX\\|NEEDS CLARIFICATION\\|\\[FEATURE NAME\\]" nil t)
         (push (format "placeholder %S at line %d"
-                      (match-string 0) (line-number-at-pos)) issues)))
-    (if (null issues)
-        (message "Valsi lint: clean (%d tasks)" (length tasks))
-      (with-current-buffer (get-buffer-create "*valsi-plan-lint*")
-        (erase-buffer)
-        (insert (format "Valsi plan lint: %d issue(s)\n\n" (length issues)))
-        (dolist (i (nreverse issues)) (insert "  - " i "\n"))
-        (goto-char (point-min))
-        (special-mode)
-        (display-buffer (current-buffer)))
-      (message "Valsi lint: %d issue(s)" (length issues)))))
+                      (match-string 0) (line-number-at-pos)) placeholders)))
+    (let ((issues (append (valsi-plan--lint-issues root) (nreverse placeholders))))
+      (if (null issues)
+          (message "Valsi lint: clean (%d tasks)" (length tasks))
+        (with-current-buffer (get-buffer-create "*valsi-plan-lint*")
+          (erase-buffer)
+          (insert (format "Valsi plan lint: %d issue(s)\n\n" (length issues)))
+          (dolist (i issues) (insert "  - " i "\n"))
+          (goto-char (point-min))
+          (special-mode)
+          (display-buffer (current-buffer)))
+        (message "Valsi lint: %d issue(s)" (length issues))))))
 
 ;;;; Cross-artifact (rung 5)
 
