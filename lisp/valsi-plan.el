@@ -205,9 +205,11 @@ By id sort-key prefix when both have keys, else by indent."
   (let ((tasks (valsi-node-of-type root 'task))
         (caps '(outline narrow)))
     (when tasks
-      (setq caps (append caps '(toggle progress next prev occur-state)))
+      (setq caps (append caps '(toggle progress next prev occur-state insert)))
       (when (cl-some (lambda (tk) (valsi-node-prop tk :id)) tasks)
-        (setq caps (append caps '(goto info))))
+        (setq caps (append caps '(goto info add-dep)))
+        (when (eq (valsi-node-prop root :dialect) 'speckit)
+          (setq caps (append caps '(renumber)))))
       (when (cl-some (lambda (tk) (or (valsi-node-prop tk :deps)
                                       (valsi-node-prop tk :traces)
                                       (valsi-node-prop tk :pathrefs)))
@@ -382,6 +384,132 @@ On an interior task with children, offer to apply to all children."
                         (make-string indent ?\s) reason
                         (format-time-string "%Y-%m-%d")))))))
 
+;;;; Structure editing (rung 3-4): insert / renumber / add-dep
+
+(defun valsi-plan--buffer-tree ()
+  "Parse the current buffer fresh (mutation commands re-derive, never cache)."
+  (valsi-plan-parse (buffer-string)))
+
+(defun valsi-plan--max-tnum (root)
+  "Return the highest N among speckit-style Tnnn ids in ROOT (0 if none)."
+  (let ((max 0))
+    (dolist (tk (valsi-node-of-type root 'task))
+      (let ((id (valsi-node-prop tk :id)))
+        (when (and id (string-match "\\`T\\([0-9]+\\)\\'" id))
+          (setq max (max max (string-to-number (match-string 1 id)))))))
+    max))
+
+(defun valsi-plan--max-int-id (root)
+  "Return the highest top-level integer among kiro-style ids in ROOT (0 if none)."
+  (let ((max 0))
+    (dolist (tk (valsi-node-of-type root 'task))
+      (let ((id (valsi-node-prop tk :id)))
+        (when (and id (string-match "\\`\\([0-9]+\\)\\'" id))
+          (setq max (max max (string-to-number (match-string 1 id)))))))
+    max))
+
+(defun valsi-plan-insert-task (desc)
+  "Insert a new open task after point, numbered in the buffer's dialect.
+DESC is the task description.  Speckit buffers get the next Tnnn id, kiro
+buffers the next integer id; other dialects get no id."
+  (interactive "sTask description: ")
+  (let* ((root (valsi-plan--buffer-tree))
+         (dialect (valsi-node-prop root :dialect))
+         (indent (save-excursion
+                   (beginning-of-line)
+                   (buffer-substring-no-properties
+                    (point) (progn (skip-chars-forward " \t") (point)))))
+         (id (pcase dialect
+               ('speckit (format "T%03d" (1+ (valsi-plan--max-tnum root))))
+               ('kiro (number-to-string (1+ (valsi-plan--max-int-id root))))
+               (_ nil))))
+    (end-of-line)
+    (insert (format "\n%s- [ ] %s%s" indent (if id (concat id " ") "") desc))
+    (message "Inserted %s" (or id "task"))))
+
+(defun valsi-plan--reaches-p (from target tasks &optional seen)
+  "Return non-nil if task id FROM transitively depends on id TARGET.
+TASKS is the task-node list; SEEN guards against existing cycles."
+  (unless (member from seen)
+    (let ((node (cl-find-if (lambda (tk) (equal (valsi-node-prop tk :id) from))
+                            tasks)))
+      (when node
+        (let ((deps (valsi-node-prop node :deps)))
+          (or (member target deps)
+              (cl-some (lambda (d)
+                         (valsi-plan--reaches-p d target tasks (cons from seen)))
+                       deps)))))))
+
+(defun valsi-plan--task-at-line (tasks)
+  "Return the task node in TASKS on the current buffer line, or nil."
+  (let ((ln (line-number-at-pos)))          ; 1-based
+    (cl-find-if (lambda (tk) (= (1+ (or (valsi-node-prop tk :line) -1)) ln))
+                tasks)))
+
+(defun valsi-plan-add-dep ()
+  "Add a dependency to the task at point, refusing to create a cycle."
+  (interactive)
+  (let* ((root (valsi-plan--buffer-tree))
+         (tasks (valsi-node-of-type root 'task))
+         (ids (delq nil (mapcar (lambda (tk) (valsi-node-prop tk :id)) tasks)))
+         (cur (valsi-plan--task-at-line tasks)))
+    (unless cur (user-error "No task on this line"))
+    (let* ((cur-id (valsi-node-prop cur :id))
+           (dep (completing-read "Depends on: " (remove cur-id ids) nil t)))
+      (when (equal dep cur-id) (user-error "A task cannot depend on itself"))
+      (when (and cur-id (valsi-plan--reaches-p dep cur-id tasks))
+        (user-error "Refusing: %s already depends on %s (cycle)" dep cur-id))
+      (valsi-plan--insert-dep-on-line dep)
+      (message "%s now depends on %s" (or cur-id "task") dep))))
+
+(defun valsi-plan--insert-dep-on-line (dep)
+  "Add DEP to the task line at point, merging into an existing deps group."
+  (save-excursion
+    (beginning-of-line)
+    (let ((eol (line-end-position)))
+      (if (re-search-forward valsi-parse-dep-re eol t)
+          (progn (goto-char (1- (match-end 0))) ; just before the closing paren
+                 (insert ", " dep))
+        (goto-char eol)
+        (insert (format " (depends on %s)" dep))))))
+
+(defun valsi-plan-renumber ()
+  "Normalize speckit Tnnn ids to sequential document order.
+Rewrites every id and every `depends on' reference in a single undo group.
+Refuses on non-speckit dialects (positional ids are meaningful there)."
+  (interactive)
+  (let* ((root (valsi-plan--buffer-tree))
+         (dialect (valsi-node-prop root :dialect)))
+    (unless (eq dialect 'speckit)
+      (user-error "valsi-plan-renumber supports the speckit Tnnn dialect only (this is %s)"
+                  dialect))
+    (let* ((ordered (sort (cl-remove-if-not
+                           (lambda (tk)
+                             (let ((id (valsi-node-prop tk :id)))
+                               (and id (string-match-p "\\`T[0-9]+\\'" id))))
+                           (valsi-node-of-type root 'task))
+                          (lambda (a b) (< (or (valsi-node-prop a :line) 0)
+                                           (or (valsi-node-prop b :line) 0)))))
+           (map (make-hash-table :test 'equal))
+           (n 0) (changed 0))
+      (dolist (tk ordered)
+        (cl-incf n)
+        (puthash (valsi-node-prop tk :id) (format "T%03d" n) map))
+      (atomic-change-group
+        (save-excursion
+          (goto-char (point-min))
+          ;; Match full dotted ids so a sub-id (T001.1) is never confused with a
+          ;; top-level id (T001); only exact map keys are rewritten.  Reading the
+          ;; original token and writing the new one in one pass is collision-free.
+          (while (re-search-forward "\\bT[0-9]+\\(?:\\.[0-9]+\\)*" nil t)
+            (let* ((old (match-string-no-properties 0))
+                   (new (gethash old map)))
+              (when (and new (not (string= old new)))
+                (replace-match new t t)
+                (cl-incf changed))))))
+      (message "valsi-plan-renumber: %d task(s), %d reference(s) rewritten"
+               n changed))))
+
 ;;;; Lint (rung 3+)
 
 (defun valsi-plan-lint ()
@@ -554,6 +682,9 @@ On an interior task with children, offer to apply to all children."
                      (occur-state . valsi-plan-occur-state)
                      (next-actionable . valsi-plan-next-actionable)
                      (block . valsi-plan-block)
+                     (insert . valsi-plan-insert-task)
+                     (add-dep . valsi-plan-add-dep)
+                     (renumber . valsi-plan-renumber)
                      (lint . valsi-plan-lint)
                      (follow . valsi-plan-follow)
                      (dashboard . valsi-plan-dashboard)

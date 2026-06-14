@@ -86,6 +86,64 @@
       ;; all children open -> interior open
       (should (eq 'open (valsi-plan-effective-state one))))))
 
+;;;; Structure editing (Sprint 4): insert / renumber / add-dep
+
+(ert-deftest valsi-test-plan-insert ()
+  "insert-task appends the next Tnnn id in a speckit buffer."
+  (with-temp-buffer
+    (insert "# Plan\n- [ ] T001 a\n- [ ] T002 b\n")
+    (goto-char (point-min))
+    (forward-line 2)                     ; on the T002 line
+    (valsi-plan-insert-task "c")
+    (should (string-match-p "^- \\[ \\] T003 c$" (buffer-string)))
+    ;; inserted right after T002, before nothing else
+    (should (string-match-p "T002 b\n- \\[ \\] T003 c" (buffer-string)))))
+
+(ert-deftest valsi-test-plan-insert-kiro ()
+  "insert-task uses the next integer id in a kiro buffer."
+  (with-temp-buffer
+    (insert "# Plan\n- [ ] 1 a\n- [ ] 2 b\n")
+    (goto-char (point-max))
+    (valsi-plan-insert-task "c")
+    (should (string-match-p "^- \\[ \\] 3 c$" (buffer-string)))))
+
+(ert-deftest valsi-test-plan-renumber ()
+  "renumber normalizes ids to sequential order and rewrites dep refs."
+  (with-temp-buffer
+    (buffer-enable-undo)
+    (insert "# Plan\n- [ ] T005 first\n- [ ] T009 second (depends on T005)\n")
+    (undo-boundary)
+    (valsi-plan-renumber)
+    (should (string-match-p "^- \\[ \\] T001 first$" (buffer-string)))
+    (should (string-match-p "^- \\[ \\] T002 second (depends on T001)$"
+                            (buffer-string)))
+    ;; the whole renumber is one undo group -> a single undo reverts it all
+    (primitive-undo 1 buffer-undo-list)
+    (should (string-match-p "T005 first" (buffer-string)))
+    (should (string-match-p "T009 second (depends on T005)" (buffer-string)))))
+
+(ert-deftest valsi-test-plan-renumber-refuses-kiro ()
+  "renumber refuses on a non-speckit dialect rather than mangling ids."
+  (with-temp-buffer
+    (insert "# Plan\n- [ ] 1 a\n- [ ] 2 b\n")
+    (should-error (valsi-plan-renumber) :type 'user-error)))
+
+(ert-deftest valsi-test-plan-cycle ()
+  "The dependency cycle check is transitive."
+  (let* ((content "# Plan\n- [ ] T001 a (depends on T002)\n- [ ] T002 b\n")
+         (tasks (valsi-node-of-type (valsi-plan-parse content) 'task)))
+    (should (valsi-plan--reaches-p "T001" "T002" tasks))
+    (should-not (valsi-plan--reaches-p "T002" "T001" tasks))))
+
+(ert-deftest valsi-test-plan-add-dep-merges ()
+  "Adding a dep merges into an existing `depends on' group."
+  (with-temp-buffer
+    (insert "# Plan\n- [ ] T003 c (depends on T001)\n")
+    (goto-char (point-min))
+    (forward-line 1)
+    (valsi-plan--insert-dep-on-line "T002")
+    (should (string-match-p "(depends on T001, T002)" (buffer-string)))))
+
 ;;;; Capability advertisement (degradation ladder)
 
 (ert-deftest valsi-test-capabilities ()
