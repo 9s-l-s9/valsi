@@ -15,6 +15,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'flymake)
 (require 'valsi-node)
 (require 'valsi-parse)
 (require 'valsi-registry)
@@ -205,7 +206,9 @@ By id sort-key prefix when both have keys, else by indent."
   (let ((tasks (valsi-node-of-type root 'task))
         (caps '(outline narrow)))
     (when tasks
-      (setq caps (append caps '(toggle progress next prev occur-state insert)))
+      (setq caps (append caps '(toggle progress next prev occur-state
+                                insert split complete-children
+                                move-up move-down promote-step demote)))
       (when (cl-some (lambda (tk) (valsi-node-prop tk :id)) tasks)
         (setq caps (append caps '(goto info add-dep)))
         (when (eq (valsi-node-prop root :dialect) 'speckit)
@@ -215,7 +218,7 @@ By id sort-key prefix when both have keys, else by indent."
                                       (valsi-node-prop tk :pathrefs)))
                      tasks)
         (setq caps (append caps '(follow next-actionable))))
-      (setq caps (append caps '(lint dashboard))))
+      (setq caps (append caps '(lint flymake dashboard))))
     (delete-dups caps)))
 
 ;;;; Font-lock
@@ -510,48 +513,225 @@ Refuses on non-speckit dialects (positional ids are meaningful there)."
       (message "valsi-plan-renumber: %d task(s), %d reference(s) rewritten"
                n changed))))
 
+(defun valsi-plan--dialect-next-id (root)
+  "Return the next task id string for ROOT's dialect, or nil if unnumbered."
+  (pcase (valsi-node-prop root :dialect)
+    ('speckit (format "T%03d" (1+ (valsi-plan--max-tnum root))))
+    ('kiro (number-to-string (1+ (valsi-plan--max-int-id root))))
+    (_ nil)))
+
+(defun valsi-plan--subtree-end (task)
+  "Return the maximum END offset spanned by TASK and all its descendants."
+  (let ((mx (or (valsi-node-end task) 0)))
+    (valsi-node-walk task (lambda (n _d)
+                           (when (valsi-node-end n)
+                             (setq mx (max mx (valsi-node-end n))))))
+    mx))
+
+(defun valsi-plan--task-region (task)
+  "Return (BEG . END) buffer positions covering TASK and its whole subtree."
+  (cons (+ (valsi-node-beg task) (point-min))
+        (+ (valsi-plan--subtree-end task) (point-min))))
+
+(defun valsi-plan--parent-of (root task)
+  "Return the node in ROOT whose direct children include TASK, or nil."
+  (let (parent)
+    (valsi-node-walk root (lambda (n _d)
+                           (when (memq task (valsi-node-children n))
+                             (setq parent n))))
+    parent))
+
+(defun valsi-plan-complete-with-children ()
+  "Mark the task at point done, and every descendant task done too (Kiro interior)."
+  (interactive)
+  (let* ((root (valsi-plan--buffer-tree))
+         (task (valsi-plan--task-at-line (valsi-node-of-type root 'task))))
+    (unless task (user-error "No task on this line"))
+    (let ((region (valsi-plan--task-region task)) (n 0))
+      (atomic-change-group
+        (save-excursion
+          (goto-char (car region))
+          (while (< (point) (cdr region))
+            (when (looking-at valsi-parse-checkbox-re)
+              (replace-match "x" t t nil 2) (cl-incf n))
+            (forward-line 1))))
+      (message "Completed %d task(s) with children" n))))
+
+(defun valsi-plan-split-task ()
+  "Split the task at point in two: text after point becomes a new task below."
+  (interactive)
+  (let* ((root (valsi-plan--buffer-tree))
+         (id (valsi-plan--dialect-next-id root)))
+    (save-excursion (beginning-of-line)
+                    (unless (looking-at valsi-parse-checkbox-re)
+                      (user-error "No task on this line")))
+    (let ((indent (save-excursion
+                    (beginning-of-line)
+                    (buffer-substring-no-properties
+                     (point) (progn (skip-chars-forward " \t") (point)))))
+          (rest (string-trim-left
+                 (buffer-substring-no-properties (point) (line-end-position)))))
+      (atomic-change-group
+        (delete-region (point) (line-end-position))
+        (insert (format "\n%s- [ ] %s%s" indent (if id (concat id " ") "") rest)))
+      (message "Split into %s" (or id "a new task")))))
+
+(defun valsi-plan-promote-step ()
+  "Turn the plain step bullet at point into a full task with a new dialect id."
+  (interactive)
+  (save-excursion
+    (beginning-of-line)
+    (unless (and (looking-at valsi-parse-bullet-re)
+                 (not (looking-at valsi-parse-checkbox-re)))
+      (user-error "Not on a plain step bullet")))
+  (let ((id (valsi-plan--dialect-next-id (valsi-plan--buffer-tree))))
+    (save-excursion
+      (beginning-of-line)
+      (re-search-forward valsi-parse-bullet-re (line-end-position))
+      (let ((indent (match-string-no-properties 1))
+            (body (match-string-no-properties 2)))
+        (replace-match (format "%s- [ ] %s%s" indent (if id (concat id " ") "") body)
+                       t t)))
+    (message "Promoted step -> %s" (or id "task"))))
+
+(defconst valsi-plan--leading-id-re
+  "\\`\\(?:\\[[^]]*\\][ \t]*\\)*\\(?:T[0-9]+\\|[0-9]+\\(?:\\.[0-9]+\\)*\\)\\.?[ \t]+"
+  "A leading task-id token (with optional preceding tags), for stripping.")
+
+(defun valsi-plan-demote-task ()
+  "Turn the task at point into a plain step bullet (drop the checkbox and id)."
+  (interactive)
+  (save-excursion
+    (beginning-of-line)
+    (unless (looking-at valsi-parse-checkbox-re)
+      (user-error "No task on this line"))
+    (let* ((indent (match-string-no-properties 1))
+           (rest (match-string-no-properties 3))
+           (lbeg (line-beginning-position))
+           (lend (line-end-position))
+           ;; string-match below clobbers the buffer match data, so we edit by
+           ;; region rather than `replace-match'.
+           (rest (if (string-match valsi-plan--leading-id-re rest)
+                     (substring rest (match-end 0))
+                   rest)))
+      (delete-region lbeg lend)
+      (goto-char lbeg)
+      (insert (format "%s- %s" indent rest))))
+  (message "Demoted task -> step"))
+
+(defun valsi-plan--move (dir)
+  "Move the task subtree at point past its DIR sibling (`up' or `down').
+Refuses a move that would place a task on the wrong side of a dependency."
+  (let* ((root (valsi-plan--buffer-tree))
+         (tasks (valsi-node-of-type root 'task))
+         (task (valsi-plan--task-at-line tasks)))
+    (unless task (user-error "No task on this line"))
+    (let* ((parent (or (valsi-plan--parent-of root task) root))
+           (siblings (cl-remove-if-not
+                      (lambda (c) (eq (valsi-node-type c) 'task))
+                      (valsi-node-children parent)))
+           (idx (cl-position task siblings))
+           (sib (and idx (if (eq dir 'up)
+                             (and (> idx 0) (nth (1- idx) siblings))
+                           (nth (1+ idx) siblings)))))
+      (unless sib (user-error "No sibling task to move %s" dir))
+      ;; dep-order guard
+      (let ((tid (valsi-node-prop task :id))
+            (sid (valsi-node-prop sib :id)))
+        (cond
+         ((and (eq dir 'up) sid (member sid (valsi-node-prop task :deps)))
+          (user-error "Refusing: %s depends on %s (must stay below it)" tid sid))
+         ((and (eq dir 'down) tid (member tid (valsi-node-prop sib :deps)))
+          (user-error "Refusing: %s depends on %s (must stay below it)" sid tid))))
+      (let* ((tr (valsi-plan--task-region task))
+             (sr (valsi-plan--task-region sib))
+             (task-text (buffer-substring (car tr) (cdr tr))))
+        (atomic-change-group
+          (if (eq dir 'up)
+              (progn (delete-region (car tr) (cdr tr))
+                     (goto-char (car sr))
+                     (insert task-text))
+            ;; down: insert after the sibling, then delete the original.
+            (goto-char (cdr sr))
+            (save-excursion (insert task-text))
+            (delete-region (car tr) (cdr tr))))
+        (goto-char (car sr))
+        (beginning-of-line))
+      (message "Moved %s %s" (or (valsi-node-prop task :id) "task") dir))))
+
+(defun valsi-plan-move-task-up ()
+  "Move the task at point above its previous sibling (dep-order guarded)."
+  (interactive)
+  (valsi-plan--move 'up))
+
+(defun valsi-plan-move-task-down ()
+  "Move the task at point below its next sibling (dep-order guarded)."
+  (interactive)
+  (valsi-plan--move 'down))
+
 ;;;; Lint (rung 3+)
 
-(defun valsi-plan--lint-issues (root)
-  "Return a list of structural lint issue strings for parse tree ROOT.
-Pure over the tree (no buffer): duplicate ids, dangling deps, unknown state
-chars, dependency cycles, and interior-state contradictions.  Buffer-only
-checks (placeholders) are added by `valsi-plan-lint'."
+(defun valsi-plan--lint-collect (root)
+  "Return structural lint findings for parse tree ROOT.
+Each finding is (NODE . MESSAGE); NODE is the offending task node (or nil for a
+document-global finding).  Pure over the tree (no buffer, no filesystem):
+duplicate ids, dangling deps, unknown state chars, dependency cycles, and
+interior-state contradictions.  `valsi-plan-lint' and the flymake backend both
+build on this; the buffer/filesystem checks are layered on top there."
   (let* ((tasks (valsi-node-of-type root 'task))
          (ids (delq nil (mapcar (lambda (tk) (valsi-node-prop tk :id)) tasks)))
-         (issues nil))
-    ;; duplicate ids
+         (found nil))
+    ;; duplicate ids (document-global)
     (let ((seen (make-hash-table :test 'equal)))
       (dolist (id ids)
         (puthash id (1+ (gethash id seen 0)) seen))
-      (maphash (lambda (id n) (when (> n 1)
-                                (push (format "duplicate id %s (%d)" id n) issues)))
+      (maphash (lambda (id n)
+                 (when (> n 1)
+                   (push (cons nil (format "duplicate id %s (%d)" id n)) found)))
                seen))
     (dolist (tk tasks)
       (let ((id (or (valsi-node-prop tk :id) "?")))
         ;; dangling deps
         (dolist (d (valsi-node-prop tk :deps))
           (unless (member d ids)
-            (push (format "%s: dangling dep %s" id d) issues)))
+            (push (cons tk (format "%s: dangling dep %s" id d)) found)))
         ;; unknown state char
         (when (eq (valsi-node-prop tk :state) 'unknown)
-          (push (format "%s: unknown state char %S" id
-                        (valsi-node-prop tk :char))
-                issues))
+          (push (cons tk (format "%s: unknown state char %S" id
+                                 (valsi-node-prop tk :char)))
+                found))
         ;; dependency cycle: a task that transitively depends on itself
         (let ((self (valsi-node-prop tk :id)))
           (when (and self (valsi-plan--reaches-p self self tasks))
-            (push (format "%s: dependency cycle" self) issues)))
+            (push (cons tk (format "%s: dependency cycle" self)) found)))
         ;; interior-state contradiction: marked done but a child is not done
         (when (and (eq (valsi-node-prop tk :state) 'done)
                    (not (eq (valsi-plan-effective-state tk) 'done)))
-          (push (format "%s: marked done but has an unfinished child" id)
-                issues))))
-    (nreverse issues)))
+          (push (cons tk (format "%s: marked done but has an unfinished child" id))
+                found))))
+    (nreverse found)))
+
+(defun valsi-plan--lint-issues (root)
+  "Return the structural lint messages for ROOT as a list of strings."
+  (mapcar #'cdr (valsi-plan--lint-collect root)))
+
+(defun valsi-plan--missing-file-findings (root &optional dir)
+  "Return (NODE . MESSAGE) findings for done tasks whose manifest files are gone.
+DIR (default `default-directory') resolves relative path-refs."
+  (let ((dir (or dir default-directory)) (found nil))
+    (dolist (tk (valsi-node-of-type root 'task))
+      (when (eq (valsi-plan-effective-state tk) 'done)
+        (dolist (pr (valsi-node-prop tk :pathrefs))
+          (let ((file (car (split-string pr ":"))))
+            (unless (file-exists-p (expand-file-name file dir))
+              (push (cons tk (format "%s: done but manifest file missing: %s"
+                                     (or (valsi-node-prop tk :id) "?") file))
+                    found))))))
+    (nreverse found)))
 
 (defun valsi-plan-lint ()
   "Report plan health: dangling deps, duplicate ids, cycles, interior-state
-contradictions, placeholders, and unknown state chars."
+contradictions, missing manifest files, placeholders, and unknown state chars."
   (interactive)
   (let* ((root (valsi-tree))
          (tasks (valsi-node-of-type root 'task))
@@ -561,7 +741,9 @@ contradictions, placeholders, and unknown state chars."
       (while (re-search-forward "TXXX\\|NEEDS CLARIFICATION\\|\\[FEATURE NAME\\]" nil t)
         (push (format "placeholder %S at line %d"
                       (match-string 0) (line-number-at-pos)) placeholders)))
-    (let ((issues (append (valsi-plan--lint-issues root) (nreverse placeholders))))
+    (let ((issues (append (valsi-plan--lint-issues root)
+                          (mapcar #'cdr (valsi-plan--missing-file-findings root))
+                          (nreverse placeholders))))
       (if (null issues)
           (message "Valsi lint: clean (%d tasks)" (length tasks))
         (with-current-buffer (get-buffer-create "*valsi-plan-lint*")
@@ -572,6 +754,31 @@ contradictions, placeholders, and unknown state chars."
           (special-mode)
           (display-buffer (current-buffer)))
         (message "Valsi lint: %d issue(s)" (length issues))))))
+
+;;;; Flymake backend (rung 3-4): live diagnostics from the lint collector
+
+(defun valsi-plan-flymake (report-fn &rest _)
+  "Flymake backend: report `valsi-plan--lint-collect' findings as diagnostics.
+Registered by `valsi-plan-flymake-setup'.  Parses the current buffer fresh."
+  (let* ((root (valsi-plan--buffer-tree))
+         (diags nil))
+    (dolist (pair (append (valsi-plan--lint-collect root)
+                          (valsi-plan--missing-file-findings root)))
+      (let* ((node (car pair)) (msg (cdr pair))
+             (beg (if node (+ (valsi-node-beg node) (point-min)) (point-min)))
+             (beg (min beg (point-max)))
+             (end (save-excursion (goto-char beg)
+                                  (min (point-max) (line-end-position)))))
+        (push (flymake-make-diagnostic (current-buffer) beg (max end (1+ beg))
+                                       :warning msg)
+              diags)))
+    (funcall report-fn diags)))
+
+(defun valsi-plan-flymake-setup ()
+  "Enable the Valsi plan lint flymake backend in the current buffer."
+  (interactive)
+  (add-hook 'flymake-diagnostic-functions #'valsi-plan-flymake nil t)
+  (flymake-mode 1))
 
 ;;;; Cross-artifact (rung 5)
 
@@ -703,9 +910,16 @@ contradictions, placeholders, and unknown state chars."
                      (next-actionable . valsi-plan-next-actionable)
                      (block . valsi-plan-block)
                      (insert . valsi-plan-insert-task)
+                     (split . valsi-plan-split-task)
+                     (complete-children . valsi-plan-complete-with-children)
+                     (promote-step . valsi-plan-promote-step)
+                     (demote . valsi-plan-demote-task)
+                     (move-up . valsi-plan-move-task-up)
+                     (move-down . valsi-plan-move-task-down)
                      (add-dep . valsi-plan-add-dep)
                      (renumber . valsi-plan-renumber)
                      (lint . valsi-plan-lint)
+                     (flymake . valsi-plan-flymake-setup)
                      (follow . valsi-plan-follow)
                      (dashboard . valsi-plan-dashboard)
                      (detect . valsi-plan-detect-dialect)))))

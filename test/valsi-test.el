@@ -144,6 +144,67 @@
     (valsi-plan--insert-dep-on-line "T002")
     (should (string-match-p "(depends on T001, T002)" (buffer-string)))))
 
+(ert-deftest valsi-test-plan-complete-with-children ()
+  "complete-with-children marks the parent and every descendant done."
+  (with-temp-buffer
+    (insert "# Plan\n- [ ] 1 parent\n  - [ ] 1.1 a\n  - [ ] 1.2 b\n")
+    (goto-char (point-min))
+    (forward-line 1)                     ; on "1 parent"
+    (valsi-plan-complete-with-children)
+    (should (string-match-p "- \\[x\\] 1 parent" (buffer-string)))
+    (should (string-match-p "- \\[x\\] 1.1 a" (buffer-string)))
+    (should (string-match-p "- \\[x\\] 1.2 b" (buffer-string)))))
+
+(ert-deftest valsi-test-plan-split ()
+  "split-task moves the tail of the line into a new numbered task."
+  (with-temp-buffer
+    (insert "# Plan\n- [ ] T001 do a thing and another\n")
+    (goto-char (point-min))
+    (forward-line 1)
+    (search-forward "and ")              ; point before "another"
+    (valsi-plan-split-task)
+    (should (string-match-p "- \\[ \\] T001 do a thing and" (buffer-string)))
+    (should (string-match-p "- \\[ \\] T002 another" (buffer-string)))))
+
+(ert-deftest valsi-test-plan-promote-demote ()
+  "promote-step -> task and demote-task -> step are inverse-ish."
+  (with-temp-buffer
+    (insert "# Plan\n- [ ] T001 parent\n  - do the sub thing\n")
+    (goto-char (point-min))
+    (forward-line 2)                     ; on the plain step bullet
+    (valsi-plan-promote-step)
+    (should (string-match-p "- \\[ \\] T002 do the sub thing" (buffer-string)))
+    ;; now demote it back to a step
+    (goto-char (point-min))
+    (forward-line 2)
+    (valsi-plan-demote-task)
+    (should (string-match-p "^  - do the sub thing$" (buffer-string)))))
+
+(ert-deftest valsi-test-plan-move-up ()
+  "move-task-up swaps a task above its previous sibling."
+  (with-temp-buffer
+    (insert "# Plan\n- [ ] T001 first\n- [ ] T002 second\n")
+    (goto-char (point-min))
+    (forward-line 2)                     ; on T002
+    (valsi-plan-move-task-up)
+    (should (string-match-p "T002 second\n- \\[ \\] T001 first" (buffer-string)))))
+
+(ert-deftest valsi-test-plan-move-dep-guard ()
+  "move refuses to place a task above one it depends on."
+  (with-temp-buffer
+    (insert "# Plan\n- [ ] T001 first\n- [ ] T002 second (depends on T001)\n")
+    (goto-char (point-min))
+    (forward-line 2)                     ; on T002, which depends on T001
+    (should-error (valsi-plan-move-task-up) :type 'user-error)))
+
+(ert-deftest valsi-test-plan-missing-file ()
+  "A done task whose manifest path-ref is gone is flagged."
+  (let* ((content "# Plan\n- [x] T001 done `no/such/file.el`\n")
+         (findings (valsi-plan--missing-file-findings
+                    (valsi-plan-parse content) "/tmp")))
+    (should (cl-some (lambda (p) (string-match-p "manifest file missing" (cdr p)))
+                     findings))))
+
 (ert-deftest valsi-test-plan-lint-issues ()
   "The pure lint function flags dangling deps, duplicates, cycles, and
 interior-state contradictions."
