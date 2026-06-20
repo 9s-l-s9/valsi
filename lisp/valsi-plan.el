@@ -217,7 +217,11 @@ By id sort-key prefix when both have keys, else by indent."
                                       (valsi-node-prop tk :traces)
                                       (valsi-node-prop tk :pathrefs)))
                      tasks)
-        (setq caps (append caps '(follow next-actionable))))
+        (setq caps (append caps '(follow follow-trace next-actionable))))
+      (when (cl-some (lambda (tk) (valsi-node-prop tk :traces)) tasks)
+        (setq caps (append caps '(coverage))))
+      (when (cl-some (lambda (tk) (valsi-node-prop tk :pathrefs)) tasks)
+        (setq caps (append caps '(stale-check))))
       (setq caps (append caps '(lint flymake dashboard))))
     (delete-dups caps)))
 
@@ -780,31 +784,179 @@ Registered by `valsi-plan-flymake-setup'.  Parses the current buffer fresh."
   (add-hook 'flymake-diagnostic-functions #'valsi-plan-flymake nil t)
   (flymake-mode 1))
 
-;;;; Cross-artifact (rung 5)
+;;;; Cross-artifact: trace resolution (rung 5)
 
-(defun valsi-plan-follow ()
-  "Follow the reference at point: path-ref to a file, or requirement to spec."
+(defun valsi-plan--sibling-file (names)
+  "Return the first existing sibling among NAMES beside the current file, or nil."
+  (when buffer-file-name
+    (let ((dir (file-name-directory buffer-file-name)))
+      (cl-some (lambda (n) (let ((f (expand-file-name n dir)))
+                             (and (file-exists-p f) f)))
+               names))))
+
+(defun valsi-plan--requirements-file ()
+  "Return the sibling requirements/spec file for the current plan, or nil."
+  (valsi-plan--sibling-file '("requirements.md" "spec.md" "requirements.markdown")))
+
+(defun valsi-plan--requirement-anchor-re (id)
+  "Return a regexp locating requirement/story ID as a whole token."
+  (concat "\\_<" (regexp-quote id) "\\_>"))
+
+(defun valsi-plan--follow-pathref-at-point ()
+  "If a backtick path-ref is on this line, visit it.  Return non-nil if handled."
+  (save-excursion
+    (beginning-of-line)
+    (when (re-search-forward "`\\([^`\n]*?/[^`\n]*?\\)`" (line-end-position) t)
+      (let* ((ref (match-string-no-properties 1))
+             (parts (split-string ref ":"))
+             (file (car parts))
+             (line (and (cadr parts) (string-to-number (cadr parts)))))
+        (if (file-exists-p file)
+            (progn (find-file-other-window file)
+                   (when line (goto-char (point-min)) (forward-line (1- line))))
+          (message "No such file: %s" file))
+        t))))
+
+(defun valsi-plan--follow-anchor (file id kind)
+  "Visit FILE and jump to token ID (KIND is a label for messages).  Non-nil."
+  (if (not file)
+      (message "%s %s (no requirements/spec sibling found)" kind id)
+    (find-file-other-window file)
+    (goto-char (point-min))
+    (if (re-search-forward (valsi-plan--requirement-anchor-re id) nil t)
+        (beginning-of-line)
+      (message "%s %s not found in %s" kind id (file-name-nondirectory file))))
+  t)
+
+(defun valsi-plan--follow-requirement-at-point ()
+  "If a `_Requirements: n.m_` trace is on this line, jump to it.  Non-nil if so."
+  (let ((reqs (save-excursion
+                (beginning-of-line)
+                (valsi-parse-requirements
+                 (buffer-substring-no-properties (point) (line-end-position))))))
+    (when reqs
+      (valsi-plan--follow-anchor (valsi-plan--requirements-file)
+                                (car reqs) "Requirement"))))
+
+(defun valsi-plan--follow-story-at-point ()
+  "If a `[USn]` story tag is on this line, jump to the story.  Non-nil if so."
+  (let ((story (save-excursion
+                 (beginning-of-line)
+                 (when (re-search-forward "\\[\\(US[0-9]+\\)\\]" (line-end-position) t)
+                   (match-string-no-properties 1)))))
+    (when story
+      (valsi-plan--follow-anchor
+       (valsi-plan--sibling-file '("spec.md" "requirements.md")) story "Story"))))
+
+(defun valsi-plan-follow-trace ()
+  "Resolve the trace reference on the task line at point.
+Tries, in order: a backtick path-ref (→ file:line), a `_Requirements: n.m_`
+trace (→ the matching item in the sibling requirements.md), and a `[USn]` story
+tag (→ the user story in spec.md)."
   (interactive)
-  (cond
-   ;; backticked path ref on this line
-   ((save-excursion
-      (beginning-of-line)
-      (when (re-search-forward "`\\([^`\n]*?/[^`\n]*?\\)`" (line-end-position) t)
-        (let* ((ref (match-string-no-properties 1))
-               (parts (split-string ref ":"))
-               (file (car parts))
-               (line (and (cadr parts) (string-to-number (cadr parts)))))
-          (if (file-exists-p file)
-              (progn (find-file-other-window file)
-                     (when line (goto-char (point-min)) (forward-line (1- line)))
-                     t)
-            (message "No such file: %s" file) t)))))
-   ((save-excursion
-      (beginning-of-line)
-      (when (re-search-forward "_Requirements:[ \t]*\\([0-9.]+\\)" (line-end-position) t)
-        (message "Requirement %s (open spec/requirements to resolve)"
-                 (match-string 1)) t)))
-   (t (message "No reference at point"))))
+  (or (valsi-plan--follow-pathref-at-point)
+      (valsi-plan--follow-requirement-at-point)
+      (valsi-plan--follow-story-at-point)
+      (message "No resolvable trace on this line")))
+
+;; `follow' keeps its original name as the generic entry point.
+(defalias 'valsi-plan-follow #'valsi-plan-follow-trace
+  "Follow the reference at point (path-ref, requirement, or story).")
+
+;;;; Cross-artifact: coverage (rung 5)
+
+(defun valsi-plan--coverage (root)
+  "Return an alist (REQ-ID . (TASK-ID ...)) of requirements ROOT's tasks trace to.
+Sorted by requirement sort key."
+  (let ((table (make-hash-table :test 'equal)))
+    (dolist (tk (valsi-node-of-type root 'task))
+      (dolist (req (valsi-node-prop tk :traces))
+        (push (or (valsi-node-prop tk :id) "?") (gethash req table nil))))
+    (let (out)
+      (maphash (lambda (req ids) (push (cons req (nreverse ids)) out)) table)
+      (sort out (lambda (a b)
+                  (valsi-parse-sort-key< (valsi-parse-sort-key (car a))
+                                        (valsi-parse-sort-key (car b))))))))
+
+(defun valsi-plan--defined-requirements (file)
+  "Return the requirement ids (n.m) declared in requirements FILE, in order."
+  (let (ids)
+    (with-temp-buffer
+      (insert-file-contents file)
+      (goto-char (point-min))
+      (while (re-search-forward "^[ \t]*\\([0-9]+\\.[0-9]+\\)[ \t.:)]" nil t)
+        (push (match-string-no-properties 1) ids)))
+    (delete-dups (nreverse ids))))
+
+(defun valsi-plan-coverage ()
+  "Show a requirements↔tasks coverage table; zero-task requirements are flagged."
+  (interactive)
+  (let* ((root (valsi-tree))
+         (covered (valsi-plan--coverage root))
+         (req-file (valsi-plan--requirements-file))
+         (defined (and req-file (valsi-plan--defined-requirements req-file)))
+         ;; union of defined + referenced requirement ids
+         (all (cl-remove-duplicates
+               (append defined (mapcar #'car covered)) :test #'equal :from-end t))
+         (all (sort all (lambda (a b)
+                          (valsi-parse-sort-key< (valsi-parse-sort-key a)
+                                                (valsi-parse-sort-key b)))))
+         (entries
+          (mapcar
+           (lambda (req)
+             (let* ((tasks (cdr (assoc req covered)))
+                    (label (if tasks (string-join tasks ", ") "— none —")))
+               (list req (vector req
+                                 (number-to-string (length tasks))
+                                 (if tasks label
+                                   (propertize label 'face 'valsi-open-face))))))
+           all)))
+    (valsi-view-tabulated
+     "*Valsi plan coverage*"
+     [("Requirement" 16 t) ("#Tasks" 8 t) ("Tasks" 60 nil)]
+     entries)))
+
+;;;; Cross-artifact: staleness (rung 5)
+
+(defun valsi-plan--stale-tasks (root plan-file)
+  "Return (TASK-ID . FILE) pairs where a task's path-ref target is newer than
+PLAN-FILE (its trace target changed after the plan was last written)."
+  (let ((plan-mtime (and (file-exists-p plan-file)
+                         (file-attribute-modification-time
+                          (file-attributes plan-file))))
+        (dir (file-name-directory plan-file))
+        out)
+    (when plan-mtime
+      (dolist (tk (valsi-node-of-type root 'task))
+        (dolist (pr (valsi-node-prop tk :pathrefs))
+          (let* ((file (car (split-string pr ":")))
+                 (abs (expand-file-name file dir)))
+            (when (and (file-exists-p abs)
+                       (time-less-p plan-mtime
+                                    (file-attribute-modification-time
+                                     (file-attributes abs))))
+              (push (cons (or (valsi-node-prop tk :id) "?") file) out))))))
+    (nreverse out)))
+
+(defun valsi-plan-stale-check ()
+  "Flag tasks whose referenced files are newer than this plan file (git mtime)."
+  (interactive)
+  (unless buffer-file-name
+    (user-error "Buffer is not visiting a file"))
+  (let ((stale (valsi-plan--stale-tasks (valsi-tree) buffer-file-name)))
+    (if (null stale)
+        (message "Valsi stale-check: no tasks trailing their targets")
+      (with-current-buffer (get-buffer-create "*valsi-plan-stale*")
+        (erase-buffer)
+        (insert (format "Valsi stale-check: %d task(s) with newer targets\n\n"
+                        (length stale)))
+        (dolist (s stale)
+          (insert (format "  - %s: %s changed since the plan\n" (car s) (cdr s))))
+        (goto-char (point-min))
+        (special-mode)
+        (display-buffer (current-buffer)))
+      (message "Valsi stale-check: %d task(s) trailing their targets"
+               (length stale)))))
 
 ;;;; Dashboard (rung 2 per file)
 
@@ -920,6 +1072,9 @@ Registered by `valsi-plan-flymake-setup'.  Parses the current buffer fresh."
                      (renumber . valsi-plan-renumber)
                      (lint . valsi-plan-lint)
                      (flymake . valsi-plan-flymake-setup)
+                     (follow-trace . valsi-plan-follow-trace)
+                     (coverage . valsi-plan-coverage)
+                     (stale-check . valsi-plan-stale-check)
                      (follow . valsi-plan-follow)
                      (dashboard . valsi-plan-dashboard)
                      (detect . valsi-plan-detect-dialect)))))

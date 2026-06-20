@@ -235,6 +235,50 @@ interior-state contradictions."
          (issues (valsi-plan--lint-issues (valsi-plan-parse content))))
     (should (null issues))))
 
+;;;; Cross-artifact (Sprint 5): trace / coverage / staleness
+
+(ert-deftest valsi-test-plan-coverage ()
+  "coverage groups tasks by the requirement ids they trace to."
+  (let* ((content (concat "# Plan\n"
+                          "- [ ] 1 a\n    - _Requirements: 1.1, 2.1_\n"
+                          "- [ ] 2 b\n    - _Requirements: 1.1_\n"))
+         (cov (valsi-plan--coverage (valsi-plan-parse content))))
+    (should (equal '("1" "2") (cdr (assoc "1.1" cov))))
+    (should (equal '("1") (cdr (assoc "2.1" cov))))))
+
+(ert-deftest valsi-test-plan-defined-reqs ()
+  "Defined requirement ids are scraped from a requirements file."
+  (let ((f (make-temp-file "valsi-req" nil ".md"
+                           (concat "## Requirement 1\n"
+                                   "1.1 WHEN x THEN y\n1.2 WHEN a THEN b\n"
+                                   "## Requirement 2\n2.1 foo\n"))))
+    (unwind-protect
+        (should (equal '("1.1" "1.2" "2.1") (valsi-plan--defined-requirements f)))
+      (delete-file f))))
+
+(ert-deftest valsi-test-plan-requirement-anchor ()
+  "The requirement anchor matches whole ids, not substrings."
+  (should (string-match-p (valsi-plan--requirement-anchor-re "1.1") "see 1.1 here"))
+  (should-not (string-match-p (valsi-plan--requirement-anchor-re "1.1") "11.1x")))
+
+(ert-deftest valsi-test-plan-stale ()
+  "stale-check flags a task whose path-ref target is newer than the plan."
+  (let* ((dir (make-temp-file "valsi-stale" t))
+         (plan (expand-file-name "tasks.md" dir))
+         (sub (expand-file-name "src" dir))
+         (src (expand-file-name "src/impl.el" dir)))
+    (unwind-protect
+        (progn
+          (make-directory sub)
+          (with-temp-file plan (insert "# Plan\n- [x] T001 do `src/impl.el`\n"))
+          (with-temp-file src (insert ";; code\n"))
+          (set-file-times src (time-add (current-time) 100)) ; newer than plan
+          (let* ((root (with-temp-buffer (insert-file-contents plan)
+                                         (valsi-plan-parse (buffer-string))))
+                 (stale (valsi-plan--stale-tasks root plan)))
+            (should (assoc "T001" stale))))
+      (delete-directory dir t))))
+
 ;;;; Capability advertisement (degradation ladder)
 
 (ert-deftest valsi-test-capabilities ()
