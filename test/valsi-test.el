@@ -11,6 +11,7 @@
 (require 'ert)
 (require 'json)
 (require 'valsi)
+(require 'valsi-agent)
 
 (defconst valsi-test--dir
   (file-name-directory (or load-file-name buffer-file-name
@@ -440,6 +441,126 @@ interior-state contradictions."
                  (valsi-node-beg (car (valsi-node-of-type local 'task)))))
       ;; server tree untouched by the client's shift
       (should (= off (valsi-node-beg task))))))
+
+;;;; Agent core (Sprint 6)
+
+(defun valsi-test--echo-tool (sink)
+  "Return an echo tool whose executor pushes its :x arg onto SINK (a symbol)."
+  (valsi-agent-tool-create
+   :name "echo" :description "echo x"
+   :args '(:type "object" :properties (:x (:type "string")) :required ["x"])
+   :executor (lambda (args)
+               (set sink (plist-get args :x))
+               (valsi-agent-tool-result-create
+                :ok t :content (concat "got " (plist-get args :x))))))
+
+(ert-deftest valsi-test-agent-mock-loop ()
+  "The loop drives a mock provider through a tool call to completion."
+  (defvar valsi-test--echoed nil)
+  (setq valsi-test--echoed nil)
+  (let* ((tool (valsi-test--echo-tool 'valsi-test--echoed))
+         (provider (valsi-agent-mock-provider-create
+                    :script (list
+                             (valsi-agent-turn
+                              (list (valsi-agent-tool-use-block "id1" "echo"
+                                                               '(:x "hi")))
+                              'tool_use)
+                             (valsi-agent-turn
+                              (list (valsi-agent-text-block "all done"))))))
+         (messages (valsi-agent-scope (:auto-approve t)
+                     (valsi-agent-run
+                      :provider provider :model "mock" :system "sys"
+                      :tools (list tool)
+                      :messages (list (valsi-agent-message
+                                       "user"
+                                       (list (valsi-agent-text-block "echo hi"))))))))
+    (should (equal "hi" valsi-test--echoed))
+    ;; a tool_result message was fed back, and the final assistant text lands
+    (should (cl-some (lambda (m)
+                       (and (equal (plist-get m :role) "assistant")
+                            (string-match-p "all done"
+                                            (valsi-agent-message-text m))))
+                     messages))
+    ;; the mock saw two requests (initial + after tool result)
+    (should (= 2 (length (valsi-agent-mock-provider-calls provider))))))
+
+(ert-deftest valsi-test-agent-tool-result-split ()
+  "A signalled executor error becomes a non-OK result, not a thrown error."
+  (let ((tool (valsi-agent-tool-create
+               :name "boom" :executor (lambda (_a) (error "kaboom")))))
+    (let ((res (valsi-agent-execute-tool tool nil)))
+      (should-not (valsi-agent-tool-result-ok res))
+      (should (string-match-p "kaboom" (valsi-agent-tool-result-error res))))))
+
+(ert-deftest valsi-test-agent-scope-refuses-tool ()
+  "A tool outside the dispatch allow-list is refused, not executed."
+  (let ((ran nil)
+        (tool (valsi-agent-tool-create
+               :name "danger" :executor (lambda (_a) (setq ran t)
+                                          (valsi-agent-tool-result-create :ok t)))))
+    (valsi-agent-scope (:tools '("safe") :auto-approve t)
+      (let ((res (valsi-agent-execute-tool tool nil)))
+        (should-not (valsi-agent-tool-result-ok res))
+        (should-not ran)))))
+
+(ert-deftest valsi-test-agent-scope-files-and-dryrun ()
+  "File scope blocks out-of-scope reads; dry-run makes apply_edit a no-op."
+  (valsi-agent-register-builtin-tools)
+  (let* ((dir (make-temp-file "valsi-agent" t))
+         (f (expand-file-name "in.txt" dir)))
+    (unwind-protect
+        (progn
+          (with-temp-file f (insert "hello world\n"))
+          ;; read outside scope -> refused
+          (valsi-agent-scope (:files (list "/nope/other.txt"))
+            (should-not (valsi-agent-tool-result-ok
+                         (valsi-agent-execute-tool (valsi-agent-get-tool "read_file")
+                                                  (list :path f)))))
+          ;; dry-run edit -> ok but file unchanged
+          (valsi-agent-scope (:files (list f) :auto-approve t :dry-run t)
+            (let ((res (valsi-agent-execute-tool
+                        (valsi-agent-get-tool "apply_edit")
+                        (list :path f :old "hello" :new "goodbye"))))
+              (should (valsi-agent-tool-result-ok res))
+              (should (string-match-p "dry-run"
+                                      (valsi-agent-tool-result-content res)))))
+          (should (string-match-p "hello world"
+                                  (with-temp-buffer (insert-file-contents f)
+                                                    (buffer-string)))))
+      (delete-directory dir t))))
+
+(ert-deftest valsi-test-agent-session-roundtrip ()
+  "A session appends messages as JSONL and reloads them."
+  (let* ((root (make-temp-file "valsi-sess" t))
+         (s (valsi-agent-session-open "t1" root)))
+    (unwind-protect
+        (progn
+          (valsi-agent-session-append
+           s (valsi-agent-message "user" (list (valsi-agent-text-block "hi"))))
+          (valsi-agent-session-append
+           s (valsi-agent-message "assistant" (list (valsi-agent-text-block "yo"))))
+          (should (= 2 (length (valsi-agent-session-messages s))))
+          ;; reopen from disk -> same two messages
+          (let ((s2 (valsi-agent-session-resume "t1" root)))
+            (should (= 2 (length (valsi-agent-session-messages s2))))))
+      (delete-directory root t))))
+
+(ert-deftest valsi-test-agent-instructions ()
+  "Instruction loading concatenates AGENTS.md nearest-wins (nearest last)."
+  (let* ((root (make-temp-file "valsi-instr" t))
+         (sub (expand-file-name "a/b" root)))
+    (unwind-protect
+        (progn
+          (make-directory sub t)
+          (with-temp-file (expand-file-name "AGENTS.md" root) (insert "ROOTRULE"))
+          (with-temp-file (expand-file-name "AGENTS.md" sub) (insert "LEAFRULE"))
+          (let ((ctx (valsi-agent-load-instructions sub)))
+            (should (string-match-p "ROOTRULE" ctx))
+            (should (string-match-p "LEAFRULE" ctx))
+            ;; nearest (leaf) appears after root
+            (should (< (string-match "ROOTRULE" ctx)
+                       (string-match "LEAFRULE" ctx)))))
+      (delete-directory root t))))
 
 (provide 'valsi-test)
 ;;; valsi-test.el ends here

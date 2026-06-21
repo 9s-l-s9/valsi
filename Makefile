@@ -11,7 +11,10 @@ SRC = lisp/valsi-node.el lisp/valsi-parse.el lisp/valsi-view.el \
       lisp/valsi-registry.el lisp/valsi-proto.el lisp/valsi-plan.el \
       lisp/valsi-instruction.el lisp/valsi-promptfile.el lisp/valsi-memory.el \
       lisp/valsi-changelog.el lisp/valsi-decision.el lisp/valsi-overview.el \
-      lisp/valsi-graph.el lisp/valsi.el
+      lisp/valsi-graph.el \
+      lisp/valsi-agent-provider.el lisp/valsi-agent-tools.el \
+      lisp/valsi-agent-session.el lisp/valsi-agent.el \
+      lisp/valsi.el
 ELC = $(SRC:.el=.elc)
 
 BATCH = $(EMACS) -Q --batch -L lisp -L test
