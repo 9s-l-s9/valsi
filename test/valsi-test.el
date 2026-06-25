@@ -562,5 +562,78 @@ interior-state contradictions."
                        (string-match "LEAFRULE" ctx)))))
       (delete-directory root t))))
 
+;;;; Agent auth (Sprint 6, T602) -- pure/structural parts only (no network)
+
+(ert-deftest valsi-test-auth-pkce ()
+  "PKCE challenge is deterministic for a verifier and unpadded base64url."
+  (let* ((v "test-verifier-string")
+         (c (valsi-agent-auth--pkce-challenge v)))
+    (should (equal c (valsi-agent-auth--pkce-challenge v))) ; deterministic
+    (should-not (string-match-p "=" c))                    ; unpadded
+    (should-not (string-match-p "[+/]" c))))               ; url-safe alphabet
+
+(ert-deftest valsi-test-auth-token-type ()
+  (should (eq 'api (valsi-agent-auth-token-type "sk-ant-api03-xxx")))
+  (should (eq 'setup (valsi-agent-auth-token-type "sk-ant-oat01-xxx")))
+  (should (eq 'claude-code (valsi-agent-auth-token-type "cc-xxx")))
+  (should (eq 'oauth (valsi-agent-auth-token-type "eyJhbGci"))))
+
+(ert-deftest valsi-test-auth-expiry ()
+  (let ((fresh (valsi-agent-auth-credential-create
+                :access "a" :expires (+ (float-time) 3600)))
+        (soon (valsi-agent-auth-credential-create
+               :access "a" :expires (+ (float-time) 60)))
+        (none (valsi-agent-auth-credential-create :access "a")))
+    (should-not (valsi-agent-auth-expired-p fresh))
+    (should (valsi-agent-auth-expired-p soon))   ; within the 5-min skew
+    (should (valsi-agent-auth-expired-p none))))  ; unknown expiry -> refresh
+
+(ert-deftest valsi-test-auth-claude-file-parse ()
+  "Claude Code's credential JSON (ms expiry, nested key) parses tolerantly."
+  (let* ((pl (json-parse-string
+              "{\"claudeAiOauth\":{\"accessToken\":\"cc-abc\",\"refreshToken\":\"r1\",\"expiresAt\":4102444800000}}"
+              :object-type 'plist :array-type 'list))
+         (cred (valsi-agent-auth--from-plist pl 'claude-code)))
+    (should (equal "cc-abc" (valsi-agent-auth-credential-access cred)))
+    (should (equal "r1" (valsi-agent-auth-credential-refresh cred)))
+    ;; ms epoch coerced to seconds
+    (should (< (valsi-agent-auth-credential-expires cred) 5e9))))
+
+(ert-deftest valsi-test-auth-extract-code ()
+  (should (equal "abc" (valsi-agent-auth--extract-code
+                        "http://127.0.0.1:53692/callback?code=abc&state=x")))
+  (should (equal "abc" (valsi-agent-auth--extract-code "abc#state123")))
+  (should (equal "abc" (valsi-agent-auth--extract-code "  abc  "))))
+
+;;;; Anthropic adapter (Sprint 6, T603) -- request build + response parse
+
+(ert-deftest valsi-test-anthropic-system-preamble ()
+  "The OAuth path prefixes the required Claude Code system preamble."
+  (let ((oauth (valsi-agent--anthropic-system '(:system "Be terse.") t))
+        (key (valsi-agent--anthropic-system '(:system "Be terse.") nil)))
+    (should (string-prefix-p "You are Claude Code," oauth))
+    (should (string-match-p "Be terse\\." oauth))
+    (should (equal "Be terse." key))))
+
+(ert-deftest valsi-test-anthropic-payload ()
+  "Payload omits :tools when none, includes them when present."
+  (let ((p (valsi-agent-make-anthropic :model "claude-opus-4-8")))
+    (should-not (plist-member (valsi-agent--anthropic-payload p '(:messages [])) :tools))
+    (should (plist-member
+             (valsi-agent--anthropic-payload
+              p (list :messages [] :tools (list '(:name "t"))))
+             :tools))))
+
+(ert-deftest valsi-test-anthropic-parse-turn ()
+  "An Anthropic response maps to a provider-neutral turn; tool_use survives."
+  (let* ((resp (json-parse-string
+                "{\"role\":\"assistant\",\"stop_reason\":\"tool_use\",\"content\":[{\"type\":\"tool_use\",\"id\":\"i1\",\"name\":\"read_file\",\"input\":{\"path\":\"x\"}}]}"
+                :object-type 'plist :array-type 'list))
+         (turn (valsi-agent--anthropic-parse-turn resp))
+         (uses (valsi-agent-turn-tool-uses turn)))
+    (should (eq 'tool_use (plist-get turn :stop-reason)))
+    (should (= 1 (length uses)))
+    (should (equal "read_file" (plist-get (car uses) :name)))))
+
 (provide 'valsi-test)
 ;;; valsi-test.el ends here

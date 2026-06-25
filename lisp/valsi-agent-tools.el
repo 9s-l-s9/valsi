@@ -25,7 +25,7 @@
 NAME is a string; DESCRIPTION prompts the model; ARGS is a JSON-Schema plist for
 the input object; EXECUTOR is a function of an args plist returning a
 `valsi-agent-tool-result'; CATEGORY is a grouping symbol; CONFIRM gates execution
-\(nil = auto, t = always ask, a function of args = ask when it returns non-nil)."
+\(nil = auto, t = always ask, or a predicate of args deciding when to ask)."
   name description args executor (category 'general) (confirm nil))
 
 (cl-defstruct (valsi-agent-tool-result (:constructor valsi-agent-tool-result-create))
@@ -83,7 +83,7 @@ structured payload for callers; ERROR is a message when OK is nil."
 ;;;; Confirmation gate (control over delegation)
 
 (defvar valsi-agent-confirm-function #'y-or-n-p
-  "Function used to confirm a gated tool call; takes a prompt, returns boolean.")
+  "Function to confirm a gated tool call; takes a prompt, returns boolean.")
 
 (defvar valsi-agent-auto-approve nil
   "When non-nil, gated tool calls run without prompting (tests, dry batch runs).

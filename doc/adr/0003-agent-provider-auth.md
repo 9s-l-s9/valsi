@@ -4,12 +4,18 @@ Date: 2026-07-13
 
 ## Status
 
-Accepted (design). Records the agent-core layering, the provider abstraction, and
-— the load-bearing part — the **authentication strategy**. Governs Sprint 6
-(T601–T609). Implementation-level OAuth constants and flow live in
-`research/03a-oauth-flow-notes.md`; this ADR records the *decisions*, that doc
-records the *values*. Finalized (from "design" to "accepted, verified") when the
-Sprint 6 auth-acceptance test passes (M5).
+Accepted; **implemented** (Sprint 6). Records the agent-core layering, the
+provider abstraction, and — the load-bearing part — the **authentication
+strategy**. The design landed as `valsi-agent-{provider,auth,tools,session}.el`
+and `valsi-agent.el`: the mock loop, tool contract, scoping, sessions, the
+subscription-OAuth resolver/refresh/PKCE flow, and the `anthropic-oauth` +
+`anthropic-key` adapters, all green under `make check` (the mock path is
+CI-tested; the auth/network paths' pure logic is unit-tested). Implementation-
+level OAuth constants and flow live in `research/03a-oauth-flow-notes.md`; this
+ADR records the *decisions*, that doc records the *values*. **Remaining before
+this is fully verified:** the live M5 auth-acceptance run against the
+maintainer's real Claude subscription (inherently interactive, not in CI), and
+the optional `gptel` adapter (deferred fast-follow).
 
 ## Context
 

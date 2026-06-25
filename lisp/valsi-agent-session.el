@@ -29,7 +29,7 @@ entry plists (oldest first)."
   (expand-file-name ".valsi/sessions/" (or root default-directory)))
 
 (defun valsi-agent-session-open (&optional id root)
-  "Open (creating if needed) session ID under ROOT; return a `valsi-agent-session'.
+  "Open (creating if needed) session ID under ROOT as a `valsi-agent-session'.
 With no ID, mint a timestamped one.  Existing entries are loaded."
   (let* ((id (or id (format-time-string "%Y%m%dT%H%M%S")))
          (dir (valsi-agent-sessions-dir root))

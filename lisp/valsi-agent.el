@@ -25,7 +25,7 @@
 (defvar valsi-agent-event-functions nil
   "Abnormal hook run with each event plist during `valsi-agent-run'.
 Event `:type' is one of `agent-start' `turn-start' `message' `tool-start'
-`tool-end' `agent-end' `cancelled', plus any streaming events a provider emits.")
+`tool-end' `agent-end' `cancelled', plus any streaming events a provider adds.")
 
 (defun valsi-agent--emit (event)
   "Run `valsi-agent-event-functions' with EVENT."
@@ -48,7 +48,7 @@ Event `:type' is one of `agent-start' `turn-start' `message' `tool-start'
 ;;;; Scoping (control over delegation)
 
 (cl-defmacro valsi-agent-scope ((&key tools files auto-approve dry-run) &rest body)
-  "Run BODY with the agent scoped: TOOLS/FILES allow-lists, AUTO-APPROVE, DRY-RUN.
+  "Run BODY scoped: TOOLS/FILES allow-lists, AUTO-APPROVE, DRY-RUN.
 Binds the dynamic scope variables the tool layer consults per dispatch."
   (declare (indent 1))
   `(let ((valsi-agent-allowed-tools ,tools)
@@ -126,7 +126,7 @@ message is appended to."
 ;;;; Instruction-file loading (T608 -- minimal; grammar-aware version in Sprint 7)
 
 (defun valsi-agent--nearest-instruction-files (dir names)
-  "Return instruction files matching NAMES from DIR up to the root, nearest last.
+  "Return instruction files named NAMES from DIR up to the root, nearest last.
 Concatenating in the returned order yields nearest-wins precedence."
   (let ((files nil) (dir (expand-file-name dir)))
     (while dir
