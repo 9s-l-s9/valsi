@@ -186,8 +186,9 @@ KIND is one of `parallel', `story', `label'.  Also matches bare US1."
             (split-string (match-string 1 text) "[ ,]+" t))))
 
 (defconst valsi-parse-meta-re
-  "^[ \t]*\\*\\*\\(Purpose\\|Goal\\|Independent Test\\|Checkpoint\\|Files\\|Spec\\|Verify\\)\\*\\*:?"
-  "Group/task meta-field recognizer (R4/R9/R10 labels).")
+  "^[ \t]*\\*\\*\\(Purpose\\|Goal\\|Independent Test\\|Checkpoint\\|Files\\|Spec\\|Verify\\):?\\*\\*:?"
+  "Group/task meta-field recognizer (R4/R9/R10 labels).
+Tolerates the colon inside (`**Verify:**') or outside (`**Verify**:') the bold.")
 
 (defun valsi-parse-meta-label (text)
   "Return the meta label keyword in TEXT (downcased symbol) or nil."

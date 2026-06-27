@@ -12,6 +12,8 @@
 (require 'json)
 (require 'valsi)
 (require 'valsi-agent)
+(require 'valsi-plan-review)
+(require 'valsi-plan-agent)
 
 (defconst valsi-test--dir
   (file-name-directory (or load-file-name buffer-file-name
@@ -634,6 +636,83 @@ interior-state contradictions."
     (should (eq 'tool_use (plist-get turn :stop-reason)))
     (should (= 1 (length uses)))
     (should (equal "read_file" (plist-get (car uses) :name)))))
+
+;;;; Plan x agent (Sprint 7): context bundle, verify, node-diff review
+
+(defconst valsi-test--plan-agent-fixture
+  (concat "## Sprint 1\n\n"
+          "- [ ] T001 Build the widget at `lisp/widget.el`\n"
+          "  - do the thing\n"
+          "  **Verify:** `make check` exits 0.\n"
+          "- [ ] T002 Wire it up (depends on T001)\n")
+  "A small plan exercising files, steps, verify meta, and deps.")
+
+(ert-deftest valsi-test-plan-context-bundle ()
+  "The context bundle captures group, files, steps, deps, and verify."
+  (let* ((root (valsi-plan-parse valsi-test--plan-agent-fixture))
+         (t1 (cl-find "T001" (valsi-node-of-type root 'task)
+                      :key (lambda (tk) (valsi-node-prop tk :id)) :test #'equal))
+         (bundle (valsi-plan-context-bundle root t1)))
+    (should (equal "T001" (plist-get bundle :id)))
+    (should (equal "Sprint 1" (plist-get bundle :group)))
+    (should (member "lisp/widget.el" (plist-get bundle :files)))
+    (should (member "do the thing" (plist-get bundle :steps)))
+    (should (string-match-p "make check" (plist-get bundle :verify)))))
+
+(ert-deftest valsi-test-plan-bundle-prompt ()
+  "The dispatch prompt mentions the id, files, and verification."
+  (let* ((root (valsi-plan-parse valsi-test--plan-agent-fixture))
+         (t1 (car (valsi-node-of-type root 'task)))
+         (prompt (valsi-plan-bundle->prompt (valsi-plan-context-bundle root t1))))
+    (should (string-match-p "T001" prompt))
+    (should (string-match-p "lisp/widget.el" prompt))
+    (should (string-match-p "Verification: .*make check" prompt))))
+
+(ert-deftest valsi-test-plan-verify-command ()
+  "The verification command is extracted from the Verify meta backticks."
+  (let* ((root (valsi-plan-parse valsi-test--plan-agent-fixture))
+         (t1 (car (valsi-node-of-type root 'task))))
+    (should (equal "make check" (valsi-plan--verify-command t1)))))
+
+(ert-deftest valsi-test-plan-node-diff ()
+  "The node diff enumerates exactly the changed tasks, keyed by id."
+  (let* ((old "## S\n- [ ] T001 a\n- [ ] T002 b\n- [ ] T003 c\n")
+         (new "## S\n- [x] T001 a\n- [ ] T002 b changed\n- [ ] T004 d\n")
+         (changes (valsi-plan-diff old new)))
+    ;; T001 modified (state), T002 modified (desc), T003 removed, T004 added
+    (should (= 4 (length changes)))
+    (should (cl-find-if (lambda (c) (and (equal (plist-get c :id) "T001")
+                                         (eq (plist-get c :kind) 'modified)))
+                        changes))
+    (should (cl-find-if (lambda (c) (and (equal (plist-get c :id) "T003")
+                                         (eq (plist-get c :kind) 'removed)))
+                        changes))
+    (should (cl-find-if (lambda (c) (and (equal (plist-get c :id) "T004")
+                                         (eq (plist-get c :kind) 'added)))
+                        changes))))
+
+(ert-deftest valsi-test-plan-review-reject-all ()
+  "Applying no changes restores the content byte-identically (reject-all)."
+  (let ((old "## S\n- [ ] T001 a\n- [ ] T002 b\n"))
+    (should (equal old (valsi-plan-apply-changes old nil)))))
+
+(ert-deftest valsi-test-plan-review-accept-modified ()
+  "Accepting a modified change updates exactly that task line."
+  (let* ((old "## S\n- [ ] T001 a\n- [ ] T002 b\n")
+         (changes (list (list :kind 'modified :id "T001"
+                              :old "- [ ] T001 a" :new "- [x] T001 a")))
+         (result (valsi-plan-apply-changes old changes)))
+    (should (string-match-p "- \\[x\\] T001 a" result))
+    (should (string-match-p "- \\[ \\] T002 b" result))))  ; untouched
+
+(ert-deftest valsi-test-plan-distill-done ()
+  "Distill produces a done-marking node-diff for the named tasks."
+  (let* ((content "## S\n- [ ] T001 a\n- [ ] T002 b\n")
+         (changes (valsi-plan-distill-done content '("T001")))
+         (result (valsi-plan-apply-changes content changes)))
+    (should (= 1 (length changes)))
+    (should (string-match-p "- \\[x\\] T001 a" result))
+    (should (string-match-p "- \\[ \\] T002 b" result))))
 
 (provide 'valsi-test)
 ;;; valsi-test.el ends here

@@ -28,6 +28,14 @@
 ;; interactive client surface of the grammar, so they read the client's tree
 ;; rather than reparsing the live buffer.
 (declare-function valsi-tree "valsi")
+;; Rung-6 agent bridge (valsi-plan-agent.el requires this file, so we only
+;; declare its commands here to avoid a require cycle; they resolve at runtime.)
+(declare-function valsi-plan-dispatch-task "valsi-plan-agent")
+(declare-function valsi-plan-dispatch-next "valsi-plan-agent")
+(declare-function valsi-plan-run-verification "valsi-plan-agent")
+(declare-function valsi-plan-complete-with-verification "valsi-plan-agent")
+(declare-function valsi-plan-distill "valsi-plan-agent")
+(declare-function valsi-plan-review-update "valsi-plan-review")
 
 ;;;; Parse
 
@@ -222,6 +230,13 @@ By id sort-key prefix when both have keys, else by indent."
         (setq caps (append caps '(coverage))))
       (when (cl-some (lambda (tk) (valsi-node-prop tk :pathrefs)) tasks)
         (setq caps (append caps '(stale-check))))
+      ;; rung 6: agent bridge
+      (setq caps (append caps '(dispatch dispatch-next review)))
+      (when (cl-some (lambda (tk)
+                       (cl-some (lambda (m) (eq (valsi-node-prop m :label) 'verify))
+                                (valsi-node-of-type tk 'meta)))
+                     tasks)
+        (setq caps (append caps '(verify))))
       (setq caps (append caps '(lint flymake dashboard))))
     (delete-dups caps)))
 
@@ -243,7 +258,7 @@ By id sort-key prefix when both have keys, else by indent."
     ("(depends on[^)]*)" . 'valsi-dep-face)
     ("_Requirements:[^_]*_" . 'valsi-trace-face)
     ("`[^`\n]*/[^`\n]*`" . 'valsi-trace-face)
-    ("^[ \t]*\\*\\*\\(?:Files\\|Verify\\|Goal\\|Purpose\\|Checkpoint\\|Spec\\|Independent Test\\)\\*\\*:?"
+    ("^[ \t]*\\*\\*\\(?:Files\\|Verify\\|Goal\\|Purpose\\|Checkpoint\\|Spec\\|Independent Test\\):?\\*\\*:?"
      . 'valsi-meta-face))
   "Font-lock keywords for plan/tasks buffers.")
 
@@ -1075,6 +1090,11 @@ PLAN-FILE (its trace target changed after the plan was last written)."
                      (follow-trace . valsi-plan-follow-trace)
                      (coverage . valsi-plan-coverage)
                      (stale-check . valsi-plan-stale-check)
+                     (dispatch . valsi-plan-dispatch-task)
+                     (dispatch-next . valsi-plan-dispatch-next)
+                     (verify . valsi-plan-run-verification)
+                     (complete-verify . valsi-plan-complete-with-verification)
+                     (distill . valsi-plan-distill)
                      (follow . valsi-plan-follow)
                      (dashboard . valsi-plan-dashboard)
                      (detect . valsi-plan-detect-dialect)))))

@@ -40,6 +40,8 @@
 (require 'valsi-changelog)
 (require 'valsi-decision)
 (require 'valsi-overview)
+(require 'valsi-plan-review)
+(require 'valsi-plan-agent)
 (require 'transient)
 
 ;;;; Initialization: register the bundled grammars

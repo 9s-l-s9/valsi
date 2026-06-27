@@ -14,6 +14,7 @@ SRC = lisp/valsi-node.el lisp/valsi-parse.el lisp/valsi-view.el \
       lisp/valsi-graph.el \
       lisp/valsi-agent-auth.el lisp/valsi-agent-provider.el \
       lisp/valsi-agent-tools.el lisp/valsi-agent-session.el lisp/valsi-agent.el \
+      lisp/valsi-plan-review.el lisp/valsi-plan-agent.el \
       lisp/valsi.el
 ELC = $(SRC:.el=.elc)
 
