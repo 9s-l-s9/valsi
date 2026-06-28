@@ -18,9 +18,9 @@ SRC = lisp/valsi-node.el lisp/valsi-parse.el lisp/valsi-view.el \
       lisp/valsi.el
 ELC = $(SRC:.el=.elc)
 
-BATCH = $(EMACS) -Q --batch -L lisp -L test
+BATCH = $(EMACS) -Q --batch -L lisp -L test -L test/conformance
 
-.PHONY: all check compile test lint clean run demo guix-check help
+.PHONY: all check compile test conformance lint clean run demo guix-check help
 
 all: check
 
@@ -41,6 +41,11 @@ compile: clean
 
 test:
 	$(BATCH) -l ert -l test/valsi-test.el -f ert-run-tests-batch-and-exit
+
+# Run only the AAP conformance suite (what a third-party implementation runs).
+conformance:
+	$(BATCH) -l ert -l test/conformance/aap-conformance.el \
+	  --eval "(ert-run-tests-batch-and-exit \"^valsi-aap-conformance-\")"
 
 lint:
 	$(BATCH) --eval "(mapc #'checkdoc-file '($(patsubst %,\"%\",$(SRC))))"

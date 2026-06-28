@@ -8,6 +8,14 @@ Accepted. Shapes the Sprint 2 substrate and everything downstream. Supersedes th
 implicit "Valsi is an in-process Emacs minor-mode" assumption in ADR 0001's
 framing (0001's *descriptive-grammar* decision still holds).
 
+**Realized at Sprint 8.** Decision 7 ("extract the spec, don't invent it") is now
+executed: with two independent grammar genres running as plugins (plan/tasks +
+instruction), the protocol was extracted from the working server into
+[`doc/aap-spec.md`](../aap-spec.md) as **v0**, shipping with a machine-checkable
+conformance suite (`test/conformance/`, `make conformance`). Per this ADR it
+remains an *extracted spec*, not a *standard*, until a second independent
+implementation passes the suite (targeted v1.x, Sprint 12).
+
 ## Context
 
 Valsi's core idea is a **descriptive grammar** over agent artifacts (plain

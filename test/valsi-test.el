@@ -14,6 +14,8 @@
 (require 'valsi-agent)
 (require 'valsi-plan-review)
 (require 'valsi-plan-agent)
+(require 'valsi-instruction-test)
+(require 'aap-conformance)
 
 (defconst valsi-test--dir
   (file-name-directory (or load-file-name buffer-file-name
