@@ -15,6 +15,7 @@
 (require 'valsi-plan-review)
 (require 'valsi-plan-agent)
 (require 'valsi-instruction-test)
+(require 'valsi-promptfile-test)
 (require 'aap-conformance)
 
 (defconst valsi-test--dir
