@@ -1,0 +1,220 @@
+\input texinfo   @c -*- texinfo -*-
+@c %**start of header
+@setfilename valsi.info
+@settitle Valsi Manual
+@documentencoding UTF-8
+@documentlanguage en
+@c %**end of header
+
+@copying
+This manual documents Valsi, a grammar-aware Emacs harness for agent artifacts.
+
+Copyright @copyright{} 2026 Samuel Schmidt.
+
+Released under the GNU General Public License version 3 or later.
+@end copying
+
+@dircategory Emacs
+@direntry
+* Valsi: (valsi).         Grammar-aware harness for agent artifacts.
+@end direntry
+
+@titlepage
+@title Valsi Manual
+@subtitle Reference implementation of the Agent Artifact Protocol
+@author Samuel Schmidt
+@page
+@insertcopying
+@end titlepage
+
+@contents
+
+@ifnottex
+@node Top
+@top Valsi
+
+Valsi is an Emacs client/server harness for the structured markdown artifacts
+agents read and write.  Grammars are @emph{descriptive} --- tolerant
+recognizers over plain markdown that annotate but never reject --- so every
+file stays ordinary, diffable, and portable.
+
+@insertcopying
+@end ifnottex
+
+@menu
+* Introduction::         What Valsi is and the three commitments.
+* Installation::         Guix, MELPA, and from source.
+* Artifacts and grammars:: The equation, the node model, degradation.
+* Plan family::          Plan/tasks, the flagship grammar.
+* Instruction family::   AGENTS.md / CLAUDE.md scoped rules.
+* Prompt-file family::   SKILL.md, subagents, commands.
+* Memory family::        Index + record store.
+* Cross-artifact graph:: The thesis capstone.
+* The agent core::       First-party, subscription-OAuth-first brain.
+* The AAP protocol::     The open wire contract Valsi implements.
+* Index::                Concept index.
+@end menu
+
+@node Introduction
+@chapter Introduction
+
+Peter Naur argued that the real program lives in the programmer's head and the
+files are lossy carriers of it.  As humans and agents share that theory, the
+supporting artifacts matter more.  Today those artifacts are ad-hoc markdown
+files (@file{PLAN.md}, @file{CLAUDE.md}, @file{SKILL.md}, @file{MEMORY.md}).
+Valsi makes the artifacts themselves the core workspace:
+
+@example
+Artifact = Data + Grammar + View + Actions + Keymap
+@end example
+
+The grammar is descriptive, not normative: a set of recognizers over plain
+markdown, like a linguist's grammar rather than a validator's schema.  A file
+that only partially matches is not invalid; it resolves less detail and gets
+the subset of views and commands its structure supports.
+
+Valsi's three commitments are @emph{structure over transcripts},
+@emph{control over delegation}, and @emph{files over formats}.  The harness is
+extensible while running: define a grammar, view, and commands live, evaluate,
+and use them --- no rebuild.
+
+@node Installation
+@chapter Installation
+
+@section With Guix
+
+The repository ships @file{valsi.scm}, a package definition and reproducible
+dev shell.
+
+@example
+guix build -f valsi.scm                  # build + byte-compile
+guix shell -D -f valsi.scm -- make check # dev shell + full test suite
+@end example
+
+The pinned tool set is @code{nss-certs emacs emacs-markdown-mode}; the Emacs
+floor is 29.1 and CI runs on 30.2.
+
+@section With MELPA
+
+A recipe is provided under @file{recipes/valsi}.  Once available:
+
+@example
+M-x package-install RET valsi RET
+@end example
+
+@section From source
+
+Clone the repository, then:
+
+@example
+make check           # byte-compile (warnings->errors) + ERT
+make run             # launch a demo Emacs with Valsi loaded
+@end example
+
+Add @file{lisp/} to your @code{load-path} and @code{(require 'valsi)}.  Enable
+@code{valsi-global-mode} to auto-activate on markdown buffers; the per-artifact
+keymap is on @kbd{C-c n} with a @code{transient} menu on @kbd{C-c n m}.
+
+@node Artifacts and grammars
+@chapter Artifacts and grammars
+
+Every artifact parses to a tree of typed nodes overlaid on the buffer; each
+node keeps its region, so views and edits round-trip losslessly and a parse
+never rewrites unrecognized text (the descriptive invariant, tested as
+@code{parse@tie{}->@tie{}serialize} identity over the whole corpus).
+
+Capability follows structure along a six-rung @dfn{degradation ladder}: each
+command declares the rung it needs and is gated or falls back below it.
+Disabling the minor mode leaves the buffer and file byte-identical.
+
+Each grammar carries an @dfn{evidence tier}: @code{standardized} (a documented
+open standard), @code{converging} (a pattern across many independent sources),
+or @code{emergent} (a few repos or one vendor).  Most agent-facing files are
+emergent and are never presented as standards.
+
+@node Plan family
+@chapter Plan family
+
+The flagship grammar recognizes plan/tasks files across the Spec-Kit, Kiro,
+Superpowers, GSD, and plain dialects: task lines and state, ids and sort keys,
+tags, inline dependencies, trace links, file manifests, and verification
+blocks.  It offers navigation, state and structure editing (toggle, insert,
+split, promote/demote, atomic renumber with reference rewriting), a lint +
+flymake backend (dangling deps, duplicate ids, cycles, contradictions), and
+cross-artifact views: trace resolution, a requirements/tasks coverage table,
+staleness against file mtime, a cross-file dashboard, and
+@code{next-actionable} --- the agent-handoff primitive.  Wired to the agent
+core it gains dispatch, a verification runner, and reviewable node-diffs.
+
+@node Instruction family
+@chapter Instruction family
+
+The largest install base and weakest inherent structure --- the degradation
+test.  It recognizes two scope axes: heading @emph{location} and frontmatter
+@emph{glob predicate} (Cursor @code{globs:}, Copilot @code{applyTo:}), plus
+instruction items, emphasis markers, @code{@@imports}, and @code{[[links]]}.
+Commands: effective-instructions-at-point (nearest-wins), a transitive import
+graph, lint, one-source-to-many @code{sync} via an idempotent managed region,
+and scaffold.
+
+@node Prompt-file family
+@chapter Prompt-file family
+
+The one place a near-mandatory schema lives at the top of the file.  One
+grammar, three per-type vocabularies (skill, subagent, command) chosen by a
+pure discriminator over the file's location and frontmatter.  The
+progressive-disclosure load model is first-class: frontmatter is @emph{eager}
+(always in context, the trigger), the body is @emph{lazy} (loaded on trigger).
+Commands: validate (required keys, unknown-key warnings, the
+description-as-trigger lint), complete a known key, @code{test-fire} (would
+this prompt match?), and scaffold a skill directory.
+
+@node Memory family
+@chapter Memory family
+
+The agent-written store: an @file{MEMORY.md} index of pointer lines over
+per-fact record files, each with typed frontmatter
+(@code{name}/@code{description}/@code{metadata.type} in @code{user},
+@code{feedback}, @code{project}, @code{reference}) and @code{[[wiki-links]]}.
+Beyond follow and backlinks it adds two curation commands that only report,
+never merge: @code{dedupe} (duplicate pointer targets, near-identical record
+descriptions) and @code{stale-check} (pointers whose file is gone, dangling
+links).
+
+@node Cross-artifact graph
+@chapter Cross-artifact graph
+
+The thesis capstone unifies the per-family links --- instruction
+@code{@@imports}, memory @code{[[wiki]]} links and index pointers, and plan
+path/trace refs plus phase-successor edges --- into one navigable edge list.
+@kbd{RET} on a row visits the source artifact.  Edge sources are pluggable:
+@code{valsi-graph-register-edge-source} lets a new family add edges with no
+change to the core.
+
+@node The agent core
+@chapter The agent core
+
+A standalone, artifact-agnostic brain: a provider abstraction with a
+subscription-OAuth-first path (reusing Claude Code's token before any login)
+and an API-key fallback, a typed tool registry with a scoping/confirmation
+layer, a provider-neutral tool-use loop, and durable append-only JSONL
+sessions.  It is client-side and rides MCP; it is deliberately @emph{not} part
+of the AAP protocol surface.
+
+@node The AAP protocol
+@chapter The AAP protocol
+
+Valsi is the reference implementation of the Agent Artifact Protocol, an
+LSP-style JSON-RPC protocol for agent artifacts.  A server holds the model,
+parser, and grammars as hot-registrable plugins; the Emacs client renders its
+symbols, diagnostics, and edits.  AAP standardizes the envelope, node model,
+and grammar-declaration --- never the specific grammars.  The specification is
+@file{doc/aap-spec.md} (v0) and a machine-checkable conformance suite runs via
+@code{make conformance}.
+
+@node Index
+@unnumbered Index
+
+@printindex cp
+
+@bye

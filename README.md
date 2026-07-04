@@ -89,6 +89,33 @@ Each family also has a dedicated tabulated view: a cross-file **plan agenda**,
 an **instruction scope-map**, a **prompt-file frontmatter table**, a **memory
 index**, and the project-wide **cross-artifact graph**.
 
+## Installation
+
+**Guix** (reproducible; the repo ships `valsi.scm`):
+
+```sh
+guix build -f valsi.scm                   # build + byte-compile the package
+guix shell -D -f valsi.scm -- make check  # dev shell + full test suite
+```
+
+**MELPA** (recipe under `recipes/valsi`):
+
+```elisp
+M-x package-install RET valsi RET
+```
+
+**Manual** (any Emacs; requires `markdown-mode`):
+
+```elisp
+(add-to-list 'load-path "/path/to/valsi/lisp")
+(require 'valsi)
+(valsi-global-mode 1)
+```
+
+The Emacs floor is 29.1 (CI/dev on 30.2). The reference manual is
+[`doc/valsi.texi`](doc/valsi.texi) (`makeinfo doc/valsi.texi` → Info); the v1.0
+acceptance matrix is [`doc/qa-matrix.md`](doc/qa-matrix.md).
+
 ## Architecture
 
 A client/server split over the Agent Artifact Protocol (AAP). The model —

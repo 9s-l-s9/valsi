@@ -1,0 +1,4 @@
+(valsi
+ :fetcher github
+ :repo "s-l-s/valsi"
+ :files ("lisp/*.el" ("doc" "doc/valsi.texi")))
