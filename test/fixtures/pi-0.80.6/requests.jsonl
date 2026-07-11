@@ -1,0 +1,3 @@
+{"id":"valsi-1","type":"get_state"}
+{"id":"valsi-2","type":"prompt","message":"Inspect PLAN.md","streamingBehavior":"followUp"}
+{"id":"valsi-3","type":"abort"}

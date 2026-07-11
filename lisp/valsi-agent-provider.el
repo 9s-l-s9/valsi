@@ -51,7 +51,7 @@ cannot stream still works.")
 
 (cl-defmethod valsi-agent-provider-stream ((provider valsi-agent-provider)
                                           request handler)
-  "Default non-streaming fallback: one request, one `message' event."
+  "Send REQUEST through PROVIDER and HANDLER without streaming."
   (let ((turn (valsi-agent-provider-request provider request)))
     (when handler (funcall handler (list :type 'message :turn turn)))
     turn))
@@ -210,7 +210,7 @@ Requests routed as Claude Code must begin with the exact preamble (03a §6)."
 (cl-defun valsi-agent-make-anthropic (&key (auth 'oauth) api-key model)
   "Construct an Anthropic provider.  AUTH is `oauth' (default) or `api-key'.
 The OAuth path is the subscription default; API-KEY (or `ANTHROPIC_API_KEY') is
-used only when AUTH is `api-key'."
+used only when AUTH is `api-key'.  MODEL overrides the provider default."
   (valsi-agent-anthropic-provider-create
    :name (if (eq auth 'oauth) 'anthropic-oauth 'anthropic-key)
    :auth auth :api-key api-key :model model))

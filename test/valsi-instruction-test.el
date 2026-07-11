@@ -77,6 +77,16 @@
     (should (valsi-node-of-type top 'scope))
     (should (= 3 (length (valsi-node-of-type root 'item))))))
 
+(ert-deftest valsi-test-instruction-effective-scope-excludes-prior-siblings ()
+  "The active scope path contains ancestors, not earlier sibling headings."
+  (let* ((content "# Alpha\n- alpha rule\n# Beta\n## Nested\n- beta rule\n")
+         (root (valsi-instruction-test--tree content))
+         (pos (string-match "beta rule" content))
+         (path (valsi-instruction--scope-path-at root pos)))
+    (should (equal '("Beta" "Nested")
+                   (mapcar (lambda (scope) (valsi-node-prop scope :title))
+                           path)))))
+
 ;;;; Lint
 
 (ert-deftest valsi-test-instruction-lint-unscoped-frontmatter ()

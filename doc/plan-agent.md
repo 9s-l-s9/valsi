@@ -1,10 +1,9 @@
 # Plan × agent — dispatch, verify, review (rung 6)
 
-This is the payoff: the flagship grammar drives the agent core. A task becomes a
-**scoped, verifiable unit of work**, and the agent's edits land as a
-**reviewable node-diff** — never a silent overwrite (the "control over
-delegation" invariant). The bridge (`valsi-plan-agent`, `valsi-plan-review`) is
-client-side and rides the agent core; it is *not* part of AAP.
+This is the payoff: the flagship grammar can hand a structured task to the
+user's selected terminal agent. A task remains a **context-rich, verifiable unit
+of work**, and proposed task-state changes land as a **reviewable node-diff**,
+never a silent overwrite. The bridge is client-side and is *not* part of AAP.
 
 ## Dispatch
 
@@ -15,15 +14,23 @@ client-side and rides the agent core; it is *not* part of AAP.
    task and in its `**Files:**` meta), dependencies, requirement traces, step
    sub-bullets, and the `**Verify:**` block.
 2. **Renders a dispatch prompt** (`valsi-plan-bundle->prompt`) from the bundle.
-3. **Scopes the agent to the manifest files** — `valsi-agent-scope :files …` — so
-   the agent can only touch what the task declares.
-4. **Runs the loop** against the configured provider (subscription OAuth by
-   default; set `valsi-plan-agent-provider` to override) with the built-in tools
-   and the nearest-wins instruction context.
+3. **Adds effective nearest-wins instructions and manifest file hints** to the
+   prompt. The manifest is context, not a filesystem allow-list; a normal
+   coding agent may inspect other project files when needed.
+4. **Hands the prompt to the project agent terminal**. Review-before-submit is
+   the default: Valsi inserts the prompt into stock Pi, Codex CLI, Claude Code,
+   or a configured custom CLI without pretending to own that CLI's transcript
+   or submission keys. A separate explicit command may submit immediately when
+   the backend supports safe input injection.
+
+Pi can provide richer artifact resolution through the Valsi extension and AAP.
+Other CLIs may use a future MCP/AAP face. Valsi never scrapes terminal output to
+infer that a task completed; the user invokes node review explicitly.
 
 `valsi-plan-dispatch-next` composes `next-actionable` with `dispatch-task`: it
-jumps to the first open task whose dependencies are satisfied and dispatches it —
-the agent-handoff loop step.
+jumps to the first open task whose dependencies are satisfied and prepares the
+agent handoff. If all open tasks are blocked, it reports that and does not
+prepare a prompt.
 
 ## Verify
 
@@ -36,7 +43,8 @@ closes the loop: a task is not "done" until its own stated check passes.
 
 ## Review — the node-diff
 
-After an agent edits a plan, `valsi-plan-review-update` shows a **task-level
+After an agent edits a plan, `valsi-plan-review-update` prompts for the proposed
+plan file and shows a **task-level
 structural diff** (`valsi-plan-diff`) rather than a raw text diff:
 
 ```
@@ -60,19 +68,21 @@ Two invariants back the UI:
 
 ## Distill
 
-`valsi-plan-distill` turns a finished agent session into plan updates: it scans
-the session transcript for task-id mentions and proposes a **done-marking
-node-diff** (`valsi-plan-distill-done`) for review — so the plan stays the source
-of truth after a working session, without hand-editing checkboxes.
+`valsi-plan-distill` is retained for structured backends that explicitly return
+a task result. It proposes a **done-marking node-diff**
+(`valsi-plan-distill-done`) for review. It must not scrape terminal cells, scan
+private session files, or create a parallel transcript. With a terminal-only
+backend, the user opens node review explicitly.
 
 ## Trying it
 
-Open a real Spec-Kit `specs/NNN/tasks.md`, put point on the next actionable task,
-and `M-x valsi-plan-dispatch-next`. When the agent reports back, `M-x
-valsi-plan-review-update` on its proposed edit, accept the node changes you want,
-and `RET`. Then close Valsi and confirm the file on disk is still ordinary
-markdown a plain editor reads unchanged (the M6 acceptance).
+Open a real Spec-Kit `specs/NNN/tasks.md`, put point on the next actionable
+task, and run `M-x valsi-plan-dispatch-next`. Review the prepared prompt in the
+agent terminal and submit it using the CLI's normal key. After the work and
+verification, accept or reject any structured node proposal. The file on disk
+remains ordinary Markdown a plain editor reads unchanged.
 
-> The live end-to-end run needs a provider (a Claude subscription via OAuth, or an
-> API key). The bundle assembly, prompt rendering, verify extraction, node-diff,
-> apply, and distill are all pure and covered by ERT with no network.
+> Pi is the default tested terminal agent; OpenAI Codex via a ChatGPT
+> subscription is the no-API-key acceptance path. Credentials and sessions stay
+> with Pi. Bundle assembly, prompt rendering, verify extraction, node-diff, and
+> apply remain pure and covered by ERT with no network.

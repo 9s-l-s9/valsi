@@ -12,6 +12,10 @@
 (require 'json)
 (require 'valsi)
 (require 'valsi-agent)
+(require 'valsi-harness)
+(require 'valsi-pi)
+(require 'valsi-pi-test)
+(require 'valsi-server-test)
 (require 'valsi-plan-review)
 (require 'valsi-plan-agent)
 (require 'valsi-instruction-test)
@@ -20,6 +24,251 @@
 (require 'valsi-graph-test)
 (require 'valsi-perf-test)
 (require 'aap-conformance)
+
+;;;; Pi harness
+
+(ert-deftest valsi-test-pi-jsonl-partial-and-correlated ()
+  (let* ((events nil)
+         (result nil)
+         (client (valsi-pi-create
+                  :event-functions
+                  (list (lambda (event) (push event events))))))
+    (puthash "valsi-1"
+             (lambda (response error) (setq result (list response error)))
+             (valsi-pi-pending client))
+    (valsi-pi--consume
+     client
+     "{\"type\":\"message_update\",\"delta\":\"hel")
+    (should-not events)
+    (valsi-pi--consume
+     client
+     "lo\"}\n{\"id\":\"valsi-1\",\"type\":\"response\",")
+    (should (equal "hello" (plist-get (car events) :delta)))
+    (should-not result)
+    (valsi-pi--consume
+     client
+     "\"command\":\"prompt\",\"success\":true}\n")
+    (should (plist-get (car result) :success))
+    (should-not (cadr result))
+    (should (= 0 (hash-table-count (valsi-pi-pending client))))))
+
+(ert-deftest valsi-test-pi-concurrent-responses-may-arrive-out-of-order ()
+  (let ((client (valsi-pi-create))
+        results)
+    (puthash "valsi-1" (lambda (response error)
+                        (push (list 1 response error) results))
+             (valsi-pi-pending client))
+    (puthash "valsi-2" (lambda (response error)
+                        (push (list 2 response error) results))
+             (valsi-pi-pending client))
+    (valsi-pi--consume
+     client
+     (concat "{\"id\":\"valsi-2\",\"type\":\"response\","
+             "\"command\":\"prompt\",\"success\":true}\n"
+             "{\"id\":\"valsi-1\",\"type\":\"response\","
+             "\"command\":\"get_state\",\"success\":true,"
+             "\"data\":{\"sessionId\":\"out-of-order\"}}\n"))
+    (should (equal '(1 2) (mapcar #'car results)))
+    (should (cl-every (lambda (result)
+                        (and (plist-get (cadr result) :success)
+                             (null (caddr result))))
+                      results))
+    (should (equal "out-of-order" (valsi-harness-session-id client)))
+    (should (= 0 (hash-table-count (valsi-pi-pending client))))))
+
+(ert-deftest valsi-test-pi-jsonl-unicode-separators-are-not-frames ()
+  (let* ((events nil)
+        (client (valsi-pi-create
+                 :event-functions
+                 (list (lambda (event) (push event events))))))
+    (valsi-pi--consume
+     client
+     (concat "{\"type\":\"message_update\",\"delta\":\"a"
+             (string #x2028) "b" (string #x2029) "c\"}\n"))
+    (should (= 1 (length events)))
+    (should (equal (concat "a" (string #x2028) "b" (string #x2029) "c")
+                   (plist-get (car events) :delta)))))
+
+(ert-deftest valsi-test-pi-malformed-record-becomes-event ()
+  (let* ((events nil)
+        (client (valsi-pi-create
+                 :event-functions
+                 (list (lambda (event) (push event events))))))
+    (valsi-pi--consume client "{broken}\n")
+    (should (eq 'protocol-error (plist-get (car events) :type)))))
+
+(ert-deftest valsi-test-pi-real-process-roundtrip-and-exit ()
+  (let* ((events nil)
+         (result nil)
+         (script
+          (concat
+           "IFS= read -r request\n"
+           "printf '%s\\n' "
+           "'{\"type\":\"agent_start\"}' "
+           "'{\"id\":\"valsi-1\",\"type\":\"response\","
+           "\"command\":\"get_state\",\"success\":true,"
+           "\"data\":{\"thinkingLevel\":\"medium\","
+           "\"isStreaming\":false,\"isCompacting\":false,"
+           "\"steeringMode\":\"one-at-a-time\","
+           "\"followUpMode\":\"one-at-a-time\","
+           "\"sessionId\":\"fake-session\","
+           "\"autoCompactionEnabled\":true,\"messageCount\":0,"
+           "\"pendingMessageCount\":0}}'\n"))
+         (client (valsi-pi-create
+                  :program (or (executable-find "sh") "/bin/sh")
+                  :arguments (list "-c" script)
+                  :event-functions
+                  (list (lambda (event) (push event events))))))
+    (unwind-protect
+        (progn
+          (valsi-harness-state
+           client
+           (lambda (response error) (setq result (list response error))))
+          (let ((deadline (+ (float-time) 2)))
+            (while (and (not result) (< (float-time) deadline))
+              (accept-process-output (valsi-pi-process client) 0.05)))
+          (should result)
+          (should-not (cadr result))
+          (should (equal "fake-session" (valsi-harness-session-id client)))
+          (should (cl-find "agent_start" events
+                           :key (lambda (event) (plist-get event :type))
+                           :test #'equal))
+          (let ((deadline (+ (float-time) 2)))
+            (while (and (not (cl-find
+                              'process-exit events
+                              :key (lambda (event) (plist-get event :type))))
+                        (< (float-time) deadline))
+              (accept-process-output nil 0.05)))
+          (should-not (valsi-harness-live-p client))
+          (should (cl-find 'process-exit events
+                           :key (lambda (event) (plist-get event :type)))))
+      (valsi-harness-stop client))))
+
+(ert-deftest valsi-test-pi-notify-preserves-extension-request-id ()
+  (let* ((script
+          (concat "IFS= read -r request\n"
+                  "printf '%s\\n' \"$request\" >&2\n"))
+         (client (valsi-pi-create
+                  :program (or (executable-find "sh") "/bin/sh")
+                  :arguments (list "-c" script))))
+    (unwind-protect
+        (progn
+          (valsi-harness-notify
+           client '(:type "extension_ui_response" :id "pi-ui-id"
+                   :cancelled t))
+          (let ((deadline (+ (float-time) 2)))
+            (while (and (string-empty-p (valsi-pi--stderr-string client))
+                        (< (float-time) deadline))
+              (accept-process-output nil 0.05)))
+          (let ((wire (valsi-pi--stderr-string client)))
+            (should (string-match-p "\"id\":\"pi-ui-id\"" wire))
+            (should-not (string-match-p "\"id\":\"valsi-" wire))))
+      (valsi-harness-stop client))))
+
+(ert-deftest valsi-test-pi-abort-command-roundtrip ()
+  (let* ((received nil)
+         (script
+          (concat
+           "IFS= read -r request\n"
+           "printf '%s\\n' \"$request\" >&2\n"
+           "printf '%s\\n' "
+           "'{\"id\":\"valsi-1\",\"type\":\"response\","
+           "\"command\":\"abort\",\"success\":true}'\n"))
+         (client (valsi-pi-create
+                  :program (or (executable-find "sh") "/bin/sh")
+                  :arguments (list "-c" script))))
+    (unwind-protect
+        (progn
+          (valsi-harness-abort
+           client (lambda (response error)
+                    (setq received (list response error))))
+          (let ((deadline (+ (float-time) 2)))
+            (while (and (not received) (< (float-time) deadline))
+              (accept-process-output nil 0.05)))
+          (should received)
+          (should-not (cadr received))
+          (should (equal "abort" (plist-get (car received) :command)))
+          (let ((deadline (+ (float-time) 2)))
+            (while (and (string-empty-p (valsi-pi--stderr-string client))
+                        (< (float-time) deadline))
+              (accept-process-output nil 0.05)))
+          (should (string-match-p
+                   "\"type\":\"abort\"" (valsi-pi--stderr-string client))))
+      (valsi-harness-stop client))))
+
+(ert-deftest valsi-test-pi-exit-fails-all-pending-and-reports-stderr ()
+  (let* ((events nil)
+         (callbacks nil)
+         (script
+          (concat
+           "IFS= read -r request\n"
+           "printf '%s\\n' 'fake pi crashed' >&2\n"
+           "exit 7\n"))
+         (client (valsi-pi-create
+                  :program (or (executable-find "sh") "/bin/sh")
+                  :arguments (list "-c" script)
+                  :event-functions
+                  (list (lambda (event) (push event events))))))
+    (valsi-harness-prompt
+     client "one" (lambda (response error)
+                    (push (list response error) callbacks)))
+    (valsi-harness-state
+     client (lambda (response error)
+              (push (list response error) callbacks)))
+    (let ((deadline (+ (float-time) 2)))
+      (while (and (< (length callbacks) 2) (< (float-time) deadline))
+        (accept-process-output nil 0.05)))
+    (should (= 2 (length callbacks)))
+    (should (cl-every (lambda (result)
+                        (and (null (car result)) (cadr result)))
+                      callbacks))
+    (should (= 0 (hash-table-count (valsi-pi-pending client))))
+    (let ((exit (cl-find 'process-exit events
+                         :key (lambda (event) (plist-get event :type)))))
+      (should exit)
+      (should (= 7 (plist-get exit :code)))
+      (should (string-match-p "fake pi crashed"
+                              (plist-get exit :stderr))))))
+
+(ert-deftest valsi-test-pi-old-process-failure-does-not-touch-new-requests ()
+  (let* ((client (valsi-pi-create))
+         (old-process 'old)
+         (new-process 'new)
+         old-result new-result)
+    (puthash "valsi-1"
+             (list :process old-process
+                   :callback (lambda (response error)
+                               (setq old-result (list response error))))
+             (valsi-pi-pending client))
+    (puthash "valsi-2"
+             (list :process new-process
+                   :callback (lambda (response error)
+                               (setq new-result (list response error))))
+             (valsi-pi-pending client))
+    (valsi-pi--fail-pending client "old exited" old-process)
+    (should (cadr old-result))
+    (should-not new-result)
+    (should (gethash "valsi-2" (valsi-pi-pending client)))
+    (valsi-pi--consume
+     client
+     "{\"id\":\"valsi-2\",\"type\":\"response\",\"success\":true}\n")
+    (should (plist-get (car new-result) :success))
+    (should-not (cadr new-result))))
+
+(ert-deftest valsi-test-pi-one-bad-callback-does-not-strand-others ()
+  (let ((client (valsi-pi-create))
+        called events)
+    (setf (valsi-harness-event-functions client)
+          (list (lambda (event) (push event events))))
+    (puthash "bad" (lambda (_response _error) (error "callback broke"))
+             (valsi-pi-pending client))
+    (puthash "good" (lambda (_response error) (setq called error))
+             (valsi-pi-pending client))
+    (valsi-pi--fail-pending client "gone")
+    (should called)
+    (should (= 0 (hash-table-count (valsi-pi-pending client))))
+    (should (cl-find 'callback-error events
+                     :key (lambda (event) (plist-get event :type))))))
 
 (defconst valsi-test--dir
   (file-name-directory (or load-file-name buffer-file-name
@@ -423,16 +672,52 @@ interior-state contradictions."
     ;; register a grammar that claims .custom, then confirm re-resolution
     (valsi-proto-request
      'grammar/register
-     (list :spec (list :id 'valsi-test-custom :name "Custom" :evidence 'emergent
-                       :match (lambda (uri _text)
-                                (if (string-suffix-p ".custom" uri) 10 0))
-                       :parse #'valsi-registry--parse-generic
-                       :capabilities '(outline narrow custom-thing))))
+     (list :spec (list :id "valsi-test-custom"
+                       :name "Custom" :evidence "emergent"
+                       :match (list :uriSuffix ".custom" :score 10)
+                       :recognizers []
+                       :capabilities ["outline" "narrow" "custom-thing"])))
     (let ((caps (plist-get (valsi-proto-request 'artifact/capabilities
                                                (list :uri uri))
                            :capabilities)))
       (should (memq 'custom-thing caps)))     ; no restart, doc re-resolved
     (valsi-registry-unregister 'valsi-test-custom)
+    (valsi-proto-reset)))
+
+(ert-deftest valsi-test-proto-json-registration ()
+  "A grammar declaration and its response survive a real JSON round-trip."
+  (valsi-init)
+  (valsi-proto-reset)
+  (let* ((spec (list :id "wire-demo" :name "Wire demo" :evidence "emergent"
+                     :match (list :uriSuffix ".wire" :score 10)
+                     :recognizers
+                     (vector (list :type "marker" :regexp "^MARK: +\\(.*\\)$"
+                                   :properties (list :value 1)))
+                     :capabilities ["wire-cap"]))
+         (request-json (json-serialize (list :spec spec)))
+         (params (json-parse-string request-json
+                                    :object-type 'plist :array-type 'array))
+         (response (valsi-proto-json-request "grammar/register" params))
+         (response-json (json-serialize response)))
+    (should (stringp response-json))
+    (should (equal "wire-demo"
+                   (plist-get (json-parse-string response-json
+                                                 :object-type 'plist)
+                              :id)))
+    (let* ((uri "x.wire")
+           (text "MARK: hello\n"))
+      (valsi-proto-json-request
+       "artifact/didOpen" (list :uri uri :text text))
+      (let* ((wire-tree (valsi-proto-json-request
+                         "artifact/symbols" (list :uri uri)))
+             (tree-json (json-serialize wire-tree))
+             (decoded (json-parse-string tree-json :object-type 'plist
+                                         :array-type 'array))
+             (child (aref (plist-get decoded :children) 0)))
+        (should (equal "marker" (plist-get child :type)))
+        (should (equal "hello"
+                       (plist-get (plist-get child :props) :value)))))
+    (valsi-registry-unregister 'wire-demo)
     (valsi-proto-reset)))
 
 ;;;; Client offset->buffer translation round-trips node identity
@@ -475,7 +760,7 @@ interior-state contradictions."
                               'tool_use)
                              (valsi-agent-turn
                               (list (valsi-agent-text-block "all done"))))))
-         (messages (valsi-agent-scope (:auto-approve t)
+         (messages (valsi-agent-scope (:tools '("echo") :auto-approve t)
                      (valsi-agent-run
                       :provider provider :model "mock" :system "sys"
                       :tools (list tool)
@@ -520,12 +805,14 @@ interior-state contradictions."
         (progn
           (with-temp-file f (insert "hello world\n"))
           ;; read outside scope -> refused
-          (valsi-agent-scope (:files (list "/nope/other.txt"))
+          (valsi-agent-scope (:tools '("read_file")
+                             :files (list "/nope/other.txt"))
             (should-not (valsi-agent-tool-result-ok
                          (valsi-agent-execute-tool (valsi-agent-get-tool "read_file")
                                                   (list :path f)))))
           ;; dry-run edit -> ok but file unchanged
-          (valsi-agent-scope (:files (list f) :auto-approve t :dry-run t)
+          (valsi-agent-scope (:tools '("apply_edit") :files (list f)
+                             :auto-approve t :dry-run t)
             (let ((res (valsi-agent-execute-tool
                         (valsi-agent-get-tool "apply_edit")
                         (list :path f :old "hello" :new "goodbye"))))
@@ -536,6 +823,58 @@ interior-state contradictions."
                                   (with-temp-buffer (insert-file-contents f)
                                                     (buffer-string)))))
       (delete-directory dir t))))
+
+(ert-deftest valsi-test-agent-file-scope-fails-closed ()
+  "Empty scopes and every built-in read tool refuse undeclared paths."
+  (valsi-agent-register-builtin-tools)
+  (let* ((dir (make-temp-file "valsi-agent-scope" t))
+         (file (expand-file-name "secret.txt" dir)))
+    (unwind-protect
+        (progn
+          (with-temp-file file (insert "secret marker\n"))
+          (valsi-agent-scope (:tools '("read_file") :files nil)
+            (should-not
+             (valsi-agent-tool-result-ok
+              (valsi-agent-execute-tool
+               (valsi-agent-get-tool "read_file") (list :path file)))))
+          (valsi-agent-scope (:tools '("grep" "list_dir")
+                             :files (list "/nope/only.txt"))
+            (should-not
+             (valsi-agent-tool-result-ok
+              (valsi-agent-execute-tool
+               (valsi-agent-get-tool "grep")
+               (list :path file :pattern "secret"))))
+            (should-not
+             (valsi-agent-tool-result-ok
+              (valsi-agent-execute-tool
+               (valsi-agent-get-tool "list_dir") (list :path dir))))))
+      (delete-directory dir t))))
+
+(ert-deftest valsi-test-agent-does-not-run-unadvertised-global-tool ()
+  "The loop cannot resolve a global tool omitted from its explicit tool set."
+  (let* ((ran nil)
+         (tool (valsi-agent-tool-create
+                :name "global-only"
+                :executor (lambda (_args)
+                            (setq ran t)
+                            (valsi-agent-tool-result-create :ok t))))
+         (provider
+          (valsi-agent-mock-provider-create
+           :script (list
+                    (valsi-agent-turn
+                     (list (valsi-agent-tool-use-block "x" "global-only" nil))
+                     'tool_use)
+                    (valsi-agent-turn
+                     (list (valsi-agent-text-block "done")))))))
+    (unwind-protect
+        (progn
+          (valsi-agent-register-tool tool)
+          (valsi-agent-run
+           :provider provider :tools nil
+           :messages (list (valsi-agent-message
+                            "user" (list (valsi-agent-text-block "test")))))
+          (should-not ran))
+      (remhash "global-only" valsi-agent-tools--registry))))
 
 (ert-deftest valsi-test-agent-session-roundtrip ()
   "A session appends messages as JSONL and reloads them."
@@ -550,7 +889,30 @@ interior-state contradictions."
           (should (= 2 (length (valsi-agent-session-messages s))))
           ;; reopen from disk -> same two messages
           (let ((s2 (valsi-agent-session-resume "t1" root)))
-            (should (= 2 (length (valsi-agent-session-messages s2))))))
+          (should (= 2 (length (valsi-agent-session-messages s2))))))
+      (delete-directory root t))))
+
+(ert-deftest valsi-test-native-session-archive-preserves-data ()
+  "Legacy native sessions move intact and leave the production path absent."
+  (let ((root (make-temp-file "valsi-session-archive-" t)))
+    (unwind-protect
+        (let* ((session (valsi-agent-session-open "legacy" root))
+               (_ (valsi-agent-session-append
+                   session '(:role "user" :content "keep me")))
+               (old-file (valsi-agent-session-file session))
+               (old-content
+                (with-temp-buffer
+                  (insert-file-contents-literally old-file)
+                  (buffer-string)))
+               (archive (valsi-agent-session-archive-legacy root))
+               (archived-file (expand-file-name "legacy.jsonl" archive)))
+          (should-not (file-exists-p (valsi-agent-sessions-dir root)))
+          (should (file-regular-p archived-file))
+          (should
+           (equal old-content
+                  (with-temp-buffer
+                    (insert-file-contents-literally archived-file)
+                    (buffer-string)))))
       (delete-directory root t))))
 
 (ert-deftest valsi-test-agent-instructions ()
@@ -719,6 +1081,107 @@ interior-state contradictions."
     (should (= 1 (length changes)))
     (should (string-match-p "- \\[x\\] T001 a" result))
     (should (string-match-p "- \\[ \\] T002 b" result))))
+
+(ert-deftest valsi-test-plan-block-records-reason ()
+  "Blocking a task records the reason without projecting agent UI state."
+  (with-temp-buffer
+    (insert "- [ ] T1308 Verify resume\n")
+    (goto-char (point-min))
+    (cl-letf (((symbol-function 'read-string)
+               (lambda (&rest _) "waiting for restart")))
+      (valsi-plan-block))
+    (should (string-match-p "Blocked: waiting for restart"
+                            (buffer-string)))))
+
+(ert-deftest valsi-test-plan-blocked-task-is-not-actionable ()
+  "A task with unmet dependencies is neither selected nor dispatched."
+  (with-temp-buffer
+    (insert "# Tasks\n- [ ] T001 blocked (depends on T999)\n")
+    (let ((tree (valsi-plan-parse (buffer-string)))
+          (dispatched nil))
+      (valsi-node-shift tree (point-min))
+      (goto-char (point-min))
+      (cl-letf (((symbol-function 'valsi-tree) (lambda () tree))
+                ((symbol-function 'valsi-plan-dispatch-task)
+                 (lambda () (setq dispatched t))))
+        (should-not (valsi-plan-next-actionable))
+        (valsi-plan-dispatch-next)
+        (should-not dispatched)))))
+
+(ert-deftest valsi-test-plan-review-commands-have-interactive-inputs ()
+  "Review supplies input while distill uses the attached harness."
+  (should (cadr (interactive-form 'valsi-plan-review-update)))
+  (should (interactive-form 'valsi-plan-distill)))
+
+;;;; Artifact application and terminal agents
+
+(ert-deftest valsi-test-app-scans-and-renders-recognized-artifacts ()
+  "The project hub summarizes recognized artifacts and ignores ordinary files."
+  (let ((root (make-temp-file "valsi-app-" t)))
+    (unwind-protect
+        (let ((plan (expand-file-name "PLAN.md" root))
+              (notes (expand-file-name "notes.txt" root)))
+          (write-region "# Plan\n- [ ] T001 ship\n" nil plan nil 'silent)
+          (write-region "ordinary project notes\n" nil notes nil 'silent)
+          (cl-letf (((symbol-function 'project-current)
+                     (lambda (&rest _) 'valsi-test-project))
+                    ((symbol-function 'project-root)
+                     (lambda (_) root))
+                    ((symbol-function 'project-files)
+                     (lambda (_) (list plan notes))))
+            (let ((entries (valsi-app--scan root)))
+              (should (= 1 (length entries)))
+              (should (eq 'plan (plist-get (car entries) :grammar)))
+              (with-temp-buffer
+                (valsi-app-mode)
+                (setq valsi-app--root root
+                      valsi-app--entries entries
+                      valsi-app--compact nil)
+                (valsi-app--render)
+                (should (search-forward "Plan" nil t))
+                (should (search-forward "PLAN.md" nil t))
+                (should-not (search-forward "notes.txt" nil t))))))
+      (delete-directory root t))))
+
+(ert-deftest valsi-test-terminal-agent-starts-stock-pi-in-project ()
+  "Terminal integration launches stock Pi with the declared subscription CLI."
+  (let ((root (file-name-as-directory
+               (make-temp-file "valsi-agent-" t)))
+        captured)
+    (unwind-protect
+        (cl-letf (((symbol-function 'valsi-terminal-agent--eat) #'ignore)
+                  ((symbol-function 'valsi-terminal-agent--ensure-program)
+                   (lambda (program _backend) program))
+                  ((symbol-function 'eat-make)
+                   (lambda (name program startfile &rest args)
+                     (setq captured
+                           (list name program startfile args
+                                 default-directory))
+                     (get-buffer-create " *valsi-test-eat*"))))
+          (let ((instance
+                 (valsi-terminal-agent--start root "primary" 'pi)))
+            (should (equal "pi" (nth 1 captured)))
+            (should (equal '("--continue" "--provider" "openai-codex"
+                            "--model" "gpt-5.5")
+                           (seq-take (nth 3 captured) 5)))
+            (should (equal "--extension"
+                           (nth 5 (nth 3 captured))))
+            (should (equal root (nth 4 captured)))
+            (should (eq 'pi
+                        (valsi-terminal-agent-instance-backend instance)))))
+      (when-let* ((buffer (get-buffer " *valsi-test-eat*")))
+        (kill-buffer buffer))
+      (clrhash valsi-terminal-agent--instances)
+      (delete-directory root t))))
+
+(ert-deftest valsi-test-terminal-agent-wheel-controls-emacs-scrollback ()
+  "Valsi captures wheel events before a TUI's terminal mouse reporting."
+  (with-temp-buffer
+    (valsi-terminal-agent-mode 1)
+    (should (eq #'mwheel-scroll (key-binding [wheel-up])))
+    (should (eq #'mwheel-scroll (key-binding [wheel-down])))
+    (should (memq 'valsi-terminal-agent--emulation-map-alist
+                  emulation-mode-map-alists))))
 
 (provide 'valsi-test)
 ;;; valsi-test.el ends here

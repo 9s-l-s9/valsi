@@ -40,7 +40,7 @@ structured payload for callers; ERROR is a message when OK is nil."
   "Registered tools keyed by name string.")
 
 (defun valsi-agent-register-tool (tool)
-  "Register TOOL, replacing any existing tool of the same name.  Returns TOOL."
+  "Register TOOL, replacing any tool of the same name, and return TOOL."
   (puthash (valsi-agent-tool-name tool) tool valsi-agent-tools--registry)
   tool)
 
@@ -64,21 +64,32 @@ structured payload for callers; ERROR is a message when OK is nil."
 
 ;;;; Scoping (control over delegation -- per-dispatch allow-lists)
 
-(defvar valsi-agent-allowed-tools nil
-  "When non-nil, a list of permitted tool-name strings; others are refused.")
+(defvar valsi-agent-allowed-tools :unrestricted
+  "Permitted tool names for the current dispatch.
+The sentinel `:unrestricted' applies only outside `valsi-agent-scope'; within a
+scope, nil means no tools are permitted.")
 
-(defvar valsi-agent-allowed-files nil
-  "When non-nil, a list of permitted file paths; file tools refuse others.")
+(defvar valsi-agent-allowed-files :unrestricted
+  "Permitted file paths for the current dispatch.
+The sentinel `:unrestricted' is used only outside an explicit
+`valsi-agent-scope'.  Within a scope, nil means no files are permitted.")
 
 (defvar valsi-agent-dry-run nil
   "When non-nil, mutating tools report intended changes without writing.")
 
 (defun valsi-agent-file-allowed-p (path)
   "Return non-nil if PATH is permitted by `valsi-agent-allowed-files'."
-  (or (null valsi-agent-allowed-files)
-      (let ((abs (expand-file-name path)))
-        (cl-some (lambda (a) (string= (expand-file-name a) abs))
-                 valsi-agent-allowed-files))))
+  (and path
+       (or (eq valsi-agent-allowed-files :unrestricted)
+           (let ((abs (valsi-agent--canonical-path path)))
+             (cl-some (lambda (allowed)
+                        (string= (valsi-agent--canonical-path allowed) abs))
+                      valsi-agent-allowed-files)))))
+
+(defun valsi-agent--canonical-path (path)
+  "Return a canonical absolute form of PATH for scope comparisons."
+  (let ((abs (expand-file-name path)))
+    (if (file-exists-p abs) (file-truename abs) abs)))
 
 ;;;; Confirmation gate (control over delegation)
 
@@ -109,7 +120,7 @@ Returns a `valsi-agent-tool-result'.  A declined confirmation or a signalled
 error becomes a non-OK result (never a thrown error), so the loop keeps going."
   (condition-case err
       (cond
-       ((and valsi-agent-allowed-tools
+       ((and (not (eq valsi-agent-allowed-tools :unrestricted))
              (not (member (valsi-agent-tool-name tool) valsi-agent-allowed-tools)))
         (valsi-agent-tool-result-create
          :ok nil :error "tool not in scope"
@@ -146,19 +157,30 @@ error becomes a non-OK result (never a thrown error), so the loop keeps going."
 (defun valsi-agent--list-dir (args)
   "Executor: list the entries of directory :path in ARGS."
   (let ((path (or (plist-get args :path) default-directory)))
-    (if (file-directory-p path)
-        (valsi-agent-tool-result-create
-         :ok t :content (mapconcat #'identity
-                                   (directory-files path nil "\\`[^.]") "\n"))
+    (cond
+     ((not (valsi-agent-file-allowed-p path))
+      (valsi-agent-tool-result-create
+       :ok nil :error "directory not in scope"
+       :content (format "%s is outside the dispatch scope." path)))
+     ((file-directory-p path)
+      (valsi-agent-tool-result-create
+       :ok t :content (mapconcat #'identity
+                                 (directory-files path nil "\\`[^.]") "\n")))
+     (t
       (valsi-agent-tool-result-create
        :ok nil :error (format "not a directory: %s" path)
-       :content (format "%s is not a directory" path)))))
+       :content (format "%s is not a directory" path))))))
 
 (defun valsi-agent--grep (args)
   "Executor: return lines in file :path matching regexp :pattern in ARGS."
   (let ((pattern (plist-get args :pattern))
         (path (plist-get args :path)))
-    (if (and pattern path (file-readable-p path))
+    (cond
+     ((and path (not (valsi-agent-file-allowed-p path)))
+      (valsi-agent-tool-result-create
+       :ok nil :error "file not in scope"
+       :content (format "%s is outside the dispatch scope." path)))
+     ((and pattern path (file-readable-p path))
         (with-temp-buffer
           (insert-file-contents path)
           (goto-char (point-min))
@@ -172,10 +194,11 @@ error becomes a non-OK result (never a thrown error), so the loop keeps going."
               (forward-line 1))
             (valsi-agent-tool-result-create
              :ok t :content (mapconcat #'identity (nreverse hits) "\n")
-             :data (length hits))))
+             :data (length hits)))))
+     (t
       (valsi-agent-tool-result-create
        :ok nil :error "grep: missing pattern/path or unreadable file"
-       :content "grep needs :pattern and a readable :path"))))
+       :content "grep needs :pattern and a readable :path")))))
 
 (defun valsi-agent--apply-edit (args)
   "Executor: replace the first :old with :new in file :path (ARGS).
@@ -210,7 +233,7 @@ Mutating -- gated by CONFIRM at the tool level."
            :content (format "Text to replace not found in %s" path))))))))
 
 (defun valsi-agent-register-builtin-tools ()
-  "Register the built-in file tools.  Returns the list of registered tools."
+  "Register and return the built-in file tools."
   (mapcar
    #'valsi-agent-register-tool
    (list

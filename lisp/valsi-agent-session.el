@@ -5,9 +5,10 @@
 
 ;;; Commentary:
 
-;; Append-only JSONL sessions under a repo-local `.valsi/sessions/' (tau's
-;; session tier, research/03 Pattern 4).  Files over formats: a session is plain
-;; newline-delimited JSON a plain editor can read; git-ignored by default.
+;; Legacy append-only JSONL sessions for the native test/emergency harness.
+;; Pi owns all production session history.  Existing `.valsi/sessions/' data is
+;; never deleted or imported into Pi; `valsi-agent-session-archive-legacy'
+;; provides an explicit, non-destructive archival move.
 ;;
 ;; Each line is one entry object: `{"kind":..., ...}'.  Messages carry the
 ;; provider-neutral transcript; a `branch' entry records a fork point so
@@ -25,8 +26,35 @@ entry plists (oldest first)."
   id file (entries nil))
 
 (defun valsi-agent-sessions-dir (&optional root)
-  "Return the sessions directory under ROOT (or `default-directory')."
+  "Return the legacy native sessions directory under ROOT."
   (expand-file-name ".valsi/sessions/" (or root default-directory)))
+
+(defun valsi-agent-session-archive-legacy (&optional root)
+  "Archive ROOT's legacy native sessions without changing their contents.
+Move `.valsi/sessions/' to a uniquely timestamped directory below
+`.valsi/archive/'.  Production Pi sessions and credentials are not inspected.
+Signal a user error when no legacy directory exists.  Return the archive path."
+  (interactive)
+  (let* ((root (file-name-as-directory
+                (expand-file-name (or root default-directory))))
+         (source (directory-file-name (valsi-agent-sessions-dir root)))
+         (archive-root (expand-file-name ".valsi/archive/" root))
+         (stamp (format-time-string "%Y%m%dT%H%M%S"))
+         (target (expand-file-name (concat "native-sessions-" stamp)
+                                   archive-root))
+         (suffix 0))
+    (unless (file-directory-p source)
+      (user-error "No legacy native sessions at %s" source))
+    (while (file-exists-p target)
+      (setq suffix (1+ suffix)
+            target (expand-file-name
+                    (format "native-sessions-%s-%d" stamp suffix)
+                    archive-root)))
+    (make-directory archive-root t)
+    (rename-file source target)
+    (when (called-interactively-p 'interactive)
+      (message "Archived legacy native sessions at %s" target))
+    target))
 
 (defun valsi-agent-session-open (&optional id root)
   "Open (creating if needed) session ID under ROOT as a `valsi-agent-session'.
@@ -81,7 +109,7 @@ already has a `:kind' is written as-is."
                 (valsi-agent-session-entries session))))
 
 (defun valsi-agent-session-branch (session &optional label)
-  "Record a branch point in SESSION (optionally LABELled) and return it.
+  "Record a branch point in SESSION with optional LABEL and return it.
 Marks a fork so a rejected agent turn can be modelled as a branch not taken."
   (valsi-agent-session-append
    session (list :kind "branch" :at (length (valsi-agent-session-entries session))

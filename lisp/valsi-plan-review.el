@@ -78,8 +78,9 @@ ignored (their dialects are positional and handled by `renumber')."
     nil))
 
 (defun valsi-plan-apply-changes (old-content changes)
-  "Return OLD-CONTENT with the accepted CHANGES applied, line-level, keyed by id.
-An empty CHANGES list returns OLD-CONTENT byte-identically (reject-all)."
+  "Apply accepted line-level edits to OLD-CONTENT and return the result.
+Each entry in CHANGES is keyed by id.  Return OLD-CONTENT byte-identically
+when CHANGES is empty (reject-all)."
   (with-temp-buffer
     (insert old-content)
     (dolist (ch changes)
@@ -118,7 +119,13 @@ An empty CHANGES list returns OLD-CONTENT byte-identically (reject-all)."
   "Review NEW-CONTENT (an agent's proposed edit) against the current buffer.
 Pops up a review buffer enumerating the task-level changes; accept/reject per
 node, then apply.  With no changes, reports so and does nothing."
-  (interactive)
+  (interactive
+   (list
+    (let ((proposal (read-file-name
+                     "Proposed plan file: " nil buffer-file-name t)))
+      (with-temp-buffer
+        (insert-file-contents proposal)
+        (buffer-string)))))
   (let* ((target (current-buffer))
          (old (buffer-string))
          (changes (valsi-plan-diff old new-content)))
@@ -183,7 +190,7 @@ node, then apply.  With no changes, reports so and does nothing."
   (valsi-plan-review--refresh))
 
 (defun valsi-plan-review-apply ()
-  "Apply the accepted changes to the target buffer and close the review."
+  "Apply accepted edits to the target buffer and close the review."
   (interactive)
   (let* ((accepted (delq nil (mapcar (lambda (row) (and (cdr row) (car row)))
                                      valsi-plan-review--changes)))

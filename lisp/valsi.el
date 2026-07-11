@@ -2,11 +2,11 @@
 
 ;; Copyright (C) 2026 Samuel Schmidt
 ;; Author: Samuel Schmidt <schmidt.l.samuel@gmail.com>
-;; Version: 0.1.0
-;; Package-Requires: ((emacs "29.1"))
+;; Version: 1.0.0
+;; Package-Requires: ((emacs "29.1") (eat "0.9.4"))
 ;; Keywords: convenience, docs, tools
 ;; SPDX-License-Identifier: GPL-3.0-or-later
-;; URL: https://example.invalid/valsi
+;; URL: https://github.com/s-l-s/valsi
 
 ;;; Commentary:
 
@@ -42,6 +42,8 @@
 (require 'valsi-overview)
 (require 'valsi-plan-review)
 (require 'valsi-plan-agent)
+(require 'valsi-terminal-agent)
+(require 'valsi-app)
 (require 'transient)
 
 ;;;; Initialization: register the bundled grammars
@@ -195,6 +197,8 @@ offset->buffer-position translation here."
     (define-key map (kbd "C-c n D") #'valsi-detect)
     (define-key map (kbd "C-c n r") #'valsi-refresh)
     (define-key map (kbd "C-c n G") #'valsi-graph)
+    (define-key map (kbd "C-c n c") #'valsi)
+    (define-key map (kbd "C-c n @") #'valsi-app-handoff)
     (define-key map (kbd "C-c n ?") #'valsi-describe-grammar)
     (define-key map (kbd "C-c n m") #'valsi-menu)
     map)
@@ -268,6 +272,10 @@ a keymap (\\{valsi-artifact-mode-map})."
     ("o" "occur by state" valsi-occur)
     ("l" "lint/validate" valsi-lint)]
    ["Views"
+    ("c" "project hub" valsi)
+    ("A" "agent terminal" valsi-agent)
+    ("@" "agent + artifacts" valsi-agent-with-artifacts)
+    ("h" "reference to agent" valsi-app-handoff)
     ("d" "family dashboard" valsi-dashboard)
     ("G" "cross-artifact graph" valsi-graph)
     ("D" "detect dialect" valsi-detect)

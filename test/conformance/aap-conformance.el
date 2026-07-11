@@ -198,17 +198,16 @@ updates the capabilities of documents opened before it existed."
                       :capabilities)))
     ;; Register a grammar that claims .demo; the OPEN doc must re-resolve.
     (valsi-aap--req 'grammar/register
-                   :spec (list :id 'demo
+                   :spec (list :id "demo"
                                :name "Demo"
-                               :evidence 'emergent
-                               :match (lambda (u _text)
-                                        (if (string-suffix-p ".demo" (or u ""))
-                                            10 0))
-                               :parse (lambda (content)
-                                        (valsi-node-create
-                                         :type 'root :beg 0
-                                         :end (length content)))
-                               :capabilities (lambda (_root) '(demo-cap))))
+                               :evidence "emergent"
+                               :rootType "root"
+                               :match (list :uriSuffix ".demo" :score 10)
+                               :recognizers
+                               (vector (list :type "heading"
+                                             :regexp "^# +\\(.*\\)$"
+                                             :properties (list :title 1)))
+                               :capabilities ["demo-cap"]))
     ;; No re-open: the server re-synced the open doc under the new grammar.
     (should
      (memq 'demo-cap

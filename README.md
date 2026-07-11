@@ -22,7 +22,11 @@ Valsi can adapt itself to your specific project and workflow, by providing optim
 
 **Structure over transcripts.** Collaboration with an agent should happen through shared, structured artifacts — not by scrolling a chat log to reconstruct what was decided.
 
-**Control over delegation.** Valsi is for people who master their tools. Every agent action is scoped, every view is inspectable, everything is yours to rebind and reshape. If you're content with whatever `plan.md` falls out of your harness, this isn't for you.
+**Control over delegation.** Valsi is for people who master their tools. Agent
+permissions remain visible and configurable in the selected CLI, every
+artifact view is inspectable, and everything is yours to rebind and reshape.
+If you're content with whatever `plan.md` falls out of your harness, this
+isn't for you.
 
 **Files over formats.** Artifacts stay plain markdown on disk — diffable, git-friendly, readable by any editor, any harness, any model. Valsi is the lens, not a lock-in. Close it and your files are still just files.
 
@@ -45,7 +49,7 @@ The client lives in `lisp/`. Launch a demo Emacs with all four grammars loaded:
 
 ```sh
 make run          # guix shell + emacs -Q -l valsi-demo.el
-make check        # byte-compile (warnings→errors) + ERT suite
+make check        # byte-compile (warnings→errors) + Checkdoc + ERT suite
 ```
 
 Or, from any Emacs:
@@ -89,6 +93,74 @@ Each family also has a dedicated tabulated view: a cross-file **plan agenda**,
 an **instruction scope-map**, a **prompt-file frontmatter table**, a **memory
 index**, and the project-wide **cross-artifact graph**.
 
+## The Valsi application and agent terminals
+
+ADR 0006 reframes Valsi as a Magit-like Emacs application for agent artifacts.
+`M-x valsi` opens a project hub that summarizes recognized plans, instructions,
+skills, memories, decisions, warnings, recent artifacts, and associated agent
+instances. Dedicated family dashboards, inspectors, graph views, verification,
+and node-diff review remain native Emacs buffers. Source files remain ordinary
+editable Markdown.
+
+The hub is not a file tree or a replacement for Emacs project management:
+
+- `project.el` owns project roots and file selection;
+- `project-dired` provides a directory view;
+- Magit/Git owns version control;
+- `compilation-mode` owns builds and verification;
+- an optional configured package may provide a full project tree.
+
+The hub updates after buffer edits, saves, agent/external writes, and filesystem
+notifications. Opening it and pressing `g` reconcile modification times.
+Unsaved buffers are never overwritten; disk conflicts are reported.
+
+Agent conversation runs in a real Eat terminal buffer, for example
+`*Valsi Agent: valsi/primary*`. Pi is the default Guix-pinned backend; Codex CLI,
+Claude Code, and custom commands may use the same terminal role. The CLI owns
+its prompt, transcript, tools, diffs, authentication, models, context display,
+confirmations, and sessions. Valsi does not parse terminal cells or reproduce
+those controls.
+
+Normal agent capability is preserved: the CLI starts at the canonical project
+root and may read, search, edit, and run commands according to its own
+sandbox/approval settings. Artifact selection is semantic context, not a
+per-file permission system. An explicit command can insert a path/task
+reference into the terminal prompt without submitting it. Pi may resolve richer
+artifact context through Valsi's extension and AAP; other CLIs can use a future
+MCP/AAP face or fall back to the plain reference.
+
+Useful entry points are planned as:
+
+| Command | Action |
+|---|---|
+| `M-x valsi` | open the project artifact hub |
+| `M-x valsi-agent` | open/focus the project's configured agent terminal |
+| `M-x valsi-artifacts` | open/focus the compact artifact index |
+| `M-x valsi-agent-with-artifacts` | compose terminal plus artifact index |
+| `C-c n m` | show the context-sensitive Valsi command menu |
+
+The exact buffer anatomy, layouts, focus behavior, and proposed shortcuts are
+specified in [`UI.md`](UI.md) and [`UX.md`](UX.md).
+
+Pi remains the tested subscription path. Authentication happens in Pi's own
+terminal UI, so Pi exclusively stores and refreshes credentials. OpenAI Codex
+through a ChatGPT subscription is the intended no-API-key path. Pi's Claude
+Pro/Max path may draw from Anthropic extra usage billed per token rather than
+included plan limits.
+
+Later multi-agent support adds named terminal instances to the hub. Valsi tracks
+only lightweight identity, backend, task association, process, worktree, and
+structured status. Writing agents should normally use separate Git worktrees;
+credentials and transcripts remain owned by each CLI. Valsi coordinates through
+artifacts and worktrees rather than becoming another agent runtime. The exact
+data model and collision rules are in
+[`doc/multi-agent.md`](doc/multi-agent.md).
+
+The optional Pi extension is deliberately narrow: it contributes the
+read-only `valsi_artifact` AAP tool and nothing else. If the extension is absent,
+Pi still runs normally and artifact handoff falls back to plain path/task
+references.
+
 ## Installation
 
 **Guix** (reproducible; the repo ships `valsi.scm`):
@@ -96,7 +168,13 @@ index**, and the project-wide **cross-artifact graph**.
 ```sh
 guix build -f valsi.scm                   # build + byte-compile the package
 guix shell -D -f valsi.scm -- make check  # dev shell + full test suite
+guix shell -f valsi.scm -- pi --version   # pinned harness runtime
 ```
+
+The Guix package propagates Pi 0.80.6, Eat, and Valsi's optional AAP extension.
+For MELPA/manual installation, install a compatible agent CLI and Eat. Set
+`valsi-agent-pi-extension-file` only when the extension is not installed beside
+Valsi and is not available from the source tree.
 
 **MELPA** (recipe under `recipes/valsi`):
 

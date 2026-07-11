@@ -299,7 +299,7 @@ By id sort-key prefix when both have keys, else by indent."
   (interactive)
   (let* ((alist (valsi-plan--task-alist (valsi-tree)))
          (choice (completing-read "Task: " alist nil t)))
-    (when-let ((pos (cdr (assoc choice alist))))
+    (when-let* ((pos (cdr (assoc choice alist))))
       (goto-char pos)
       (beginning-of-line))))
 
@@ -351,8 +351,7 @@ By id sort-key prefix when both have keys, else by indent."
     (occur (format "^[ \t]*-[ \t]+\\[%s\\][ \t]" char))))
 
 (defun valsi-plan-next-actionable ()
-  "Jump to the first open task whose dependencies are all satisfied.
-Rung 5; falls back to first open task in document order."
+  "Jump to the first open task whose dependencies are all satisfied."
   (interactive)
   (let* ((root (valsi-tree))
          (tasks (valsi-node-of-type root 'task))
@@ -362,19 +361,21 @@ Rung 5; falls back to first open task in document order."
                                         (valsi-node-prop tk :id)))
                                  tasks)))
          (target
-          (or (cl-find-if
-               (lambda (tk)
-                 (and (eq (valsi-node-prop tk :state) 'open)
-                      (cl-every (lambda (d) (member d done-ids))
-                                (valsi-node-prop tk :deps))))
-               tasks)
-              (cl-find-if (lambda (tk) (eq (valsi-node-prop tk :state) 'open))
-                          tasks))))
+          (cl-find-if
+           (lambda (tk)
+             (and (eq (valsi-node-prop tk :state) 'open)
+                  (cl-every (lambda (d) (member d done-ids))
+                            (valsi-node-prop tk :deps))))
+           tasks)))
     (if target
-        (progn (goto-char (valsi-node-beg target)) (beginning-of-line)
-               (message "Next actionable: %s" (or (valsi-node-prop target :id)
-                                                  (valsi-node-prop target :desc))))
-      (message "No actionable open task"))))
+        (progn
+          (goto-char (valsi-node-beg target))
+          (beginning-of-line)
+          (message "Next actionable: %s" (or (valsi-node-prop target :id)
+                                             (valsi-node-prop target :desc)))
+          target)
+      (message "No actionable open task")
+      nil)))
 
 ;;;; State editing (rung 2+)
 
@@ -396,7 +397,11 @@ On an interior task with children, offer to apply to all children."
 (defun valsi-plan-block ()
   "Mark the task at point blocked, recording a reason as a child bullet."
   (interactive)
-  (let ((reason (read-string "Blocked reason: ")))
+  (let* ((task (valsi-plan--task-at-line
+                (valsi-node-of-type (valsi-plan--buffer-tree) 'task)))
+         (reason (read-string "Blocked reason: ")))
+    (unless task
+      (user-error "No task on this line"))
     (save-excursion
       (end-of-line)
       (let ((indent (save-excursion (beginning-of-line)
@@ -503,7 +508,7 @@ Refuses on non-speckit dialects (positional ids are meaningful there)."
   (let* ((root (valsi-plan--buffer-tree))
          (dialect (valsi-node-prop root :dialect)))
     (unless (eq dialect 'speckit)
-      (user-error "valsi-plan-renumber supports the speckit Tnnn dialect only (this is %s)"
+      (user-error "Valsi plan renumber supports the speckit Tnnn dialect only (this is %s)"
                   dialect))
     (let* ((ordered (sort (cl-remove-if-not
                            (lambda (tk)
@@ -736,7 +741,8 @@ build on this; the buffer/filesystem checks are layered on top there."
 
 (defun valsi-plan--missing-file-findings (root &optional dir)
   "Return (NODE . MESSAGE) findings for done tasks whose manifest files are gone.
-DIR (default `default-directory') resolves relative path-refs."
+ROOT is the plan tree.  DIR (default `default-directory') resolves relative
+path-refs."
   (let ((dir (or dir default-directory)) (found nil))
     (dolist (tk (valsi-node-of-type root 'task))
       (when (eq (valsi-plan-effective-state tk) 'done)
@@ -749,8 +755,9 @@ DIR (default `default-directory') resolves relative path-refs."
     (nreverse found)))
 
 (defun valsi-plan-lint ()
-  "Report plan health: dangling deps, duplicate ids, cycles, interior-state
-contradictions, missing manifest files, placeholders, and unknown state chars."
+  "Report plan health issues.
+Checks dangling deps, duplicate ids, cycles, interior-state contradictions,
+missing manifest files, placeholders, and unknown state chars."
   (interactive)
   (let* ((root (valsi-tree))
          (tasks (valsi-node-of-type root 'task))
@@ -777,8 +784,8 @@ contradictions, missing manifest files, placeholders, and unknown state chars."
 ;;;; Flymake backend (rung 3-4): live diagnostics from the lint collector
 
 (defun valsi-plan-flymake (report-fn &rest _)
-  "Flymake backend: report `valsi-plan--lint-collect' findings as diagnostics.
-Registered by `valsi-plan-flymake-setup'.  Parses the current buffer fresh."
+  "Report plan lint diagnostics through Flymake REPORT-FN.
+Registered by `valsi-plan-flymake-setup'; parses the current buffer fresh."
   (let* ((root (valsi-plan--buffer-tree))
          (diags nil))
     (dolist (pair (append (valsi-plan--lint-collect root)
@@ -934,8 +941,8 @@ Sorted by requirement sort key."
 ;;;; Cross-artifact: staleness (rung 5)
 
 (defun valsi-plan--stale-tasks (root plan-file)
-  "Return (TASK-ID . FILE) pairs where a task's path-ref target is newer than
-PLAN-FILE (its trace target changed after the plan was last written)."
+  "Return stale (TASK-ID . FILE) pairs from ROOT relative to PLAN-FILE.
+A pair is stale when its task's path-ref target is newer than the plan."
   (let ((plan-mtime (and (file-exists-p plan-file)
                          (file-attribute-modification-time
                           (file-attributes plan-file))))

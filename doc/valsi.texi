@@ -50,7 +50,7 @@ file stays ordinary, diffable, and portable.
 * Prompt-file family::   SKILL.md, subagents, commands.
 * Memory family::        Index + record store.
 * Cross-artifact graph:: The thesis capstone.
-* The agent core::       First-party, subscription-OAuth-first brain.
+* The agent harness::    Artifact application and terminal-native agents.
 * The AAP protocol::     The open wire contract Valsi implements.
 * Index::                Concept index.
 @end menu
@@ -91,8 +91,11 @@ guix build -f valsi.scm                  # build + byte-compile
 guix shell -D -f valsi.scm -- make check # dev shell + full test suite
 @end example
 
-The pinned tool set is @code{nss-certs emacs emacs-markdown-mode}; the Emacs
-floor is 29.1 and CI runs on 30.2.
+The package also propagates Eat, a pinned Pi 0.80.6 runtime, and Valsi's optional
+read-only AAP artifact extension. Pi owns its normal authentication, tools,
+permissions, and sessions. MELPA and source installations need Eat and a
+compatible agent CLI separately.
+The Emacs floor is 29.1 and CI runs on 30.2.
 
 @section With MELPA
 
@@ -191,15 +194,64 @@ path/trace refs plus phase-successor edges --- into one navigable edge list.
 @code{valsi-graph-register-edge-source} lets a new family add edges with no
 change to the core.
 
-@node The agent core
-@chapter The agent core
+@node The agent harness
+@chapter The Valsi application and agent terminals
 
-A standalone, artifact-agnostic brain: a provider abstraction with a
-subscription-OAuth-first path (reusing Claude Code's token before any login)
-and an API-key fallback, a typed tool registry with a scoping/confirmation
-layer, a provider-neutral tool-use loop, and durable append-only JSONL
-sessions.  It is client-side and rides MCP; it is deliberately @emph{not} part
-of the AAP protocol surface.
+ADR 0006 defines Valsi as a Magit-like application for agent artifacts.  The
+project hub, family dashboards, inspectors, cross-artifact graph,
+@code{compilation-mode} verification, and node-diff review are native Emacs
+buffers.  Source artifacts remain ordinary editable Markdown.
+
+Open the project hub with @code{M-x valsi}.  It summarizes artifact families,
+warnings, stale or conflicting entries, recent artifacts, and associated agent
+instances.  Refresh with @kbd{g}.  Buffer edits are reparsed after an idle
+delay; saves and external or agent writes refresh affected rows.  Entering the
+hub reconciles modification times, and unsaved buffers are never overwritten.
+
+The hub is not a generic project manager.  It delegates file selection to
+@code{project-find-file}, directories to @code{project-dired}, version control
+to Magit or Git, verification to @code{compilation-mode}, and optional file
+trees to a user-configured package.
+
+Agent conversations run in real terminal-emulator buffers.  Eat is the initial
+terminal backend.  Pi is the default Guix-pinned agent; Codex CLI, Claude Code,
+and custom programs may use the same role with capability-based integration.
+Each process starts at the canonical Emacs project root.
+
+The selected CLI owns its prompt, transcript, tools, diffs, authentication,
+model selection, context display, confirmations, compaction, and sessions.
+Valsi does not parse terminal cells or reproduce those controls.  Normal
+project reads, edits, and commands follow the CLI's own sandbox and approval
+settings; selecting a task or artifact is semantic context rather than a
+per-file permission grant.
+
+Independent commands open the hub, agent terminal, artifact index, or a
+convenience terminal-plus-index layout.  Normal Emacs window commands remain
+authoritative.  Leaving the application restores the saved window
+configuration without killing the agent process.
+
+Artifact handoff is explicit.  A command inserts a stable artifact path or task
+identifier into the selected agent prompt without submitting it.  Pi can
+resolve richer context through Valsi's extension and AAP.  Other CLIs may use a
+future MCP/AAP face; without it, the reference remains useful plain text.
+
+Plan dispatch prepares an AAP-derived prompt in the terminal.  Task manifests
+inform the prompt but do not restrict normal project exploration.  Structured
+automatic node review requires a real backend callback; Valsi never scrapes
+terminal output to infer completion.  The user can always open node review and
+verification explicitly.
+
+Authentication belongs to the CLI.  Pi stores and refreshes its own
+credentials and provides the tested OpenAI Codex via ChatGPT subscription path.
+Valsi never copies tokens or sessions.  Pi's Claude Pro/Max path may draw from
+Anthropic extra usage billed per token rather than included plan limits.
+
+Future multi-agent support adds named project terminal instances to the hub.
+Valsi records only identity, backend, task association, process, worktree, and
+structured status.  Writing agents should normally use separate Git worktrees;
+credentials and transcripts remain with each CLI.
+
+Agent execution remains deliberately @emph{outside} the AAP protocol surface.
 
 @node The AAP protocol
 @chapter The AAP protocol

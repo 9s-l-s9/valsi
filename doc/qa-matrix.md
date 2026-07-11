@@ -9,7 +9,7 @@ cannot fully exercise.
 ## How to run
 
 ```
-guix shell nss-certs emacs emacs-markdown-mode -- make check       # 120 ERT
+guix shell -D -f valsi.scm -- make check                            # 210 ERT
 guix shell nss-certs emacs emacs-markdown-mode -- make conformance # 12 AAP
 guix shell nss-certs emacs emacs-markdown-mode -- make run         # demo Emacs
 ```
@@ -21,8 +21,10 @@ opens the per-artifact keymap and `C-c n m` the transient menu.
 
 | Suite | What it proves | Count |
 |---|---|---|
-| `make check` | recognizers, per-dialect parse, capability advertisement, hot-reload, JSON round-trip, `parse→serialize` identity on the whole corpus, agent mock loop, all four families | 120 |
+| `make check` | artifact grammars and the transitional Sprint 13 native/Pi harness contract: pinned 0.80.6 golden JSONL traces, drift and crash recovery, session projection, AAP stdio, extension startup, and structured review seams. ADR 0006 preserves this as migration evidence; it is not proof of the terminal-application UX introduced in Sprint 14. | 210 |
+| `guix build -f valsi.scm` | the same 210-test contract runs inside the isolated package derivation, including packaged Pi launcher and live RPC/extension/session-list startup | 210 |
 | `make conformance` | the AAP wire contract any implementation must pass | 12 |
+| `make test-extension` / `make guix-test-extension` | Bun runs fail-closed Pi tool/file policy, symlink escapes, bash conservatism, approval failure, dry-run, correlated AAP client, authentication bridge, and projected SessionManager bridge | 23 |
 | `valsi-perf-test` | 2000-task parse < 5 s, serialize round-trip preserves every node, 20× reparse loop < 15 s | 3 |
 
 **Definition of done per task (Q-track):** green ERT + docstring + CHANGELOG note.
@@ -31,6 +33,12 @@ opens the per-artifact keymap and `C-c n m` the transient menu.
 
 Legend: ✅ verified · — n/a. Each row is a manual check against a real corpus
 file (`test/fixtures/**`) in the demo Emacs.
+
+Historical Sprint 13 evidence as of 2026-07-30: Pi subscription login, smoke,
+and project-scoped restart/resume passed through the native RPC prototype. ADR
+0006 preserves that ownership/runtime evidence but supersedes its UI. Sprint
+14's Eat terminal, hub refresh, handoff, and window behavior require the
+application checks below; the historical pass is not substituted for them.
 
 ### Plan / tasks (flagship)
 
@@ -85,6 +93,27 @@ file (`test/fixtures/**`) in the demo Emacs.
 | Phase successor | on PLAN.md | `Sprint N → Sprint N+1` edges present |
 | Navigate | `RET` on a row | opens the source artifact |
 | Pluggable | `valsi-graph-register-edge-source` a fn | its edges appear with no core change |
+
+### Artifact application and terminal agents
+
+| Check | Steps | Expect |
+|---|---|---|
+| Application hub | `M-x valsi` | project artifact families, warnings, recent/current artifacts, and agents appear without a generic file-tree clone |
+| Live refresh | edit/save an artifact, create one externally, and have an agent modify one | affected hub rows update after debounce/notification; `g` reconciles all state |
+| Unsaved conflict | modify a buffer, then change its file externally | buffer is never overwritten; hub marks the conflict |
+| Project navigation | use hub file/directory/tree actions | delegates to `project-find-file`, `project-dired`, or configured tree package |
+| Eat terminal | `M-x valsi-agent` | a real terminal buffer starts the configured CLI at the canonical project root; no literal ANSI/OSC text |
+| CLI fidelity | exercise prompt editing, Enter, Escape, arrows, `C-c`, `C-d`, slash commands, selection/copy | keys retain the selected CLI's normal behavior; Valsi prefix remains reachable |
+| Independent entry | open hub, artifact index, and terminal separately | each works without requiring a fixed workspace layout |
+| Composed entry | run `valsi-agent-with-artifacts` | large terminal plus small artifact index; leaving restores prior windows |
+| Agent capability | prompt without attaching files | agent may read/search/edit/run project commands according to its own sandbox |
+| Explicit handoff | invoke send/reference on an artifact task | stable path/task reference is inserted into the terminal prompt and is not auto-submitted |
+| Backend degradation | select Pi, Codex, Claude, and a custom CLI | terminal basics work; unsupported structured/session features are visibly unavailable, never scraped |
+| Structured review | complete a dispatched task with and without a structured callback | callback can open node review; terminal-only backend requires explicit review and never infers completion from screen text |
+| Pi subscription login | start Pi in Eat and use Pi's own login | OAuth/browser/device interaction renders correctly; credential stays exclusively with Pi |
+| Pi restart/resume | complete a recognizable Pi turn, restart Emacs, reopen project agent | Pi resumes its authoritative session through its own CLI behavior |
+| Pinned runtime | `guix shell -f valsi.scm -- pi --version` | exactly `0.80.6` |
+| Billing wording | inspect login/help documentation | Codex is the included path; Claude extra-usage caveat is present |
 
 ## Degradation spot-checks (the invariant)
 

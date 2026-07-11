@@ -3,28 +3,58 @@
 Seed document (fleshed out in Sprint 2, T208). For the *why*, see the ADRs in
 `doc/adr/`. For the roadmap, see `PLAN.md`.
 
+## Artifact application and agent boundary
+
+ADR 0006 makes Valsi a Magit-like application for agent artifacts rather than a
+second agent frontend. A native project hub, grammar-specific dashboards,
+inspectors, verification, graph, and node-review buffers are the application.
+Ordinary Markdown files remain authoritative.
+
+Agent interaction runs in real terminal-emulator buffers. Eat is the initial
+implementation; Pi is the default Guix-pinned CLI, while Codex CLI, Claude Code,
+and custom programs may occupy the same role with declared capabilities. The
+CLI owns its prompt, transcript, provider authentication, models, tools,
+confirmations, context accounting, and sessions. Valsi owns project association,
+process/focus conveniences, and explicit artifact handoff. It never scrapes
+terminal cells to reproduce structured state.
+
+The later named-instance, collision-warning, and Git-worktree model is
+specified in `doc/multi-agent.md`.  It extends this boundary without adding an
+agent messaging or transcript layer.
+
+The Sprint 13 `valsi-harness`/`valsi-pi` RPC implementation and native Elisp
+agent loop remain historical/test source outside the product load graph. The
+only retained Pi integration is the narrow, read-only AAP artifact extension.
+
+Normal agent processes receive their normal project capabilities; task
+manifests and selected artifacts provide semantic context rather than per-file
+authorization. Backend sandbox/approval behavior is authoritative. Agent
+execution remains outside AAP.
+
 ## Client/server & the Agent Artifact Protocol (AAP)
 
-Valsi is the reference implementation of **AAP**, an LSP-style JSON-RPC protocol
-for agent artifacts (ADR 0004). The system is a **client/server split** on the
-eglot model:
+Valsi is the reference implementation of **AAP**, an LSP-style protocol for
+agent artifacts (ADR 0004). The current v1.0 client/server boundary runs
+in-process; a JSON-safe adapter is ready for a future JSON-RPC stdio envelope:
 
 ```
   Emacs client (valsi.el, valsi-view, transients, agent brain)
-        │  JSON-RPC over stdio (jsonrpc.el)
+        │  native request boundary (v1.0)
+        │  JSON-safe adapter available for future stdio
         ▼
-  valsi-server  (headless Emacs)
-    ├─ valsi-proto     JSON-RPC transport + AAP request/edit types
+  AAP server model (currently in the Emacs process)
+    ├─ valsi-proto     native request handler + JSON wire adapter
     ├─ valsi-node      typed node model + regions  ← the transport-neutral contract
-    ├─ valsi-parse     recognizer registry + incremental reparse
+    ├─ valsi-parse     recognizer helpers + full content parse
     ├─ valsi-registry  grammar-plugin loader; grammar/register + hot-reload
     ├─ grammar plugins (valsi-plan, valsi-instruction, valsi-promptfile, …)
     └─ valsi-graph     cross-artifact link graph
 ```
 
-- **Server** = the editor-agnostic *model*: parse, node tree, grammar plugins,
-  diagnostics, edits, graph. Runs as a headless Emacs so grammars stay elisp;
-  other editors may implement their own server.
+- **Server model** = the editor-agnostic parse, node tree, grammar-plugin,
+  capability, and graph layers. It currently runs inside Emacs. Moving it to a
+  headless process requires only the JSON-RPC envelope and process lifecycle;
+  `valsi-proto-json-request` already enforces JSON-safe method values.
 - **Client** = Emacs, where the differentiated value lives: turning the server's
   node model into bespoke **views** (font-lock, tabulated-list agendas/coverage,
   node-diff review UI) and **keymaps/transients** from raw buffers — the thing
@@ -43,7 +73,7 @@ is JSON-serializable and is the center of every AAP message.
 ### AAP method groups
 
 1. **Lifecycle / sync** — `initialize` (capability negotiation), `artifact/didOpen`,
-   `artifact/didChange` (incremental), `didClose`.
+   `artifact/didChange` (full-text v0 sync), `didClose`.
 2. **Queries** — `artifact/symbols`, `nav/definition`, `nav/references`, `hover`,
    `graph/resolve`.
 3. **Diagnostics** — server→client push `artifact/publishDiagnostics` (severities

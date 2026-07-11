@@ -149,7 +149,7 @@ KIND is one of `parallel', `story', `label'.  Also matches bare US1."
             (split-string (match-string 1 id) "\\." t))))
 
 (defun valsi-parse-sort-key< (a b)
-  "Return non-nil if sort key A sorts before B."
+  "Return non-nil when sort key A precedes B."
   (cond ((and (null a) (null b)) nil)
         ((null a) t)
         ((null b) nil)

@@ -45,12 +45,27 @@ memory, changelogs, ADRs, …). It standardizes three things and nothing more:
 
 ## 3. Transport
 
-A request is `METHOD` (a name) + `PARAMS` (an object) → a response object. The
-reference server realizes this in-process as
-`valsi-proto-request(method, params) → response` (elisp values; "same JSON types,
-no stdio"). A networked server wraps exactly this boundary in JSON-RPC 2.0 over
-stdio (`jsonrpc.el`), serializing params/response with the node-model JSON shape
-of §5 at the wire. Nothing above the boundary changes.
+A request is `METHOD` (a name) + `PARAMS` (an object) → a response object.
+`lisp/valsi-server.el` is the reference JSON-RPC 2.0 stdio transport around the
+JSON-safe `valsi-proto-json-request(method, params)` adapter.
+
+Each request and response is one UTF-8 JSON object terminated by exactly one
+ASCII LF (`0x0a`). CRLF is not accepted. Unicode U+2028 and U+2029 are JSON
+content, not frame boundaries. A partial final record at EOF is a parse error;
+the server then exits. Notifications omit `id` and receive no response.
+Request ids are strings, numbers, or null and are echoed unchanged.
+
+The server uses the standard JSON-RPC error codes:
+
+- `-32700` parse error, including malformed JSON and unterminated records;
+- `-32600` invalid request envelope;
+- `-32601` unknown method;
+- `-32602` invalid params; and
+- `-32603` internal protocol/grammar failure.
+
+The native `valsi-proto-request(method, params)` entry point remains available
+to the Emacs client and returns Elisp node objects. The wire adapter returns
+only JSON objects, arrays, strings, numbers, booleans, and null.
 
 Method names group by prefix: `initialize`, `grammar/*`, `artifact/*`.
 
@@ -68,8 +83,11 @@ Required method set:
 `grammar/detect`, `artifact/didOpen`, `artifact/didChange`,
 `artifact/didClose`, `artifact/symbols`, `artifact/capabilities`.
 
+The reference server additionally advertises `artifact/planContext`, a
+provisional v0 extension used by the Pi harness.
+
 ### `grammar/register`
-- **params**: `{ spec: GrammarSpec }` (see §6).
+- **params**: `{ spec: GrammarDeclaration }` (see §6).
 - **result**: `{ id: GrammarId }`.
 - **effect (hot-reload)**: the server MUST re-resolve every currently-open
   document against the updated registry, with no reopen. A grammar registered
@@ -109,7 +127,15 @@ Required method set:
 ### `artifact/capabilities`
 - **params**: `{ uri: string }`.
 - **result**: `{ capabilities: Capability[] }` — MUST equal the capabilities
-  reported by the most recent `didOpen`/`didChange` for that `uri`.
+reported by the most recent `didOpen`/`didChange` for that `uri`.
+
+### `artifact/planContext` (reference extension)
+- **params**: `{ uri: string, taskId: string }`.
+- **result**: a read-only plan task context bundle (`id`, description, state,
+  group, files, dependencies, traces, steps, and verification), or null when
+  the open document is not a plan or the task does not exist.
+- **semantics**: the context is derived from the same cached tree returned by
+  `artifact/symbols`; it does not reread or mutate the artifact.
 
 ### Unknown methods
 A server MUST respond with an object carrying an `error` field (it MUST NOT crash
@@ -155,21 +181,48 @@ only that `props` is a JSON object.
 
 ## 6. Grammar declaration
 
-A `GrammarSpec` is the registerable unit (`grammar/register`). Fields:
+The wire-level `GrammarDeclaration` is JSON data, never executable code:
 
 | Field | Type | Meaning |
 |---|---|---|
-| `id` | symbol/string, unique | the grammar's identity |
+| `id` | string, unique | grammar identity |
 | `name` | string | human label |
-| `evidence` | `standardized`\|`converging`\|`emergent` | how real the format's structure is |
-| `match` | `(uri, text) → score` | detection; higher wins; pure |
-| `parse` | `(text) → Node` | the pure parser → node model |
-| `capabilities` | `(Node) → Capability[]` | per-document degradation-ladder advertisement |
-| `font-lock`, `commands` | client-side hints | opaque to the protocol |
+| `evidence` | `standardized`\|`converging`\|`emergent` | evidence tier |
+| `rootType` | string, optional | root node type; defaults to `document` |
+| `match.uriSuffix` | string, optional | claim URIs ending in this suffix |
+| `match.uriRegexp` | string, optional | claim URIs matching this Emacs regexp |
+| `match.textRegexp` | string, optional | claim text matching this Emacs regexp |
+| `match.score` | number | score returned when any match predicate succeeds |
+| `recognizers` | `LineRecognizer[]` | declarative line-to-node recognizers |
+| `capabilities` | `string[]` | statically advertised capabilities |
 
-`evidence` records the honesty of the mapping (a *standard* like Keep a Changelog
-vs. an *emergent convention* like AGENTS.md) so clients can calibrate trust. The
-`generic` grammar is always registered as the universal fallback.
+A `LineRecognizer` contains `type` and `regexp`, plus optional `confidence`
+(`exact` or `loose`) and `properties`, an object mapping property names to
+regexp capture indices. Example:
+
+```json
+{
+  "id": "demo",
+  "name": "Demo records",
+  "evidence": "emergent",
+  "rootType": "demo-document",
+  "match": { "uriSuffix": ".demo", "score": 10 },
+  "recognizers": [
+    {
+      "type": "record",
+      "regexp": "^ITEM: +\\(.*\\)$",
+      "properties": { "title": 1 }
+    }
+  ],
+  "capabilities": ["outline", "demo-items"]
+}
+```
+
+The reference server compiles this declaration into its internal matcher and
+parser functions. Rich bundled grammars use the server-local Elisp plugin API
+directly; executable functions never cross the protocol boundary. `evidence`
+records the honesty of the mapping so clients can calibrate trust. The
+`generic` grammar remains the universal fallback.
 
 ## 7. Capabilities (the ladder)
 

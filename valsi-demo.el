@@ -52,6 +52,8 @@
   (insert "  C-c n RET     follow reference\n")
   (insert "  C-c n d       family dashboard\n")
   (insert "  C-c n G       cross-artifact graph\n")
+  (insert "  C-c n c       project artifact hub\n")
+  (insert "  M-x valsi-agent  stock agent CLI in an Eat terminal\n")
   (insert "  C-c n m       transient menu (discoverable)\n")
   (goto-char (point-min))
   (view-mode 1))

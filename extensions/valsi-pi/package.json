@@ -1,0 +1,12 @@
+{
+  "name": "valsi-pi-policy-gate",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  }
+}
+

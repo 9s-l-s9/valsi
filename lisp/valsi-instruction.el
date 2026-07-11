@@ -196,22 +196,32 @@ fence.  Returns nil when there is no leading frontmatter."
 
 ;;;; Effective instructions (R3/R4 -- nearest-wins)
 
+(defun valsi-instruction--scope-path-at (root pos)
+  "Return the active heading-scope nodes in ROOT at POS, outermost first."
+  (let ((stack nil)
+        (scopes (sort (copy-sequence (valsi-node-of-type root 'scope))
+                      (lambda (a b) (< (valsi-node-beg a) (valsi-node-beg b))))))
+    (dolist (scope scopes)
+      (when (<= (valsi-node-beg scope) pos)
+        (let ((level (valsi-node-prop scope :level)))
+          (while (and stack
+                      (>= (valsi-node-prop (car stack) :level) level))
+            (pop stack))
+          (push scope stack))))
+    (nreverse stack)))
+
 (defun valsi-instruction-effective-at-point ()
   "Echo the effective scope path (nearest-wins precedence) at point.
 Also reports the frontmatter glob predicate when the file is glob-scoped."
   (interactive)
   (let* ((root (valsi-tree))
          (fm (car (valsi-node-of-type root 'frontmatter)))
-         (path nil))
-    (valsi-node-walk
-     root
-     (lambda (n _d)
-       (when (and (eq (valsi-node-type n) 'scope)
-                  (<= (valsi-node-beg n) (point)))
-         (push (cons (valsi-node-prop n :level) (valsi-node-prop n :title)) path))))
-    (setq path (sort path (lambda (a b) (< (car a) (car b)))))
+         (path (valsi-instruction--scope-path-at root (point))))
     (message "Effective scope: %s%s"
-             (if path (mapconcat #'cdr path " > ") "(document root)")
+             (if path
+                 (mapconcat (lambda (scope) (valsi-node-prop scope :title))
+                            path " > ")
+               "(document root)")
              (cond
               ((null fm) "")
               ((valsi-node-prop fm :always-apply) "  [applies: always]")

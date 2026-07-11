@@ -19,6 +19,7 @@
 (require 'valsi-agent-provider)
 (require 'valsi-agent-tools)
 (require 'valsi-agent-session)
+(require 'valsi-harness)
 
 ;;;; Events
 
@@ -65,9 +66,8 @@ Binds the dynamic scope variables the tool layer consults per dispatch."
         :content (plist-get turn :content)))
 
 (defun valsi-agent--resolve-tool (name tools)
-  "Return the tool named NAME from TOOLS, falling back to the global registry."
-  (or (cl-find name tools :key #'valsi-agent-tool-name :test #'equal)
-      (valsi-agent-get-tool name)))
+  "Return the tool named NAME from the explicitly supplied TOOLS."
+  (cl-find name tools :key #'valsi-agent-tool-name :test #'equal))
 
 (cl-defun valsi-agent-run (&key provider system tools messages model
                                (max-tokens 4096) (max-turns 12) cancel session)
@@ -152,6 +152,95 @@ Sprint-6 loader; swapped for the instruction grammar in Sprint 7 (T608)."
                (file-relative-name f dir)
                (with-temp-buffer (insert-file-contents f) (buffer-string))))
      files "\n\n")))
+
+;;;; Native harness adapter (deterministic fallback)
+
+(cl-defstruct (valsi-native-harness
+               (:include valsi-harness)
+               (:constructor valsi-native-harness-create))
+  "Harness adapter around the original in-process agent loop."
+  provider system tools messages model session
+  (running nil))
+
+(cl-defmethod valsi-harness-live-p ((harness valsi-native-harness))
+  "Return non-nil when native HARNESS is started."
+  (valsi-native-harness-running harness))
+
+(cl-defmethod valsi-harness-session-id ((harness valsi-native-harness))
+  "Return native HARNESS's durable session id, if any."
+  (let ((session (valsi-native-harness-session harness)))
+    (and session (valsi-agent-session-id session))))
+
+(cl-defmethod valsi-harness-start ((harness valsi-native-harness))
+  "Start native HARNESS."
+  (setf (valsi-native-harness-running harness) t)
+  (valsi-harness-emit harness (list :type 'started :backend 'native))
+  harness)
+
+(cl-defmethod valsi-harness-stop ((harness valsi-native-harness))
+  "Stop native HARNESS."
+  (setf (valsi-native-harness-running harness) nil)
+  (valsi-harness-emit harness (list :type 'stopped :backend 'native))
+  harness)
+
+(cl-defmethod valsi-harness-request
+  ((harness valsi-native-harness) command callback)
+  "Execute supported COMMAND synchronously in native HARNESS."
+  (unless (valsi-harness-live-p harness)
+    (valsi-harness-start harness))
+  (let ((type (plist-get command :type))
+        (id (format "native-%f" (float-time))))
+    (pcase type
+      ("prompt"
+       (let* ((message (valsi-agent-message
+                        "user"
+                        (list (valsi-agent-text-block
+                               (plist-get command :message)))))
+              (messages (append (valsi-native-harness-messages harness)
+                                (list message))))
+         (setf (valsi-native-harness-messages harness)
+               (let ((valsi-agent-event-functions
+                      (list (lambda (event)
+                              (valsi-harness-emit harness event)))))
+                 (valsi-agent-run
+                  :provider (valsi-native-harness-provider harness)
+                  :system (valsi-native-harness-system harness)
+                  :tools (valsi-native-harness-tools harness)
+                  :messages messages
+                  :model (valsi-native-harness-model harness)
+                  :session (valsi-native-harness-session harness))))
+         (when callback
+           (funcall callback
+                    (list :id id :type "response" :command type
+                          :success t)
+                    nil))))
+      ("get_state"
+       (when callback
+         (funcall callback
+                  (list :id id :type "response" :command type :success t
+                        :data (list :sessionId
+                                    (valsi-harness-session-id harness)
+                                    :isStreaming :json-false))
+                  nil)))
+      ("get_messages"
+       (when callback
+         (funcall
+          callback
+          (list
+           :id id :type "response" :command type :success t
+           :data
+           (list :messages
+                 (vconcat (valsi-native-harness-messages harness))))
+          nil)))
+      (_
+       (let ((error (list 'error
+                          (format "Native backend does not support %s" type))))
+         (when callback (funcall callback nil error)))))
+    id))
+
+(cl-defmethod valsi-harness-notify ((harness valsi-native-harness) message)
+  "Deliver protocol MESSAGE as an event through native HARNESS."
+  (valsi-harness-emit harness message))
 
 (provide 'valsi-agent)
 ;;; valsi-agent.el ends here

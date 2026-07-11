@@ -1,9 +1,15 @@
 # The Valsi agent core
 
-Valsi ships its own first-party agent brain rather than depending on an existing
-Emacs LLM client, because the load-bearing requirement — **subscription-OAuth
-authentication** — is one no existing client satisfies (ADR 0003). The core is
-modeled on tau's three tiers (`research/03`) and depends on **nothing
+> **Archived production path (2026-07-29):** ADR 0005 superseded this native
+> core with Pi RPC; ADR 0006 subsequently superseded the custom RPC chat
+> frontend with stock agent CLIs in terminal-emulator buffers. The code below
+> remains deterministic offline test and historical implementation material. It
+> has no default provider and does not appear in the normal application UI.
+
+Valsi previously shipped its own first-party agent brain to explore subscription
+OAuth (ADR 0003). That decision is retained here as historical implementation
+documentation, not current setup guidance. The core is modeled on tau's three
+tiers (`research/03`) and depends on **nothing
 Valsi-specific**: the grammar modules call *into* it, never the reverse, and it is
 **not part of AAP** — it is client-side and rides MCP / the provider transport.
 
@@ -15,14 +21,15 @@ valsi-agent            the provider-neutral tool-use loop + events + sessions gl
 valsi-agent-session    durable append-only JSONL sessions
 ```
 
-## Provider transport
+## Archived provider transport
 
 A provider is a cl-struct dispatched by `cl-defgeneric valsi-agent-provider-request`
 / `-stream`. The brain speaks a **provider-neutral message vocabulary**
 (Anthropic-shaped: `text` / `tool_use` / `tool_result` blocks) and never knows
-which adapter is underneath. Adapters, in priority order (research/03 Pattern 3):
+which adapter is underneath. The archived adapters are retained for maintenance
+and tests:
 
-1. **`anthropic-oauth`** — the primary, default path. Uses a subscription OAuth
+1. **`anthropic-oauth`** — the former primary path. Uses a subscription OAuth
    token, `Authorization: Bearer`, the `anthropic-beta:
    claude-code-20250219,oauth-2025-04-20` header, and the required Claude Code
    system-prompt preamble so Anthropic routes the request as Claude Code.
@@ -34,9 +41,11 @@ which adapter is underneath. Adapters, in priority order (research/03 Pattern 3)
 4. **`gptel`** — an optional, API-key-only convenience adapter, deferred (a soft
    `require` fast-follow). Never the primary path, never a dependency.
 
-## Authentication (subscription-first)
+## Archived authentication
 
-`valsi-agent-auth` resolves a credential least-friction first (ADR 0003):
+The native `valsi-agent-auth` prototype resolved credentials as follows. Normal
+users authenticate in their selected terminal agent (Pi, Codex, or Claude);
+this section is not production setup:
 
 1. **Reuse Claude Code** — `CLAUDE_CODE_OAUTH_TOKEN`, then
    `~/.claude/.credentials.json`, then (macOS) the Keychain.
@@ -89,6 +98,10 @@ dynamic allow-lists the tool layer consults:
 - **Dry-run** — `apply_edit` reports the intended change without writing.
 
 These are invariants, not options: the "control over delegation" commitment.
+Inside an explicit scope, an empty or missing `:tools`/`:files` list denies
+every tool/file; unrestricted access exists only for direct tool calls made
+outside a scope. All four built-ins, including `grep` and `list_dir`, enforce
+the same check.
 
 ## The loop
 
@@ -102,10 +115,12 @@ buffer and the Sprint 7 node-diff review both consume.
 
 ## Sessions
 
-`valsi-agent-session` persists the transcript as **append-only JSONL** under a
-repo-local `.valsi/sessions/` (git-ignored by default) — files over formats. A
-session reloads (`resume`) its messages and records `branch` markers so a
-rejected agent turn can be modelled as a branch not taken.
+The fallback `valsi-agent-session` persists transcripts as **append-only JSONL**
+under repo-local `.valsi/sessions/` (git-ignored by default). These are legacy
+native records, never a mirror or import source for Pi. Existing data is
+preserved. `M-x valsi-agent-session-archive-legacy` moves the directory
+byte-for-byte to `.valsi/archive/native-sessions-TIMESTAMP/`; no production Pi
+session or credential is inspected or changed.
 
 ## Instruction loading
 
@@ -118,8 +133,7 @@ it is swapped for the grammar-aware `valsi-instruction` version in Sprint 7.
 
 - **Mock (CI):** ERT drives the loop through a scripted tool call to completion
   deterministically, with no network (`valsi-test-agent-mock-loop`).
-- **Live (manual, M5):** with **no `ANTHROPIC_API_KEY`**, `valsi-agent-run` against
-  `(valsi-agent-make-anthropic :auth 'oauth)` completes a real tool-using task
-  using the subscription OAuth token — proving the subscription path. This is
-  inherently interactive (a live subscription + browser login) and is run by the
-  maintainer, not in CI.
+- **Historical live gates:** the former native Anthropic OAuth check was
+  superseded by Sprint 13's Pi/Codex subscription acceptance. ADR 0006 retains
+  the ownership result—credentials stay with the CLI—but moves login and resume
+  back to the CLI's own terminal UI.

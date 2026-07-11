@@ -164,7 +164,8 @@ Returns a `valsi-agent-auth-credential' or nil (meaning: a login is required)."
         :account_id (or (valsi-agent-auth-credential-account-id cred) :null)))
 
 (defun valsi-agent-auth-save (cred)
-  "Persist CRED to Valsi's store (`valsi-agent-auth-file').  Returns CRED."
+  "Persist CRED to Valsi's store and return CRED.
+The store location is `valsi-agent-auth-file'."
   (make-directory (file-name-directory valsi-agent-auth-file) t)
   (with-temp-file valsi-agent-auth-file
     (insert (json-serialize (valsi-agent-auth--credential-to-plist cred))))

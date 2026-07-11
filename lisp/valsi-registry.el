@@ -47,6 +47,147 @@ Takes effect immediately (hot-reload); returns the id."
 (defalias 'valsi-registry-reload #'valsi-registry-register
   "Reload a grammar SPEC in place (alias of `valsi-registry-register').")
 
+(defun valsi-registry-register-declaration (declaration)
+  "Compile and register JSON-safe grammar DECLARATION.
+Unlike the internal plugin API accepted by `valsi-registry-register',
+DECLARATION contains data rather than executable functions.  Its `:match'
+object may contain `:uriSuffix', `:uriRegexp', `:textRegexp', and `:score'.
+Its `:recognizers' array contains line recognizers with `:type', `:regexp',
+optional `:confidence', and optional capture-index `:properties'."
+  (let* ((id (valsi-registry--declaration-symbol
+              (plist-get declaration :id) "grammar id"))
+         (evidence (valsi-registry--declaration-symbol
+                    (or (plist-get declaration :evidence) "emergent")
+                    "evidence"))
+         (match-decl (plist-get declaration :match))
+         (recognizers (append (plist-get declaration :recognizers) nil))
+         (caps (mapcar (lambda (cap)
+                         (valsi-registry--declaration-symbol cap "capability"))
+                       (append (plist-get declaration :capabilities) nil)))
+         (root-type (valsi-registry--declaration-symbol
+                     (or (plist-get declaration :rootType) "document")
+                     "root type")))
+    (unless (memq evidence '(standardized converging emergent))
+      (error "Grammar declaration has invalid evidence tier: %S" evidence))
+    (valsi-registry--validate-declaration match-decl recognizers)
+    (valsi-registry-register
+     (list :id id
+           :name (or (plist-get declaration :name) (symbol-name id))
+           :evidence evidence
+           :match (valsi-registry--declarative-matcher match-decl)
+           :parse (valsi-registry--declarative-parser id root-type recognizers)
+           :capabilities caps
+           :commands nil
+           :declaration declaration))))
+
+(defun valsi-registry--declaration-symbol (value field)
+  "Coerce string or symbol VALUE to a symbol, identifying invalid FIELD."
+  (cond ((symbolp value) value)
+        ((and (stringp value) (not (string-empty-p value))) (intern value))
+        (t (error "Grammar declaration has invalid %s: %S" field value))))
+
+(defun valsi-registry--validate-regexp (regexp field)
+  "Validate REGEXP from FIELD, signaling a useful registration error."
+  (when regexp
+    (unless (stringp regexp)
+      (error "Grammar declaration %s must be a string" field))
+    (condition-case err
+        (string-match-p regexp "")
+      (invalid-regexp
+       (error "Grammar declaration has invalid %s: %s"
+              field (error-message-string err))))))
+
+(defun valsi-registry--validate-declaration (match-decl recognizers)
+  "Validate declarative MATCH-DECL and line RECOGNIZERS."
+  (unless (listp match-decl)
+    (error "Grammar declaration :match must be an object"))
+  (unless (cl-some (lambda (key) (plist-get match-decl key))
+                   '(:uriSuffix :uriRegexp :textRegexp))
+    (error "Grammar declaration :match needs a URI or text predicate"))
+  (let ((suffix (plist-get match-decl :uriSuffix)))
+    (when (and suffix (not (stringp suffix)))
+      (error "Grammar declaration :match.uriSuffix must be a string")))
+  (valsi-registry--validate-regexp (plist-get match-decl :uriRegexp)
+                                  ":match.uriRegexp")
+  (valsi-registry--validate-regexp (plist-get match-decl :textRegexp)
+                                  ":match.textRegexp")
+  (unless (numberp (or (plist-get match-decl :score) 1))
+    (error "Grammar declaration :match.score must be a number"))
+  (dolist (recognizer recognizers)
+    (valsi-registry--declaration-symbol (plist-get recognizer :type)
+                                       "recognizer type")
+    (unless (stringp (plist-get recognizer :regexp))
+      (error "Grammar declaration recognizers need a regexp string"))
+    (valsi-registry--validate-regexp (plist-get recognizer :regexp)
+                                    ":recognizers[].regexp")
+    (let ((confidence
+           (valsi-registry--declaration-symbol
+            (or (plist-get recognizer :confidence) "exact")
+            "recognizer confidence"))
+          (properties (plist-get recognizer :properties)))
+      (unless (memq confidence '(exact loose))
+        (error "Grammar recognizer confidence must be exact or loose"))
+      (while properties
+        (unless (and (keywordp (car properties))
+                     (integerp (cadr properties))
+                     (>= (cadr properties) 0))
+          (error "Grammar recognizer properties must map names to capture indices"))
+        (setq properties (cddr properties)))))
+  t)
+
+(defun valsi-registry--declarative-matcher (declaration)
+  "Return a pure matcher function compiled from match DECLARATION."
+  (let ((suffix (plist-get declaration :uriSuffix))
+        (uri-re (plist-get declaration :uriRegexp))
+        (text-re (plist-get declaration :textRegexp))
+        (score (or (plist-get declaration :score) 1)))
+    (lambda (uri text)
+      (if (or (and suffix (string-suffix-p suffix (or uri "")))
+              (and uri-re (string-match-p uri-re (or uri "")))
+              (and text-re (string-match-p text-re (or text ""))))
+          score
+        0))))
+
+(defun valsi-registry--declarative-parser (grammar-id root-type recognizers)
+  "Return a parser for GRAMMAR-ID, ROOT-TYPE, and line RECOGNIZERS."
+  (lambda (content)
+    (valsi-parse-in-content
+     content
+     (lambda ()
+       (let ((root (valsi-node-create :type root-type
+                                     :beg (point-min) :end (point-max)
+                                     :recognizer grammar-id)))
+         (dolist (line (valsi-parse-lines (current-buffer)))
+           (dolist (recognizer recognizers)
+             (let ((regexp (plist-get recognizer :regexp))
+                   (text (valsi-line-text line)))
+               (when (and regexp (string-match regexp text))
+                 (valsi-node-add-child
+                  root
+                  (valsi-node-create
+                   :type (valsi-registry--declaration-symbol
+                          (plist-get recognizer :type) "recognizer type")
+                   :beg (valsi-line-beg line) :end (valsi-line-end line)
+                   :confidence
+                   (valsi-registry--declaration-symbol
+                    (or (plist-get recognizer :confidence) "exact")
+                    "recognizer confidence")
+                   :recognizer grammar-id
+                   :props (valsi-registry--declarative-props
+                           (plist-get recognizer :properties) text)))))))
+         root)))))
+
+(defun valsi-registry--declarative-props (properties text)
+  "Extract capture-index PROPERTIES from the current match against TEXT."
+  (let (out)
+    (while properties
+      (let ((key (car properties))
+            (capture (cadr properties)))
+        (when (and (integerp capture) (match-beginning capture))
+          (setq out (plist-put out key (match-string capture text)))))
+      (setq properties (cddr properties)))
+    out))
+
 (defun valsi-registry-unregister (id)
   "Remove grammar ID from the registry."
   (remhash id valsi-registry--table))

@@ -43,13 +43,13 @@ typed fields.  CHILDREN is a list of `valsi-node'."
     (if val (cadr val) default)))
 
 (defun valsi-node-put (node key value)
-  "Set property KEY to VALUE on NODE.  Returns NODE."
+  "Set property KEY to VALUE on NODE and return NODE."
   (setf (valsi-node-props node)
         (plist-put (valsi-node-props node) key value))
   node)
 
 (defun valsi-node-add-child (node child)
-  "Append CHILD to NODE's children.  Returns NODE."
+  "Append CHILD to NODE's children and return NODE."
   (setf (valsi-node-children node)
         (nconc (valsi-node-children node) (list child)))
   node)
@@ -120,7 +120,7 @@ Prefers the node whose BEG is nearest at-or-before POS."
 ;;;; Transforms (offset<->buffer translation, copying, rehydration)
 
 (defun valsi-node-shift (node delta)
-  "Add DELTA to BEG/END throughout NODE's subtree, in place.  Returns NODE.
+  "Add DELTA to BEG/END throughout NODE's subtree and return NODE.
 Used at the client boundary to translate document offsets to buffer positions."
   (when node
     (valsi-node-walk

@@ -1,0 +1,5 @@
+{"id":"valsi-1","type":"get_tree"}
+{"id":"valsi-2","type":"get_entries","since":"entry-1"}
+{"id":"valsi-3","type":"switch_session","sessionPath":"/pi/session.jsonl"}
+{"id":"valsi-4","type":"fork","entryId":"entry-2"}
+{"id":"valsi-5","type":"set_session_name","name":"named session"}
