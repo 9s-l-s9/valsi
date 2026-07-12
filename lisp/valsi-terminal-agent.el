@@ -34,6 +34,9 @@
   :group 'valsi-terminal-agent)
 
 (defcustom valsi-agent-terminal-backends
+  ;; Pi's default arguments pin the ChatGPT-backed Codex provider, which is the
+  ;; intended no-API-key subscription path (see README): "no API key" means the
+  ;; ChatGPT subscription, not the absence of an explicit provider selection.
   '((pi :program "pi"
         :arguments ("--continue" "--provider" "openai-codex"
                     "--model" "gpt-5.5")

@@ -8,7 +8,8 @@ BUN   ?= bun
 
 # Load order matters (dependencies first).
 SRC = lisp/valsi-node.el lisp/valsi-parse.el lisp/valsi-view.el \
-      lisp/valsi-registry.el lisp/valsi-proto.el lisp/valsi-server.el lisp/valsi-plan.el \
+      lisp/valsi-registry.el lisp/valsi-proto.el lisp/valsi-server.el \
+      lisp/valsi-harness.el lisp/valsi-pi.el lisp/valsi-plan.el \
       lisp/valsi-instruction.el lisp/valsi-promptfile.el lisp/valsi-memory.el \
       lisp/valsi-changelog.el lisp/valsi-decision.el lisp/valsi-overview.el \
       lisp/valsi-graph.el \
