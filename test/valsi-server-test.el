@@ -135,9 +135,17 @@
 
 (ert-deftest valsi-test-server-real-stdio-roundtrip-and-eof ()
   "A headless Emacs serves one request and exits cleanly when stdin closes."
-  (let ((program (or (executable-find invocation-name)
-                     (executable-find "emacs"))))
-    (should program)
+  ;; valsi-server-stdio reads the process's own stdin via /proc/PID/fd/0, so the
+  ;; test only applies where that interface exists.
+  (skip-unless (file-exists-p "/proc/self/fd/0"))
+  (let ((program
+         (or ;; The running binary, even when Emacs was launched off PATH by
+             ;; an absolute store path (invocation-name is then unfindable).
+             (let ((self (expand-file-name invocation-name invocation-directory)))
+               (and (file-executable-p self) self))
+             (executable-find invocation-name)
+             (executable-find "emacs"))))
+    (skip-unless program)
     (with-temp-buffer
       (insert "{\"jsonrpc\":\"2.0\",\"id\":\"live\",\"method\":\"initialize\"}\n")
       (let ((status
