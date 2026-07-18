@@ -1,10 +1,12 @@
 # The Valsi agent core
 
-> **Archived production path (2026-07-29):** ADR 0005 superseded this native
+> **Removed from the tree (2026-07-30):** ADR 0005 superseded this native
 > core with Pi RPC; ADR 0006 subsequently superseded the custom RPC chat
-> frontend with stock agent CLIs in terminal-emulator buffers. The code below
-> remains deterministic offline test and historical implementation material. It
-> has no default provider and does not appear in the normal application UI.
+> frontend with stock agent CLIs in terminal-emulator buffers. The
+> `valsi-agent*.el` modules described below have now been deleted from the
+> working tree to keep it uncluttered; they remain retrievable from git history
+> (through the Sprint 11 commit). This document is kept as historical design
+> rationale, not current setup guidance.
 
 Valsi previously shipped its own first-party agent brain to explore subscription
 OAuth (ADR 0003). That decision is retained here as historical implementation
