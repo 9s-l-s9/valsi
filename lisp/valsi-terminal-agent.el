@@ -15,6 +15,7 @@
 (require 'project)
 (require 'seq)
 (require 'subr-x)
+(require 'transient)
 
 (defvar eat-terminal)
 (declare-function eat-term-send-string-as-yank "eat" (terminal args))
@@ -174,7 +175,8 @@ artifact reference.  No transcript, session, or credential data belongs here."
     (define-key map (kbd "C-c n 1") #'valsi-terminal-agent-focus)
     (define-key map (kbd "C-c n 2") #'valsi-agent-with-artifacts)
     (define-key map (kbd "C-c n q") #'valsi-app-leave)
-    (define-key map (kbd "C-c n m") #'valsi-terminal-agent-help)
+    (define-key map (kbd "C-c n m") #'valsi-terminal-agent-menu)
+    (define-key map (kbd "M-n") #'valsi-terminal-agent-menu)
     ;; Pi enables terminal mouse reporting.  Without explicit higher-priority
     ;; bindings Eat forwards wheel events to Pi, where they navigate prompt
     ;; history instead of moving through terminal scrollback.
@@ -205,11 +207,17 @@ artifact reference.  No transcript, session, or credential data belongs here."
           (delq 'valsi-terminal-agent--emulation-map-alist
                 emulation-mode-map-alists))))
 
-(defun valsi-terminal-agent-help ()
-  "Show the deliberately small terminal workspace command set."
-  (interactive)
-  (message
-   "Valsi terminal: C-c n c hub · a artifacts · f agent · 1 terminal · 2 composed · q leave"))
+(transient-define-prefix valsi-terminal-agent-menu ()
+  "Valsi terminal workspace menu.
+Deliberately small: the CLI owns every printable key."
+  [["Workspace"
+    ("c" "project hub" valsi)
+    ("a" "artifact index" valsi-app-focus-artifacts)
+    ("f" "focus agent" valsi-app-focus-agent)
+    ("q" "leave" valsi-app-leave)]])
+
+(define-obsolete-function-alias 'valsi-terminal-agent-help
+  'valsi-terminal-agent-menu "1.1")
 
 (defun valsi-terminal-agent--start (root name backend)
   "Start and return agent NAME using BACKEND at ROOT."
@@ -249,7 +257,7 @@ artifact reference.  No transcript, session, or credential data belongs here."
                     ,(symbol-name backend)
                     " · "
                     ,project-name
-                    " · C-c n c hub · C-c n m menu "))
+                    " · M-n menu "))
       (valsi-terminal-agent-mode 1))
     (puthash (valsi-terminal-agent--key root name)
              instance valsi-terminal-agent--instances)

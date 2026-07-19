@@ -46,6 +46,9 @@
 (require 'valsi-app)
 (require 'transient)
 
+(declare-function outline-toggle-children "outline")
+(declare-function outline-on-heading-p "outline" (&optional invisible-ok))
+
 ;;;; Initialization: register the bundled grammars
 
 (defvar valsi--initialized nil
@@ -183,6 +186,8 @@ offset->buffer-position translation here."
 
 (defvar valsi-artifact-mode-map
   (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "<escape>") #'valsi-enter-browse)
+    (define-key map (kbd "M-n") #'valsi-menu)
     (define-key map (kbd "C-c n n") #'valsi-next)
     (define-key map (kbd "C-c n p") #'valsi-previous)
     (define-key map (kbd "C-c n g") #'valsi-goto)
@@ -198,11 +203,99 @@ offset->buffer-position translation here."
     (define-key map (kbd "C-c n r") #'valsi-refresh)
     (define-key map (kbd "C-c n G") #'valsi-graph)
     (define-key map (kbd "C-c n c") #'valsi)
+    (define-key map (kbd "C-c n s") #'valsi-app-toggle-sidebar)
     (define-key map (kbd "C-c n @") #'valsi-app-handoff)
     (define-key map (kbd "C-c n ?") #'valsi-describe-grammar)
     (define-key map (kbd "C-c n m") #'valsi-menu)
     map)
   "Keymap for `valsi-artifact-minor-mode'.")
+
+(defvar-local valsi--interaction-state nil
+  "Current artifact interaction state, either `browse' or `insert'.")
+;; Survive the major-mode change mid `find-file': `buffer-read-only' does,
+;; so the state describing who set it must as well.
+(put 'valsi--interaction-state 'permanent-local t)
+
+(defvar-local valsi--original-read-only nil
+  "Read-only state before Valsi enabled in this buffer.")
+(put 'valsi--original-read-only 'permanent-local t)
+
+(defvar valsi-artifact-minor-mode)
+
+(defvar valsi-browse-mode-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "n") #'valsi-next)
+    (define-key map (kbd "p") #'valsi-previous)
+    (define-key map (kbd "TAB") #'valsi-browse-toggle-fold)
+    (define-key map (kbd "<tab>") #'valsi-browse-toggle-fold)
+    (define-key map (kbd "RET") #'valsi-follow)
+    (define-key map (kbd "i") #'valsi-enter-insert)
+    (define-key map (kbd "<escape>") #'keyboard-quit)
+    (define-key map (kbd "g") #'valsi-refresh)
+    (define-key map (kbd "/") #'isearch-forward)
+    (define-key map (kbd "?") #'valsi-menu)
+    (define-key map (kbd "SPC") #'valsi-menu)
+    (define-key map (kbd "M-n") #'valsi-menu)
+    (define-key map (kbd "q") #'quit-window)
+    (define-key map (kbd "c") #'valsi)
+    (define-key map (kbd "d") #'valsi-outline)
+    (define-key map (kbd "s") #'valsi-app-toggle-sidebar)
+    (define-key map (kbd "a") #'valsi-agent)
+    (define-key map (kbd "@") #'valsi-app-handoff)
+    map)
+  "Direct, modal bindings active while an artifact is in Browse state.")
+
+(define-minor-mode valsi-browse-mode
+  "Navigate a recognized artifact without editing its source."
+  :init-value nil
+  :lighter nil
+  :keymap valsi-browse-mode-map)
+
+(defun valsi-browse-toggle-fold ()
+  "Toggle children of the heading at point, and never navigate."
+  (interactive)
+  (require 'outline)
+  (save-excursion
+    (beginning-of-line)
+    (unless (outline-on-heading-p t)
+      (user-error "No foldable heading at point"))
+    (outline-toggle-children)))
+
+(defvar valsi-enter-browse-hook nil
+  "Hook run in the artifact buffer after it enters the Browse state.
+Modal editing packages (meow, evil, ...) can synchronize their own state
+here; it runs before the command rail is refreshed, so the rail reflects
+the keymaps the hook leaves active.")
+
+(defvar valsi-enter-insert-hook nil
+  "Hook run in the artifact buffer after it enters the Insert state.
+See `valsi-enter-browse-hook'.")
+
+(defun valsi-enter-browse ()
+  "Enter the read-only, semantic Browse state."
+  (interactive)
+  (unless valsi-artifact-minor-mode
+    (user-error "This is not a recognized Valsi artifact"))
+  (setq valsi--interaction-state 'browse)
+  (valsi-browse-mode 1)
+  (read-only-mode 1)
+  (run-hooks 'valsi-enter-browse-hook)
+  (when (fboundp 'valsi-app-show-command-rail)
+    (valsi-app-show-command-rail (current-buffer)))
+  (force-mode-line-update))
+
+(defun valsi-enter-insert ()
+  "Enter the ordinary editable Insert state."
+  (interactive)
+  (when valsi--original-read-only
+    (user-error "This buffer was read-only before Valsi opened it"))
+  (setq valsi--interaction-state 'insert)
+  (valsi-browse-mode -1)
+  (read-only-mode -1)
+  (run-hooks 'valsi-enter-insert-hook)
+  (when (fboundp 'valsi-app-show-command-rail)
+    (valsi-app-show-command-rail (current-buffer)))
+  (force-mode-line-update))
 
 ;;;; Header line
 
@@ -213,10 +306,10 @@ offset->buffer-position translation here."
      (propertize " Valsi " 'face 'valsi-id-face)
      (propertize (format "%s " (or (plist-get d :name) "generic"))
                  'face 'bold)
-     (propertize (format "[%s] " (or (plist-get d :evidence) "-"))
-                 'face 'valsi-meta-face)
-     (propertize (format "· C-c n m for menu · caps: %s"
-                         (or valsi--capabilities "outline"))
+     (propertize
+      (if (eq valsi--interaction-state 'insert)
+          "· INSERT · ESC browse · M-n menu"
+        "· BROWSE · i edit · SPC menu")
                  'face 'shadow))))
 
 ;;;; Minor mode
@@ -228,6 +321,23 @@ offset->buffer-position translation here."
     (valsi-view-set-font-lock
      (if (functionp kw) (funcall kw (current-buffer)) kw))))
 
+(defun valsi--update-sidebar-context ()
+  "Keep the visible project sidebar contextual to the selected artifact."
+  (when (and valsi-app-auto-sidebar
+             buffer-file-name
+             (eq (window-buffer (selected-window)) (current-buffer)))
+    (let* ((source (current-buffer))
+           (root (ignore-errors (valsi-app--root)))
+           (sidebar (and root
+                         (get-buffer (valsi-app--buffer-name root t)))))
+      (when (and sidebar (get-buffer-window sidebar t))
+        (let ((signature (valsi-app-context-signature source)))
+          (with-current-buffer sidebar
+            (unless (equal valsi-app--context-signature signature)
+              (setq valsi-app--source-buffer source
+                    valsi-app--context-signature signature)
+              (valsi-app--render))))))))
+
 ;;;###autoload
 (define-minor-mode valsi-artifact-minor-mode
   "Grammar-aware views + keybindings for agent artifacts.
@@ -237,18 +347,32 @@ a keymap (\\{valsi-artifact-mode-map})."
   :keymap valsi-artifact-mode-map
   (if valsi-artifact-minor-mode
       (progn
+        ;; The globalized mode can enable twice on one `find-file'; only a
+        ;; fresh enable may capture the pre-Valsi read-only state.
+        (unless valsi--interaction-state
+          (setq valsi--original-read-only buffer-read-only))
         (unless valsi--initialized (valsi-init))
         (valsi--sync t)                  ; artifact/didOpen
         (valsi-tree)                     ; fetch symbols -> local tree
         (valsi--install-font-lock)
         (setq-local header-line-format '(:eval (valsi--header-line)))
         (add-hook 'after-change-functions #'valsi--after-change nil t)
-        (add-hook 'after-save-hook #'valsi-refresh nil t))
+        (add-hook 'after-save-hook #'valsi-refresh nil t)
+        (add-hook 'post-command-hook #'valsi--update-sidebar-context nil t)
+        ;; No explicit sidebar display here: chrome is reconciled with the
+        ;; displayed buffers by `valsi-app--sync-chrome' on the window hooks,
+        ;; which fire once this buffer is actually shown.
+        (valsi-app--install-window-hooks)
+        (valsi-enter-browse))
     (valsi--request 'artifact/didClose (list :uri (valsi--uri)))
     (valsi-view-set-font-lock nil)
     (setq-local header-line-format nil)
     (remove-hook 'after-change-functions #'valsi--after-change t)
     (remove-hook 'after-save-hook #'valsi-refresh t)
+    (remove-hook 'post-command-hook #'valsi--update-sidebar-context t)
+    (valsi-browse-mode -1)
+    (setq valsi--interaction-state nil)
+    (read-only-mode (if valsi--original-read-only 1 -1))
     (when font-lock-mode (font-lock-flush) (font-lock-ensure))))
 
 (defun valsi--after-change (&rest _)
@@ -256,6 +380,63 @@ a keymap (\\{valsi-artifact-mode-map})."
   (setq valsi--tree nil))
 
 ;;;; Transient menu (discoverable entry point)
+
+(defvar valsi-outline-mode-map
+  (let ((map (make-sparse-keymap)))
+    (set-keymap-parent map special-mode-map)
+    (define-key map (kbd "n") #'forward-button)
+    (define-key map (kbd "p") #'backward-button)
+    (define-key map (kbd "TAB") #'forward-button)
+    (define-key map (kbd "<backtab>") #'backward-button)
+    (define-key map (kbd "g") #'revert-buffer)
+    (define-key map (kbd "?") #'valsi-menu)
+    (define-key map (kbd "SPC") #'valsi-menu)
+    (define-key map (kbd "M-n") #'valsi-menu)
+    (define-key map (kbd "q") #'quit-window)
+    map)
+  "Keymap for `valsi-outline-mode'.")
+
+(define-derived-mode valsi-outline-mode special-mode "Valsi-Outline"
+  "Sectioned semantic outline of one artifact.
+The single deep rendering of the node tree; the sidebar shows the same
+structure shallowly.")
+
+(defvar-local valsi-outline--source nil)
+
+(defun valsi-outline--render ()
+  "Render the outline of `valsi-outline--source' into the current buffer."
+  (let ((source valsi-outline--source)
+        (inhibit-read-only t))
+    (unless (buffer-live-p source)
+      (user-error "The source artifact buffer is gone"))
+    (erase-buffer)
+    (insert (propertize
+             (format "%s\n\n"
+                     (file-name-nondirectory
+                      (buffer-local-value 'buffer-file-name source)))
+             'face 'bold))
+    (valsi-view-insert-outline
+     (with-current-buffer source (valsi-tree)) source 3)
+    (goto-char (point-min))))
+
+(defun valsi-outline ()
+  "Show the compressed semantic outline of the current artifact.
+This is the grammar-agnostic replacement for the per-family tabulated
+dashboards: same node tree, same sectioned rendering as the sidebar."
+  (interactive)
+  (unless valsi-artifact-minor-mode
+    (user-error "This is not a recognized Valsi artifact"))
+  (let* ((source (current-buffer))
+         (buffer (get-buffer-create
+                  (format "*Valsi Outline: %s*"
+                          (file-name-nondirectory buffer-file-name)))))
+    (with-current-buffer buffer
+      (valsi-outline-mode)
+      (setq valsi-outline--source source)
+      (setq-local revert-buffer-function
+                  (lambda (&rest _) (valsi-outline--render)))
+      (valsi-outline--render))
+    (switch-to-buffer buffer)))
 
 (transient-define-prefix valsi-menu ()
   "Valsi artifact command menu."
@@ -274,9 +455,8 @@ a keymap (\\{valsi-artifact-mode-map})."
    ["Views"
     ("c" "project hub" valsi)
     ("A" "agent terminal" valsi-agent)
-    ("@" "agent + artifacts" valsi-agent-with-artifacts)
-    ("h" "reference to agent" valsi-app-handoff)
-    ("d" "family dashboard" valsi-dashboard)
+    ("@" "reference to agent" valsi-app-handoff)
+    ("d" "artifact outline" valsi-outline)
     ("G" "cross-artifact graph" valsi-graph)
     ("D" "detect dialect" valsi-detect)
     ("?" "describe grammar" valsi-describe-grammar)

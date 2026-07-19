@@ -254,7 +254,7 @@ and the description-as-trigger heuristics."
           (dolist (i issues) (insert "  - " i "\n"))
           (goto-char (point-min))
           (special-mode))
-        (display-buffer (current-buffer)))
+        (switch-to-buffer (current-buffer)))
       (message "valsi-promptfile: %d issue(s)" (length issues)))))
 
 ;;;; Key completion (rung 3)

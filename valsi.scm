@@ -160,7 +160,9 @@ server without a global npm installation.")
             ;; emacs-build-system installs every .el in this directory, not
             ;; only Makefile's product graph. Keep the retired experiments in
             ;; the repository, but do not expose them as installed features.
-            (for-each delete-file
+            (for-each (lambda (file)
+                        (when (file-exists? file)
+                          (delete-file file)))
                       '("valsi-agent-auth.el"
                         "valsi-agent-provider.el"
                         "valsi-agent-session.el"

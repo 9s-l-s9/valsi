@@ -139,7 +139,7 @@ node, then apply.  With no changes, reports so and does nothing."
                 valsi-plan-review--changes
                 (mapcar (lambda (c) (cons c t)) changes)) ; accepted by default
           (valsi-plan-review--refresh))
-        (pop-to-buffer buf)))))
+        (switch-to-buffer buf)))))
 
 (defvar valsi-plan-review-mode-map
   (let ((m (make-sparse-keymap)))

@@ -172,7 +172,7 @@
                                  (bound-and-true-p valsi-artifact-minor-mode)))
                              (buffer-list))))
         (when buf
-          (pop-to-buffer buf)
+          (switch-to-buffer buf)
           (goto-char (min pos (point-max)))
           (beginning-of-line))))))
 

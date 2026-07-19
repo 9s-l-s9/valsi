@@ -176,7 +176,7 @@
         (insert (format "Changelog lint: %d issue(s)\n\n" (length issues)))
         (dolist (i (nreverse issues)) (insert "  - " i "\n"))
         (special-mode)
-        (display-buffer (current-buffer)))
+        (switch-to-buffer (current-buffer)))
       (message "Valsi changelog: %d issue(s)" (length issues)))))
 
 ;;;; Registration

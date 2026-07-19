@@ -778,7 +778,7 @@ missing manifest files, placeholders, and unknown state chars."
           (dolist (i issues) (insert "  - " i "\n"))
           (goto-char (point-min))
           (special-mode)
-          (display-buffer (current-buffer)))
+          (switch-to-buffer (current-buffer)))
         (message "Valsi lint: %d issue(s)" (length issues))))))
 
 ;;;; Flymake backend (rung 3-4): live diagnostics from the lint collector
@@ -976,7 +976,7 @@ A pair is stale when its task's path-ref target is newer than the plan."
           (insert (format "  - %s: %s changed since the plan\n" (car s) (cdr s))))
         (goto-char (point-min))
         (special-mode)
-        (display-buffer (current-buffer)))
+        (switch-to-buffer (current-buffer)))
       (message "Valsi stale-check: %d task(s) trailing their targets"
                (length stale)))))
 

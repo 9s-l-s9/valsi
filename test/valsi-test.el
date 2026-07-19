@@ -845,32 +845,121 @@ interior-state contradictions."
 ;;;; Artifact application and terminal agents
 
 (ert-deftest valsi-test-app-scans-and-renders-recognized-artifacts ()
-  "The project hub summarizes recognized artifacts and ignores ordinary files."
+  "The hub separates recognized artifacts from unsupported Markdown."
   (let ((root (make-temp-file "valsi-app-" t)))
     (unwind-protect
         (let ((plan (expand-file-name "PLAN.md" root))
+              (markdown (expand-file-name "notes.md" root))
               (notes (expand-file-name "notes.txt" root)))
           (write-region "# Plan\n- [ ] T001 ship\n" nil plan nil 'silent)
+          (write-region "ordinary project notes\n" nil markdown nil 'silent)
           (write-region "ordinary project notes\n" nil notes nil 'silent)
           (cl-letf (((symbol-function 'project-current)
                      (lambda (&rest _) 'valsi-test-project))
                     ((symbol-function 'project-root)
                      (lambda (_) root))
                     ((symbol-function 'project-files)
-                     (lambda (_) (list plan notes))))
+                     (lambda (_) (list plan markdown notes))))
             (let ((entries (valsi-app--scan root)))
-              (should (= 1 (length entries)))
+              (should (= 2 (length entries)))
               (should (eq 'plan (plist-get (car entries) :grammar)))
+              (should (eq 'generic (plist-get (cadr entries) :grammar)))
               (with-temp-buffer
                 (valsi-app-mode)
                 (setq valsi-app--root root
                       valsi-app--entries entries
-                      valsi-app--compact nil)
+                      valsi-app--compact nil
+                      valsi-view-section-state
+                      (make-hash-table :test #'equal))
+                (puthash "family:plan" t valsi-view-section-state)
+                (puthash 'markdown t valsi-view-section-state)
                 (valsi-app--render)
                 (should (search-forward "Plan" nil t))
                 (should (search-forward "PLAN.md" nil t))
+                (should (search-forward "Markdown" nil t))
+                (should (search-forward "notes.md" nil t))
                 (should-not (search-forward "notes.txt" nil t))))))
       (delete-directory root t))))
+
+(ert-deftest valsi-test-artifact-browse-and-insert-states ()
+  "Recognized sources start in Browse and make editing an explicit state."
+  (with-temp-buffer
+    (setq buffer-file-name "/tmp/PLAN.md")
+    (insert "# Plan\n- [ ] T001 ship\n")
+    (text-mode)
+    (let ((valsi-app-auto-sidebar nil))
+      (valsi-artifact-minor-mode 1))
+    (should (eq valsi--interaction-state 'browse))
+    (should buffer-read-only)
+    (should valsi-browse-mode)
+    (should (eq (lookup-key valsi-browse-mode-map (kbd "TAB"))
+                #'valsi-browse-toggle-fold))
+    (valsi-enter-insert)
+    (should (eq valsi--interaction-state 'insert))
+    (should-not buffer-read-only)
+    (should-not valsi-browse-mode)
+    (valsi-enter-browse)
+    (should buffer-read-only)
+    (valsi-artifact-minor-mode -1)
+    (should-not buffer-read-only)))
+
+(ert-deftest valsi-test-attention-is-state-based-not-corpus-lint ()
+  "Closed-file grammar diagnostics do not fill the Attention section."
+  (let ((closed (list :file "/tmp/closed.md" :state "clean"
+                      :warnings 9 :stale 2))
+        (modified (list :file "/tmp/modified.md" :state "modified"
+                        :warnings 0 :stale 0)))
+    (should-not (valsi-app--attention-reason closed))
+    (should (equal (valsi-app--attention-reason modified) "modified"))))
+
+(ert-deftest valsi-test-app-compact-sidebar-shows-context-not-keymap ()
+  "The compact side buffer remains artifact context rather than command chrome."
+  (let ((root (file-name-as-directory (make-temp-file "valsi-sidebar-" t)))
+        (source (generate-new-buffer " *valsi-sidebar-source*")))
+    (unwind-protect
+        (with-current-buffer source
+          (setq buffer-file-name (expand-file-name "PLAN.md" root))
+          (setq-local valsi--grammar 'plan)
+          (setq-local valsi--capabilities '(next prev toggle lint))
+          (with-temp-buffer
+            (valsi-app-mode)
+            (setq valsi-app--root root
+                  valsi-app--entries nil
+                  valsi-app--compact t
+                  valsi-app--source-buffer source)
+            (valsi-app--render)
+            (should (search-forward "CURRENT" nil t))
+            (should (search-forward "PLAN.md" nil t))
+            (should-not (search-forward "ACTIONS" nil t))
+            (goto-char (point-min))
+            (should (search-forward "s hide" nil t))))
+      (when (buffer-live-p source) (kill-buffer source))
+      (delete-directory root t))))
+
+(ert-deftest valsi-test-app-command-rail-shows-modal-artifact-keys ()
+  "The separate command rail describes the focused artifact state."
+  (let ((source (generate-new-buffer " *valsi-command-source*")))
+    (unwind-protect
+        (with-current-buffer source
+          (setq-local valsi-artifact-minor-mode t)
+          (setq-local valsi--interaction-state 'browse)
+          (setq-local valsi-browse-mode t)
+          (with-temp-buffer
+            (valsi-app-command-rail-mode)
+            (valsi-app--render-command-rail source)
+            (goto-char (point-min))
+            (should (search-forward "BROWSE" nil t))
+            (should (search-forward "TAB  fold" nil t))
+            (should (search-forward "i    edit" nil t)))
+          ;; A modal layer shadowing the browse map removes the lying hint.
+          (setq-local valsi-browse-mode nil)
+          (with-temp-buffer
+            (valsi-app-command-rail-mode)
+            (valsi-app--render-command-rail source)
+            (goto-char (point-min))
+            (should (search-forward "BROWSE" nil t))
+            (should-not (search-forward "i    edit" nil t))))
+      (kill-buffer source))))
 
 (ert-deftest valsi-test-terminal-agent-starts-stock-pi-in-project ()
   "Terminal integration launches stock Pi with the declared subscription CLI."

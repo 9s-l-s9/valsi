@@ -47,6 +47,7 @@ compile: clean
 test:
 	$(BATCH) -l ert -l test/valsi-test.el \
 	  -l test/valsi-app-live-refresh-test.el \
+	  -l test/valsi-app-test.el \
 	  -f ert-run-tests-batch-and-exit
 
 test-extension:

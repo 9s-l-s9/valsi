@@ -287,7 +287,7 @@ Also reports the frontmatter glob predicate when the file is glob-scoped."
         (valsi-instruction--graph-insert root-file 0 seen)
         (goto-char (point-min))
         (special-mode)))
-    (display-buffer buf)))
+    (switch-to-buffer buf)))
 
 (defun valsi-instruction-follow ()
   "Follow the @import or [[link]] at point to its file."
@@ -340,7 +340,7 @@ with no globs/applyTo and not alwaysApply) and dangling imports."
           (dolist (f findings) (insert (cdr f) "\n"))
           (goto-char (point-min))
           (special-mode))
-        (display-buffer (current-buffer))))))
+        (switch-to-buffer (current-buffer))))))
 
 ;;;; Sync (one source -> many peer targets)
 

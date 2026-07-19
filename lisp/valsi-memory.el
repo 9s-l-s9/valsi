@@ -307,7 +307,7 @@ Reports only -- the human decides what to merge (descriptive invariant)."
               (insert "  - " (mapconcat #'identity g ", ") "\n")))
           (goto-char (point-min))
           (special-mode))
-        (display-buffer (current-buffer)))
+        (switch-to-buffer (current-buffer)))
       (message "valsi-memory: %d duplicate group(s)"
                (+ (length dup-targets) (length dup-descs))))))
 
@@ -357,7 +357,7 @@ record not yet written."
             (dolist (d dangling) (insert "  - [[" d "]]\n")))
           (goto-char (point-min))
           (special-mode))
-        (display-buffer (current-buffer)))
+        (switch-to-buffer (current-buffer)))
       (message "valsi-memory: %d missing, %d dangling"
                (length missing) (length dangling)))))
 
