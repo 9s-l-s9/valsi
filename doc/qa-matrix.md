@@ -99,6 +99,10 @@ application checks below; the historical pass is not substituted for them.
 | Check | Steps | Expect |
 |---|---|---|
 | Application hub | `M-x valsi` | project artifact families, warnings, recent/current artifacts, and agents appear without a generic file-tree clone |
+| Responsive matrix | capture hub and `PLAN.md` at 80×24, 100×30, 140×40, and 180×50 | hub metadata degrades deliberately; sidebar never makes source/terminal unusable |
+| Direct application keys | in hub/sidebar use `n`, `p`, `t`, `TAB`, `RET`, `g`, `/`, `?`, `s`, and `c` | actions need one key in read-only Valsi buffers; editable source and terminal text remain untouched |
+| Refresh stability | fold a family, move point, scroll, then edit/save externally | fold state, semantic point, and window start survive the live redraw |
+| Theme inheritance | capture Modus Operandi and a dark Modus theme | hierarchy remains legible and warnings alone receive attention color |
 | Live refresh | edit/save an artifact, create one externally, and have an agent modify one | affected hub rows update after debounce/notification; `g` reconciles all state |
 | Unsaved conflict | modify a buffer, then change its file externally | buffer is never overwritten; hub marks the conflict |
 | Project navigation | use hub file/directory/tree actions | delegates to `project-find-file`, `project-dired`, or configured tree package |

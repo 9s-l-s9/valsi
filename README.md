@@ -114,6 +114,12 @@ The hub updates after buffer edits, saves, agent/external writes, and filesystem
 notifications. Opening it and pressing `g` reconcile modification times.
 Unsaved buffers are never overwritten; disk conflicts are reported.
 
+Native Valsi application buffers use Magit-like direct keys: `n`/`p` navigate,
+`t` or `TAB` folds, `RET` opens, `g` refreshes, `/` filters, `?` shows all
+commands, and `q` leaves. The compact sidebar also runs its displayed artifact
+actions directly (`n`, `p`, `t`, `l`, `@`). Editable Markdown and terminal
+buffers keep the `C-c n` prefix so normal text and CLI keys are never stolen.
+
 Agent conversation runs in a real Eat terminal buffer, for example
 `*Valsi Agent: valsi/primary*`. Pi is the default Guix-pinned backend; Codex CLI,
 Claude Code, and custom commands may use the same terminal role. The CLI owns
@@ -138,9 +144,19 @@ Useful entry points are planned as:
 | `M-x valsi-artifacts` | open/focus the compact artifact index |
 | `M-x valsi-agent-with-artifacts` | compose terminal plus artifact index |
 | `C-c n m` | show the context-sensitive Valsi command menu |
+| `C-c n s` | hide/show the contextual artifact sidebar |
 
 The exact buffer anatomy, layouts, focus behavior, and proposed shortcuts are
 specified in [`UI.md`](UI.md) and [`UX.md`](UX.md).
+
+With `valsi-global-mode` enabled, visiting a recognized artifact such as
+`PLAN.md` keeps the file in the main window and opens the compact project
+overview on the right. The overview always shows the active artifact's
+semantic node and a maximum of four primary actions. It auto-hides on narrow
+frames rather than squeezing the source or terminal. Customize this with
+`valsi-app-auto-sidebar`, `valsi-app-sidebar-side`,
+`valsi-app-sidebar-width`, `valsi-app-minimum-source-width`, and
+`valsi-app-sidebar-minimum-frame-width`.
 
 Pi remains the tested subscription path. Authentication happens in Pi's own
 terminal UI, so Pi exclusively stores and refreshes credentials. OpenAI Codex

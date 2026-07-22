@@ -203,8 +203,17 @@ project hub, family dashboards, inspectors, cross-artifact graph,
 buffers.  Source artifacts remain ordinary editable Markdown.
 
 Open the project hub with @code{M-x valsi}.  It summarizes artifact families,
-warnings, stale or conflicting entries, recent artifacts, and associated agent
-instances.  Refresh with @kbd{g}.  Buffer edits are reparsed after an idle
+warnings, stale or conflicting entries, active work, and associated agent
+instances in collapsible Overview, Attention, Active, Artifacts, Agents, and
+Project sections.  Native application buffers use direct Magit-like keys:
+@kbd{n}/@kbd{p} navigate, @kbd{t} or @key{TAB} folds, @key{RET} opens,
+@kbd{g} refreshes, @kbd{/} filters, and @kbd{?} shows commands.  Editable
+artifacts and terminals retain the @kbd{C-c n} prefix.
+
+The contextual artifact sidebar shows the current semantic node and at most
+four direct actions.  It is automatically suppressed when showing it would
+make the source or terminal narrower than @code{valsi-app-minimum-source-width}.
+Buffer edits are reparsed after an idle
 delay; saves and external or agent writes refresh affected rows.  Entering the
 hub reconciles modification times, and unsaved buffers are never overwritten.
 
