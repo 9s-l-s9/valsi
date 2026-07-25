@@ -155,21 +155,13 @@ server without a global npm installation.")
             (when tests?
               (with-directory-excursion ".."
                 (invoke "make" "check")))))
-        (add-after 'check 'exclude-historical-agent-runtime
+        (add-after 'check 'exclude-experimental-harness
           (lambda _
             ;; emacs-build-system installs every .el in this directory, not
-            ;; only Makefile's product graph. Keep the retired experiments in
-            ;; the repository, but do not expose them as installed features.
-            (for-each (lambda (file)
-                        (when (file-exists? file)
-                          (delete-file file)))
-                      '("valsi-agent-auth.el"
-                        "valsi-agent-provider.el"
-                        "valsi-agent-session.el"
-                        "valsi-agent-tools.el"
-                        "valsi-agent.el"
-                        "valsi-harness.el"
-                        "valsi-pi.el"))))
+            ;; only Makefile's product graph. Keep the gated Pi-harness
+            ;; experiments in the repository, but do not expose them as
+            ;; installed features.
+            (for-each delete-file '("valsi-harness.el" "valsi-pi.el"))))
         (add-after 'install 'install-pi-extension
           (lambda* (#:key outputs #:allow-other-keys)
             (let* ((out (assoc-ref outputs "out"))

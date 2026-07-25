@@ -48,94 +48,93 @@
   (let* ((root (valsi-node-create :type 'plan :beg (point-min) :end (point-max)
                                  :recognizer 'valsi-plan))
          (lines (valsi-parse-lines (current-buffer)))
-           (heading-stack nil)          ; (level . group-node)
-           (task-stack nil)             ; list of task nodes, deepest first
-           (current-group root)
-           (current-task nil))
-      (dolist (line lines)
-        (let* ((text (valsi-line-text line))
-               (heading (valsi-parse-heading text))
-               (checkbox (valsi-parse-checkbox text)))
-          (cond
-           ;; Heading -> group
-           (heading
-            (let ((g (valsi-node-create
-                      :type 'group
-                      :beg (valsi-line-beg line) :end (valsi-line-end line)
-                      :recognizer 'valsi-plan-r4
-                      :props (list :level (car heading) :title (cdr heading)))))
-              (while (and heading-stack (>= (caar heading-stack) (car heading)))
-                (pop heading-stack))
-              (if heading-stack
-                  (valsi-node-add-child (cdar heading-stack) g)
-                (valsi-node-add-child root g))
-              (push (cons (car heading) g) heading-stack)
-              (setq current-group g task-stack nil current-task nil)))
-           ;; Checkbox -> task
-           (checkbox
-            (let* ((rest (plist-get checkbox :rest))
-                   (indent (plist-get checkbox :indent))
-                   (id (valsi-parse-id rest))
-                   (key (valsi-parse-sort-key id))
-                   (task (valsi-node-create
-                          :type 'task
-                          :beg (valsi-line-beg line) :end (valsi-line-end line)
-                          :confidence 'exact
-                          :recognizer 'valsi-plan-r1
-                          :props (list :state (plist-get checkbox :state)
-                                       :char (plist-get checkbox :char)
-                                       :id id
-                                       :sort-key key
-                                       :indent indent
-                                       :tags (valsi-parse-tags rest)
-                                       :deps (valsi-parse-deps rest)
-                                       :pathrefs (valsi-parse-pathrefs rest)
-                                       :desc rest
-                                       :line (valsi-line-n line)))))
-              ;; Find parent: by id-prefix, else by indent, else group.
-              (ignore indent key)
-              (let ((parent (valsi-plan--find-parent task task-stack)))
-                (if parent
-                    (valsi-node-add-child parent task)
-                  (valsi-node-add-child current-group task)))
-              ;; Maintain task stack (drop siblings/deeper).
-              (setq task-stack
-                    (cons task
-                          (cl-remove-if
-                           (lambda (tk)
-                             (not (valsi-plan--ancestor-p tk task)))
-                           task-stack)))
-              (setq current-task task)))
-           ;; Requirements trace (R6a) -> attach to current task
-           ((valsi-parse-requirements text)
-            (when current-task
-              (valsi-node-put
-               current-task :traces
-               (append (valsi-node-prop current-task :traces)
-                       (valsi-parse-requirements text)))
-              (valsi-node-add-child
-               current-task
-               (valsi-node-create :type 'trace
-                                 :beg (valsi-line-beg line) :end (valsi-line-end line)
-                                 :recognizer 'valsi-plan-r6a
-                                 :props (list :reqs (valsi-parse-requirements text))))))
-           ;; Meta label (R4/R9/R10) -> attach to task or group
-           ((valsi-parse-meta-label text)
-            (let ((m (valsi-node-create
-                      :type 'meta
-                      :beg (valsi-line-beg line) :end (valsi-line-end line)
-                      :recognizer 'valsi-plan-r9
-                      :props (list :label (valsi-parse-meta-label text)
-                                   :text text))))
-              (valsi-node-add-child (or current-task current-group) m)))
-           ;; Plain bullet under a task -> step (R7)
-           ((and current-task (valsi-parse-bullet text))
+         (heading-stack nil)          ; (level . group-node)
+         (task-stack nil)             ; list of task nodes, deepest first
+         (current-group root)
+         (current-task nil))
+    (dolist (line lines)
+      (let* ((text (valsi-line-text line))
+             (heading (valsi-parse-heading text))
+             (checkbox (valsi-parse-checkbox text)))
+        (cond
+         ;; Heading -> group
+         (heading
+          (let ((g (valsi-node-create
+                    :type 'group
+                    :beg (valsi-line-beg line) :end (valsi-line-end line)
+                    :recognizer 'valsi-plan-r4
+                    :props (list :level (car heading) :title (cdr heading)))))
+            (while (and heading-stack (>= (caar heading-stack) (car heading)))
+              (pop heading-stack))
+            (if heading-stack
+                (valsi-node-add-child (cdar heading-stack) g)
+              (valsi-node-add-child root g))
+            (push (cons (car heading) g) heading-stack)
+            (setq current-group g task-stack nil current-task nil)))
+         ;; Checkbox -> task
+         (checkbox
+          (let* ((rest (plist-get checkbox :rest))
+                 (indent (plist-get checkbox :indent))
+                 (id (valsi-parse-id rest))
+                 (key (valsi-parse-sort-key id))
+                 (task (valsi-node-create
+                        :type 'task
+                        :beg (valsi-line-beg line) :end (valsi-line-end line)
+                        :confidence 'exact
+                        :recognizer 'valsi-plan-r1
+                        :props (list :state (plist-get checkbox :state)
+                                     :char (plist-get checkbox :char)
+                                     :id id
+                                     :sort-key key
+                                     :indent indent
+                                     :tags (valsi-parse-tags rest)
+                                     :deps (valsi-parse-deps rest)
+                                     :pathrefs (valsi-parse-pathrefs rest)
+                                     :desc rest
+                                     :line (valsi-line-n line)))))
+            ;; Find parent: by id-prefix, else by indent, else group.
+            (let ((parent (valsi-plan--find-parent task task-stack)))
+              (if parent
+                  (valsi-node-add-child parent task)
+                (valsi-node-add-child current-group task)))
+            ;; Maintain task stack (drop siblings/deeper).
+            (setq task-stack
+                  (cons task
+                        (cl-remove-if
+                         (lambda (tk)
+                           (not (valsi-plan--ancestor-p tk task)))
+                         task-stack)))
+            (setq current-task task)))
+         ;; Requirements trace (R6a) -> attach to current task
+         ((valsi-parse-requirements text)
+          (when current-task
+            (valsi-node-put
+             current-task :traces
+             (append (valsi-node-prop current-task :traces)
+                     (valsi-parse-requirements text)))
             (valsi-node-add-child
              current-task
-             (valsi-node-create :type 'step
+             (valsi-node-create :type 'trace
                                :beg (valsi-line-beg line) :end (valsi-line-end line)
-                               :recognizer 'valsi-plan-r7
-                               :props (list :text (cdr (valsi-parse-bullet text)))))))))
+                               :recognizer 'valsi-plan-r6a
+                               :props (list :reqs (valsi-parse-requirements text))))))
+         ;; Meta label (R4/R9/R10) -> attach to task or group
+         ((valsi-parse-meta-label text)
+          (let ((m (valsi-node-create
+                    :type 'meta
+                    :beg (valsi-line-beg line) :end (valsi-line-end line)
+                    :recognizer 'valsi-plan-r9
+                    :props (list :label (valsi-parse-meta-label text)
+                                 :text text))))
+            (valsi-node-add-child (or current-task current-group) m)))
+         ;; Plain bullet under a task -> step (R7)
+         ((and current-task (valsi-parse-bullet text))
+          (valsi-node-add-child
+           current-task
+           (valsi-node-create :type 'step
+                             :beg (valsi-line-beg line) :end (valsi-line-end line)
+                             :recognizer 'valsi-plan-r7
+                             :props (list :text (cdr (valsi-parse-bullet text)))))))))
     (valsi-node-put root :dialect (valsi-plan--detect-dialect root))
     root))
 
@@ -192,10 +191,9 @@ By id sort-key prefix when both have keys, else by indent."
       (let ((title (valsi-node-prop g :title)))
         (when (and title (string-match-p "\\`Task [0-9]" title))
           (cl-incf superpowers))))
-    (with-current-buffer (current-buffer)
-      (when (save-excursion (goto-char (point-min))
-                            (re-search-forward "^<tasks>" nil t))
-        (setq gsd 10)))
+    (when (save-excursion (goto-char (point-min))
+                          (re-search-forward "^<tasks>" nil t))
+      (setq gsd 10))
     (let ((scores (list (cons 'speckit speckit) (cons 'kiro kiro)
                         (cons 'superpowers superpowers) (cons 'gsd gsd))))
       (car (cl-reduce (lambda (a b) (if (>= (cdr a) (cdr b)) a b)) scores)))))
@@ -319,25 +317,28 @@ By id sort-key prefix when both have keys, else by indent."
        (length (valsi-node-prop task :pathrefs))
        (length (valsi-node-of-type task 'step))))))
 
+(defun valsi-plan--leaf-stats (root)
+  "Return (DONE TOTAL INPROG) over ROOT's leaf tasks (all tasks if none)."
+  (let* ((tasks (valsi-node-of-type root 'task))
+         ;; Leaves: tasks with no child tasks.
+         (leaves (or (cl-remove-if (lambda (tk) (valsi-node-of-type tk 'task))
+                                   tasks)
+                     tasks)))
+    (list (cl-count-if (lambda (tk) (eq (valsi-plan-effective-state tk) 'done))
+                       leaves)
+          (length leaves)
+          (cl-count-if (lambda (tk) (eq (valsi-plan-effective-state tk)
+                                        'in-progress))
+                       leaves))))
+
 (defun valsi-plan-progress ()
   "Report done/total task counts for the buffer."
   (interactive)
-  (let* ((root (valsi-tree))
-         (tasks (valsi-node-of-type root 'task))
-         (leaf (cl-remove-if (lambda (tk) (valsi-node-of-type
-                                           tk 'task))
-                             ;; leaves: no child tasks
-                             tasks))
-         (leaf (or leaf tasks))
-         (done (cl-count-if (lambda (tk) (eq (valsi-plan-effective-state tk) 'done))
-                            leaf))
-         (prog (cl-count-if (lambda (tk) (eq (valsi-plan-effective-state tk)
-                                             'in-progress))
-                            leaf)))
+  (pcase-let ((`(,done ,total ,prog) (valsi-plan--leaf-stats (valsi-tree))))
     (message "Valsi plan: %d/%d done, %d in-progress (%d%%)"
-             done (length leaf) prog
-             (if (zerop (length leaf)) 0
-               (round (* 100.0 (/ (float done) (length leaf))))))))
+             done total prog
+             (if (zerop total) 0
+               (round (* 100.0 (/ (float done) total)))))))
 
 (defun valsi-plan-occur-state ()
   "Occur over tasks filtered by a chosen state."
@@ -441,15 +442,11 @@ DESC is the task description.  Speckit buffers get the next Tnnn id, kiro
 buffers the next integer id; other dialects get no id."
   (interactive "sTask description: ")
   (let* ((root (valsi-plan--buffer-tree))
-         (dialect (valsi-node-prop root :dialect))
          (indent (save-excursion
                    (beginning-of-line)
                    (buffer-substring-no-properties
                     (point) (progn (skip-chars-forward " \t") (point)))))
-         (id (pcase dialect
-               ('speckit (format "T%03d" (1+ (valsi-plan--max-tnum root))))
-               ('kiro (number-to-string (1+ (valsi-plan--max-int-id root))))
-               (_ nil))))
+         (id (valsi-plan--dialect-next-id root)))
     (end-of-line)
     (insert (format "\n%s- [ ] %s%s" indent (if id (concat id " ") "") desc))
     (message "Inserted %s" (or id "task"))))
@@ -999,18 +996,9 @@ A pair is stale when its task's path-ref target is newer than the plan."
   "Return (DIALECT DONE TOTAL INPROG) for plan FILE."
   (with-temp-buffer
     (insert-file-contents file)
-    (let* ((root (valsi-plan-parse (buffer-string)))
-           (tasks (valsi-node-of-type root 'task))
-           (leaves (or (cl-remove-if (lambda (tk) (valsi-node-of-type tk 'task))
-                                     tasks)
-                       tasks)))
-      (list (valsi-node-prop root :dialect)
-            (cl-count-if (lambda (tk) (eq (valsi-plan-effective-state tk) 'done))
-                         leaves)
-            (length leaves)
-            (cl-count-if (lambda (tk) (eq (valsi-plan-effective-state tk)
-                                          'in-progress))
-                         leaves)))))
+    (let ((root (valsi-plan-parse (buffer-string))))
+      (cons (valsi-node-prop root :dialect)
+            (valsi-plan--leaf-stats root)))))
 
 (defun valsi-plan--dashboard-entries ()
   "Compute tabulated-list entries for the plan dashboard."

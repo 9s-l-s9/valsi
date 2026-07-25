@@ -57,14 +57,7 @@
 ;;;###autoload
 (defun valsi-init ()
   "Register the generic grammar and all bundled artifact grammar plugins."
-  (valsi-registry-init-generic)
-  (valsi-plan-register)
-  (valsi-instruction-register)
-  (valsi-promptfile-register)
-  (valsi-memory-register)
-  (valsi-changelog-register)
-  (valsi-decision-register)
-  (valsi-overview-register)
+  (valsi-registry-register-bundled)
   (setq valsi--initialized t))
 
 ;;;; The connection (the transport seam)
@@ -135,9 +128,9 @@ offset->buffer-position translation here."
   (when (called-interactively-p 'interactive)
     (message "Valsi: %s grammar, %d nodes, caps: %s"
              valsi--grammar
-             (let ((n 0)) (when valsi--tree
-                            (valsi-node-walk valsi--tree (lambda (_ _d) (cl-incf n))))
-                  n)
+             (if valsi--tree
+                 (length (valsi-node-collect valsi--tree #'identity))
+               0)
              valsi--capabilities))
   valsi--tree)
 

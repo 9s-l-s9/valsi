@@ -293,5 +293,31 @@ This is the per-document degradation-ladder advertisement."
          :capabilities '(outline narrow)
          :commands nil)))
 
+;; The bundled grammar plugins require this file, so they are loaded at
+;; runtime here and only declared for the byte-compiler.
+(declare-function valsi-plan-register "valsi-plan")
+(declare-function valsi-instruction-register "valsi-instruction")
+(declare-function valsi-promptfile-register "valsi-promptfile")
+(declare-function valsi-memory-register "valsi-memory")
+(declare-function valsi-changelog-register "valsi-changelog")
+(declare-function valsi-decision-register "valsi-decision")
+(declare-function valsi-overview-register "valsi-overview")
+
+(defun valsi-registry-register-bundled ()
+  "Load and register the generic grammar and all bundled grammar plugins.
+The single registration site shared by the in-process client
+\(`valsi-init') and the standalone server (`valsi-server-init')."
+  (dolist (feature '(valsi-plan valsi-instruction valsi-promptfile valsi-memory
+                     valsi-changelog valsi-decision valsi-overview))
+    (require feature))
+  (valsi-registry-init-generic)
+  (valsi-plan-register)
+  (valsi-instruction-register)
+  (valsi-promptfile-register)
+  (valsi-memory-register)
+  (valsi-changelog-register)
+  (valsi-decision-register)
+  (valsi-overview-register))
+
 (provide 'valsi-registry)
 ;;; valsi-registry.el ends here

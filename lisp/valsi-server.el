@@ -141,21 +141,7 @@
 (defun valsi-server-init ()
   "Register the bundled AAP grammars for a standalone server."
   (require 'valsi-registry)
-  (require 'valsi-plan)
-  (require 'valsi-instruction)
-  (require 'valsi-promptfile)
-  (require 'valsi-memory)
-  (require 'valsi-changelog)
-  (require 'valsi-decision)
-  (require 'valsi-overview)
-  (valsi-registry-init-generic)
-  (valsi-plan-register)
-  (valsi-instruction-register)
-  (valsi-promptfile-register)
-  (valsi-memory-register)
-  (valsi-changelog-register)
-  (valsi-decision-register)
-  (valsi-overview-register))
+  (valsi-registry-register-bundled))
 
 (defun valsi-server-stdio ()
   "Run the AAP reference server over stdin/stdout until EOF.
