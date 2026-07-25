@@ -576,6 +576,186 @@ Diagnostics and semantic staleness count only for an open artifact."
       (dolist (item items)
         (valsi-app--insert-file item root)))))
 
+(defun valsi-app--sorted-grammars (groups)
+  "Return GROUPS' grammar symbols sorted by name."
+  (sort (hash-table-keys groups)
+        (lambda (a b) (string< (symbol-name a) (symbol-name b)))))
+
+(defun valsi-app--insert-header (root recognized markdown agents)
+  "Insert the hub header for ROOT over RECOGNIZED, MARKDOWN, and AGENTS."
+  (insert (propertize (format "Valsi  %s\n" (valsi-app--project-name root))
+                      'face 'bold))
+  (insert (propertize
+           (if valsi-app--compact
+               (format "%d artifacts · %d attention\n"
+                       (length recognized)
+                       (length (valsi-app--attention-entries recognized)))
+             (format "%s  ·  %d artifacts  ·  %d markdown  ·  %d agents\n"
+                     (abbreviate-file-name root)
+                     (length recognized) (length markdown) (length agents)))
+           'face 'valsi-state-face))
+  (when valsi-app--filter
+    (insert (propertize (format "filter: %s\n" valsi-app--filter)
+                        'face 'valsi-state-face)))
+  (insert "\n"))
+
+(defun valsi-app--insert-overview-section (groups layout)
+  "Insert the Overview section: one button row per family in GROUPS.
+LAYOUT selects the narrow or wide row format."
+  (valsi-view-insert-section
+   'overview "Overview"
+   (lambda ()
+     (dolist (grammar (valsi-app--sorted-grammars groups))
+       (let ((items (reverse (gethash grammar groups)))
+             (start (point)))
+         (insert "  ")
+         (insert-text-button
+          (format (if (eq layout 'narrow) "%-12s" "%-16s")
+                  (capitalize (symbol-name grammar)))
+          'follow-link t
+          'help-echo "RET shows this family's files"
+          'valsi-grammar grammar
+          'action #'valsi-app--overview-button)
+         (insert (propertize
+                  (if (eq layout 'narrow)
+                      (format " %d" (length items))
+                    (format " %s" (valsi-app--family-summary items)))
+                  'face 'valsi-state-face)
+                 "\n")
+         (add-text-properties
+          start (point)
+          `(valsi-row-id ,(format "overview:%s" grammar))))))
+   (format "%d families" (hash-table-count groups)) t))
+
+(defun valsi-app--insert-attention-section (attention root layout)
+  "Insert the Attention section for ATTENTION entries under ROOT.
+LAYOUT caps how many rows are shown before the overflow row."
+  (valsi-view-insert-section
+   'attention "Attention"
+   (lambda ()
+     (let* ((limit (pcase layout
+                     ('narrow 3)
+                     ('medium 5)
+                     (_ (length attention))))
+            (visible (seq-take attention limit)))
+       (dolist (entry visible)
+         (let ((file (plist-get entry :file)))
+           (valsi-app--row
+            (concat "attention:" file)
+            (format "  %-18s %s%s"
+                    (valsi-app--attention-reason entry)
+                    (if (eq layout 'wide)
+                        (file-relative-name file root)
+                      (file-name-nondirectory file))
+                    (if (equal (valsi-app--attention-reason entry) "warning")
+                        (format " · %d warnings" (plist-get entry :warnings))
+                      ""))
+            'valsi-attention-face)))
+       (when (> (length attention) limit)
+         (valsi-app--row
+          "attention:more"
+          (format "  … %d more; RET opens artifact details"
+                  (- (length attention) limit))
+          'valsi-state-face))))
+   (format "%d item%s" (length attention)
+           (if (= (length attention) 1) "" "s"))
+   t))
+
+(defun valsi-app--insert-active-section (entries agents root)
+  "Insert the Active section: modified/open ENTRIES and running AGENTS.
+ROOT is the project root; the section is omitted when empty."
+  (let ((active (seq-filter
+                 (lambda (entry)
+                   (member (plist-get entry :state) '("modified" "open")))
+                 entries)))
+    (when (or active agents)
+      (insert "\n")
+      (valsi-view-insert-section
+       'active "Active"
+       (lambda ()
+         (dolist (entry active)
+           (valsi-app--insert-file entry root))
+         (dolist (agent agents)
+           (valsi-app--row
+            (format "active-agent:%s"
+                    (valsi-terminal-agent-instance-name agent))
+            (format "  agent %-12s %s"
+                    (valsi-terminal-agent-instance-name agent)
+                    (or (valsi-terminal-agent-instance-task agent) "idle")))))
+       nil t))))
+
+(defun valsi-app--insert-artifacts-section (recognized groups root)
+  "Insert the Artifacts section: RECOGNIZED entries by family in GROUPS.
+ROOT is the project root."
+  (valsi-view-insert-section
+   'artifacts "Artifacts"
+   (lambda ()
+     (if recognized
+         (dolist (grammar (valsi-app--sorted-grammars groups))
+           (valsi-app--insert-family
+            grammar (reverse (gethash grammar groups)) root))
+       (valsi-app--row "artifacts:none" "  No recognized artifacts")))
+   (format "%d files" (length recognized)) t))
+
+(defun valsi-app--insert-markdown-section (markdown root)
+  "Insert the collapsed Markdown section for unrecognized MARKDOWN files.
+ROOT is the project root."
+  (valsi-view-insert-section
+   'markdown "Markdown"
+   (lambda ()
+     (dolist (entry markdown)
+       (valsi-app--insert-file entry root)))
+   (format "%d unsupported file%s"
+           (length markdown)
+           (if (= (length markdown) 1) "" "s"))
+   nil))
+
+(defun valsi-app--insert-agents-section (agents layout)
+  "Insert the Agents section: one button row per instance in AGENTS.
+LAYOUT selects the narrow or wide row format."
+  (valsi-view-insert-section
+   'agents "Agents"
+   (lambda ()
+     (dolist (instance agents)
+       (let* ((buffer (valsi-terminal-agent-instance-buffer instance))
+              (status (if (and (buffer-live-p buffer)
+                               (process-live-p (get-buffer-process buffer)))
+                          "running" "stopped"))
+              (start (point)))
+         (insert "  ")
+         (insert-text-button
+          (valsi-terminal-agent-instance-name instance)
+          'follow-link t 'valsi-buffer buffer
+          'action #'valsi-app--agent-button)
+         (insert
+          (if (eq layout 'narrow)
+              (format "  %s\n" status)
+            (format "  %-8s %-8s %s\n"
+                    status
+                    (valsi-terminal-agent-instance-backend instance)
+                    (or (valsi-terminal-agent-instance-task instance)
+                        "idle"))))
+         (add-text-properties
+          start (point)
+          `(valsi-row-id
+            ,(format "agent:%s"
+                     (valsi-terminal-agent-instance-name instance)))))))
+   (format "%d running" (length agents)) t))
+
+(defun valsi-app--insert-project-section ()
+  "Insert the Project section and the hub footer key hints."
+  (valsi-view-insert-section
+   'project "Project"
+   (lambda ()
+     (valsi-app--row "project:files" "  f  find file     D  Dired")
+     (valsi-app--row "project:buffers" "  b  buffers       T  tree")
+     (valsi-app--row "project:agent" "  a  start agent    @  hand off"))
+   nil nil)
+  (insert "\n"
+          (propertize
+           "TAB fold · RET open · g refresh · / filter · ? commands · q quit\n"
+           'face 'valsi-state-face)))
+
 (defun valsi-app--render-contents ()
   "Insert the current Valsi hub or sidebar contents."
   (let* ((root valsi-app--root)
@@ -594,173 +774,27 @@ Diagnostics and semantic staleness count only for an open artifact."
          (layout (valsi-app--layout)))
     (setq valsi-app--last-layout layout)
     (erase-buffer)
-    (insert (propertize (format "Valsi  %s\n" (valsi-app--project-name root))
-                        'face 'bold))
-    (insert (propertize
-             (if valsi-app--compact
-                 (format "%d artifacts · %d attention\n"
-                         (length recognized)
-                         (length (valsi-app--attention-entries recognized)))
-               (format "%s  ·  %d artifacts  ·  %d markdown  ·  %d agents\n"
-                       (abbreviate-file-name root)
-                       (length recognized) (length markdown) (length agents)))
-             'face 'valsi-state-face))
-    (when valsi-app--filter
-      (insert (propertize (format "filter: %s\n" valsi-app--filter)
-                          'face 'valsi-state-face)))
-    (insert "\n")
+    (valsi-app--insert-header root recognized markdown agents)
     (if valsi-app--compact
         (progn
           (valsi-app--insert-context layout)
           (insert "\n" (propertize "s hide · c hub · ? commands\n"
                                    'face 'valsi-state-face)))
-      (valsi-view-insert-section
-       'overview "Overview"
-       (lambda ()
-         (dolist (grammar
-                  (sort (hash-table-keys groups)
-                        (lambda (a b)
-                          (string< (symbol-name a) (symbol-name b)))))
-           (let ((items (reverse (gethash grammar groups)))
-                 (start (point)))
-             (insert "  ")
-             (insert-text-button
-              (format (if (eq layout 'narrow) "%-12s" "%-16s")
-                      (capitalize (symbol-name grammar)))
-              'follow-link t
-              'help-echo "RET shows this family's files"
-              'valsi-grammar grammar
-              'action #'valsi-app--overview-button)
-             (insert (propertize
-                      (if (eq layout 'narrow)
-                          (format " %d" (length items))
-                        (format " %s" (valsi-app--family-summary items)))
-                      'face 'valsi-state-face)
-                     "\n")
-             (add-text-properties
-              start (point)
-              `(valsi-row-id ,(format "overview:%s" grammar))))))
-       (format "%d families" (hash-table-count groups)) t)
+      (valsi-app--insert-overview-section groups layout)
       (when attention
         (insert "\n")
-        (valsi-view-insert-section
-         'attention "Attention"
-         (lambda ()
-           (let* ((limit (pcase layout
-                           ('narrow 3)
-                           ('medium 5)
-                           (_ (length attention))))
-                  (visible (seq-take attention limit)))
-             (dolist (entry visible)
-             (let ((file (plist-get entry :file)))
-               (valsi-app--row
-                (concat "attention:" file)
-                (format "  %-18s %s%s"
-                        (valsi-app--attention-reason entry)
-                        (if (eq layout 'wide)
-                            (file-relative-name file root)
-                          (file-name-nondirectory file))
-                        (if (equal (valsi-app--attention-reason entry)
-                                   "warning")
-                            (format " · %d warnings"
-                                    (plist-get entry :warnings))
-                          ""))
-                'valsi-attention-face)))
-             (when (> (length attention) limit)
-               (valsi-app--row
-                "attention:more"
-                (format "  … %d more; RET opens artifact details"
-                        (- (length attention) limit))
-                'valsi-state-face))))
-         (format "%d item%s" (length attention)
-                 (if (= (length attention) 1) "" "s"))
-         t))
-      (let ((active (seq-filter
-                     (lambda (entry)
-                       (member (plist-get entry :state) '("modified" "open")))
-                     entries)))
-        (when (or active agents)
-          (insert "\n")
-          (valsi-view-insert-section
-           'active "Active"
-           (lambda ()
-             (dolist (entry active)
-               (valsi-app--insert-file entry root))
-             (dolist (agent agents)
-               (valsi-app--row
-                (format "active-agent:%s"
-                        (valsi-terminal-agent-instance-name agent))
-                (format "  agent %-12s %s"
-                        (valsi-terminal-agent-instance-name agent)
-                        (or (valsi-terminal-agent-instance-task agent) "idle")))))
-           nil t)))
+        (valsi-app--insert-attention-section attention root layout))
+      (valsi-app--insert-active-section entries agents root)
       (insert "\n")
-      (valsi-view-insert-section
-       'artifacts "Artifacts"
-       (lambda ()
-         (if recognized
-             (dolist (grammar
-                      (sort (hash-table-keys groups)
-                            (lambda (a b)
-                              (string< (symbol-name a) (symbol-name b)))))
-               (valsi-app--insert-family
-                grammar (reverse (gethash grammar groups)) root))
-           (valsi-app--row "artifacts:none" "  No recognized artifacts")))
-       (format "%d files" (length recognized)) t)
+      (valsi-app--insert-artifacts-section recognized groups root)
       (when (and valsi-app-show-generic-markdown markdown)
         (insert "\n")
-        (valsi-view-insert-section
-         'markdown "Markdown"
-         (lambda ()
-           (dolist (entry markdown)
-             (valsi-app--insert-file entry root)))
-         (format "%d unsupported file%s"
-                 (length markdown)
-                 (if (= (length markdown) 1) "" "s"))
-         nil))
+        (valsi-app--insert-markdown-section markdown root))
       (when agents
         (insert "\n")
-        (valsi-view-insert-section
-         'agents "Agents"
-         (lambda ()
-           (dolist (instance agents)
-             (let* ((buffer (valsi-terminal-agent-instance-buffer instance))
-                    (status (if (and (buffer-live-p buffer)
-                                     (process-live-p
-                                      (get-buffer-process buffer)))
-                                "running" "stopped"))
-                    (start (point)))
-               (insert "  ")
-               (insert-text-button
-                (valsi-terminal-agent-instance-name instance)
-                'follow-link t 'valsi-buffer buffer
-                'action #'valsi-app--agent-button)
-               (insert
-                (if (eq layout 'narrow)
-                    (format "  %s\n" status)
-                  (format "  %-8s %-8s %s\n"
-                          status
-                          (valsi-terminal-agent-instance-backend instance)
-                          (or (valsi-terminal-agent-instance-task instance)
-                              "idle"))))
-               (add-text-properties
-                start (point)
-                `(valsi-row-id
-                  ,(format "agent:%s"
-                           (valsi-terminal-agent-instance-name instance)))))))
-         (format "%d running" (length agents)) t))
+        (valsi-app--insert-agents-section agents layout))
       (insert "\n")
-      (valsi-view-insert-section
-       'project "Project"
-       (lambda ()
-         (valsi-app--row "project:files" "  f  find file     D  Dired")
-         (valsi-app--row "project:buffers" "  b  buffers       T  tree")
-         (valsi-app--row "project:agent" "  a  start agent    @  hand off"))
-       nil nil)
-      (insert "\n"
-              (propertize
-               "TAB fold · RET open · g refresh · / filter · ? commands · q quit\n"
-               'face 'valsi-state-face)))))
+      (valsi-app--insert-project-section))))
 
 (defun valsi-app--render ()
   "Render current Valsi application buffer without losing view position."
