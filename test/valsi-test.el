@@ -20,6 +20,8 @@
 (require 'valsi-instruction-test)
 (require 'valsi-promptfile-test)
 (require 'valsi-memory-test)
+(require 'valsi-family-test)
+(require 'valsi-plan-review-test)
 (require 'valsi-graph-test)
 (require 'valsi-perf-test)
 (require 'aap-conformance)
@@ -1000,6 +1002,46 @@ interior-state contradictions."
     (should (eq #'mwheel-scroll (key-binding [wheel-down])))
     (should (memq 'valsi-terminal-agent--emulation-map-alist
                   emulation-mode-map-alists))))
+
+(ert-deftest valsi-test-terminal-agent-key-and-project-name ()
+  "Registry keys canonicalize the root; project names drop the directory."
+  (let ((root (file-name-as-directory (make-temp-file "valsi-key-" t))))
+    (unwind-protect
+        (progn
+          (should (equal (valsi-terminal-agent--key root "primary")
+                         (valsi-terminal-agent--key
+                          (concat root "./") "primary")))
+          (should (equal (file-name-nondirectory (directory-file-name root))
+                         (valsi-terminal-agent--project-name root))))
+      (delete-directory root t))))
+
+(ert-deftest valsi-test-terminal-agent-unknown-backend-errors ()
+  "An undeclared backend is a user error, not a nil crash."
+  (should-error (valsi-terminal-agent--backend 'bogus) :type 'user-error)
+  (should (eq 'pi (car (valsi-terminal-agent--backend 'pi)))))
+
+(ert-deftest valsi-test-terminal-agent-arguments-pi-extension ()
+  "Only the pi backend gains --extension, and only when one is found."
+  (cl-letf (((symbol-function 'valsi-terminal-agent--pi-extension)
+             (lambda () "/ext/index.ts")))
+    (should (equal '("--continue" "--extension" "/ext/index.ts")
+                   (valsi-terminal-agent--command-arguments
+                    'pi '("--continue"))))
+    (should (equal '("--flag")
+                   (valsi-terminal-agent--command-arguments
+                    'codex '("--flag")))))
+  (cl-letf (((symbol-function 'valsi-terminal-agent--pi-extension) #'ignore))
+    (should (equal '("--continue")
+                   (valsi-terminal-agent--command-arguments
+                    'pi '("--continue"))))))
+
+(ert-deftest valsi-test-terminal-agent-ensure-program-errors ()
+  "A missing executable yields a user error naming the backend."
+  (should-error (valsi-terminal-agent--ensure-program
+                 "/nonexistent/valsi-no-such-cli" 'codex)
+                :type 'user-error)
+  (should-error (valsi-terminal-agent--ensure-program nil 'custom)
+                :type 'user-error))
 
 (provide 'valsi-test)
 ;;; valsi-test.el ends here
