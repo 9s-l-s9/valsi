@@ -3,7 +3,7 @@
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
 ;;; Commentary:
-;; Unit tests for the cross-artifact graph (Sprint 10, T1002): the built-in
+;; Unit tests for the cross-artifact graph: the built-in
 ;; edge sources (instruction @imports, memory [[wiki]]/index, plan trace/path,
 ;; phase-successor), the pluggable registration API, and the file-tagged
 ;; collect/entries used by the navigable view.

@@ -3,7 +3,7 @@
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
 ;;; Commentary:
-;; Unit tests for the prompt-file grammar (Sprint 9): per-type vocabularies
+;; Unit tests for the prompt-file grammar: per-type vocabularies
 ;; (skill/subagent/command), the eager/lazy disclosure split, frontmatter
 ;; validation + unknown-key warnings, description-as-trigger + test-fire, and
 ;; the argument-placeholder recognizer.  Pure over content strings; the parse

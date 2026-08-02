@@ -3,7 +3,7 @@
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
 ;;; Commentary:
-;; Unit tests for the instruction-file grammar (Sprint 8): frontmatter-glob
+;; Unit tests for the instruction-file grammar: frontmatter-glob
 ;; scope, [[links]], lint, one-source->many sync, and scaffold.  Pure over
 ;; content strings -- no filesystem except the sync/lint on-disk checks, which
 ;; use temp files.

@@ -5,7 +5,7 @@ working server (`lisp/valsi-proto.el`) once two independent grammar genres
 (plan/tasks + instruction) run as plugins and prove the model's adaptability —
 per [ADR 0004](adr/0004-artifact-protocol.md) and Valsi's "derive, don't invent"
 method. It is **not called a standard** until a second independent implementation
-exists (targeted v1.x, Sprint 12). Breaking changes are allowed within v0.
+exists (targeted v1.x). Breaking changes are allowed within v0.
 
 A conformance suite ships with this spec: `test/conformance/aap-conformance.el`
 (run `make conformance`). Any implementation that passes it is AAP-v0-conformant.

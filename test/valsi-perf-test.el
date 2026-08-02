@@ -3,7 +3,7 @@
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
 ;;; Commentary:
-;; v1.0 hardening (Sprint 10, T1003): parse + serialize at scale.  The reparse
+;; v1.0 hardening: parse + serialize at scale.  The reparse
 ;; model is cache + full reparse on change (the client caches `valsi--tree' and
 ;; invalidates it on edit), so the load-bearing perf property is that a full
 ;; parse of a large plan is fast and correct, and that the edit->reparse loop

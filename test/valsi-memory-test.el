@@ -3,7 +3,7 @@
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
 ;;; Commentary:
-;; Unit tests for the memory grammar (Sprint 10): index vs record
+;; Unit tests for the memory grammar: index vs record
 ;; discrimination, record-kind frontmatter (user/feedback/project/reference,
 ;; nested or flat), typed fields, index pointers + [[wiki-links]], and the pure
 ;; cores of dedupe (duplicate targets / near-identical descriptions) and

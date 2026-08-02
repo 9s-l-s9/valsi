@@ -1,6 +1,6 @@
 # Multi-agent terminal model
 
-Status: design for later implementation (Sprint 14, T1411)
+Status: design for later implementation
 
 This document refines the multi-agent direction in ADR 0006.  Valsi manages
 named terminal instances around independent agent CLIs; it does not become an

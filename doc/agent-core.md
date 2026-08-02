@@ -5,7 +5,7 @@
 > frontend with stock agent CLIs in terminal-emulator buffers. The
 > `valsi-agent*.el` modules described below have now been deleted from the
 > working tree to keep it uncluttered; they remain retrievable from git history
-> (through the Sprint 11 commit). This document is kept as historical design
+>. This document is kept as historical design
 > rationale, not current setup guidance.
 
 Valsi previously shipped its own first-party agent brain to explore subscription
@@ -113,7 +113,7 @@ results back, and emits provider-neutral events on `valsi-agent-event-functions`
 (`agent-start`, `turn-start`, `message`, `tool-start`, `tool-end`, `agent-end`,
 `cancelled`, plus streaming deltas). A `valsi-agent-make-cancel` token, checked
 between turns, interrupts a run. This event stream is what the streaming Valsi
-buffer and the Sprint 7 node-diff review both consume.
+buffer and the node-diff review both consume.
 
 ## Sessions
 
@@ -128,14 +128,14 @@ session or credential is inspected or changed.
 
 `valsi-agent-load-instructions` assembles a system-context string from
 `AGENTS.md` / `CLAUDE.md` / `.valsi/instructions.md`, walking up from the working
-directory with **nearest-wins** precedence. This is the minimal Sprint-6 loader;
-it is swapped for the grammar-aware `valsi-instruction` version in Sprint 7.
+directory with **nearest-wins** precedence. This is the minimal first-pass loader;
+it was later swapped for the grammar-aware `valsi-instruction` version.
 
 ## Acceptance
 
 - **Mock (CI):** ERT drives the loop through a scripted tool call to completion
   deterministically, with no network (`valsi-test-agent-mock-loop`).
 - **Historical live gates:** the former native Anthropic OAuth check was
-  superseded by Sprint 13's Pi/Codex subscription acceptance. ADR 0006 retains
+  superseded by the Pi/Codex subscription acceptance. ADR 0006 retains
   the ownership result—credentials stay with the CLI—but moves login and resume
   back to the CLI's own terminal UI.

@@ -21,7 +21,7 @@ opens the per-artifact keymap and `C-c n m` the transient menu.
 
 | Suite | What it proves | Count |
 |---|---|---|
-| `make check` | artifact grammars and the transitional Sprint 13 native/Pi harness contract: pinned 0.80.6 golden JSONL traces, drift and crash recovery, session projection, AAP stdio, extension startup, and structured review seams. ADR 0006 preserves this as migration evidence; it is not proof of the terminal-application UX introduced in Sprint 14. | 210 |
+| `make check` | artifact grammars and the transitional native/Pi harness contract: pinned 0.80.6 golden JSONL traces, drift and crash recovery, session projection, AAP stdio, extension startup, and structured review seams. ADR 0006 preserves this as migration evidence; it is not proof of the terminal-application UX introduced later. | 210 |
 | `guix build -f valsi.scm` | the same 210-test contract runs inside the isolated package derivation, including packaged Pi launcher and live RPC/extension/session-list startup | 210 |
 | `make conformance` | the AAP wire contract any implementation must pass | 12 |
 | `make test-extension` / `make guix-test-extension` | Bun runs fail-closed Pi tool/file policy, symlink escapes, bash conservatism, approval failure, dry-run, correlated AAP client, authentication bridge, and projected SessionManager bridge | 23 |
@@ -34,10 +34,10 @@ opens the per-artifact keymap and `C-c n m` the transient menu.
 Legend: ✅ verified · — n/a. Each row is a manual check against a real corpus
 file (`test/fixtures/**`) in the demo Emacs.
 
-Historical Sprint 13 evidence as of 2026-07-30: Pi subscription login, smoke,
+Historical evidence as of 2026-07-30: Pi subscription login, smoke,
 and project-scoped restart/resume passed through the native RPC prototype. ADR
-0006 preserves that ownership/runtime evidence but supersedes its UI. Sprint
-14's Eat terminal, hub refresh, handoff, and window behavior require the
+0006 preserves that ownership/runtime evidence but supersedes its UI. The
+current Eat terminal, hub refresh, handoff, and window behavior require the
 application checks below; the historical pass is not substituted for them.
 
 ### Plan / tasks (flagship)

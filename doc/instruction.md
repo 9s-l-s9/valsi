@@ -6,8 +6,7 @@ are the **biggest install base and the weakest inherent structure** in the whole
 artifact set. Most of the file is free prose. That makes this genre Valsi's
 sharpest degradation test: it must add real value *without requiring* any
 structure, because the file is, and must stay, ordinary markdown a plain editor
-reads unchanged. The derived grammar is in
-[`research/04-instruction-grammar.md`](../research/04-instruction-grammar.md).
+reads unchanged. The grammar was derived from a corpus of real-world examples.
 
 ## Two scope axes
 

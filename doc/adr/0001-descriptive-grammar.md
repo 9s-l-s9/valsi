@@ -16,8 +16,7 @@ sense — must live in **structured artifacts**, not chat transcripts. The
 artifacts in question (plan/tasks files, AGENTS.md/CLAUDE.md, SKILL.md, memory
 files, ADRs, changelogs) are already **ordinary markdown on disk**, authored by
 many tools and hands, in dialects that diverge and are *months* old as
-conventions. Almost none of them is a settled standard (see the "nascent field"
-principle in `PLAN.md`).
+conventions. Almost none of them is a settled standard (a nascent field).
 
 The core design question: what is a Valsi "grammar"? Two stances were possible.
 
@@ -54,7 +53,7 @@ to **degrade** rather than break when structure is partial or unfamiliar.
 4. **Grammars are yours to define.** A grammar is *just* a recognizer set —
    **who authors one is open**. Bespoke, per-project grammars are first-class;
    the grammars Valsi bundles are opinionated defaults, not the point.
-   Corpus-derivation (the `research/` method) is only how Valsi **bootstraps the
+   Corpus-derivation is only how Valsi **bootstraps the
    grammars it ships** — it is *not* a property of grammars, nor a requirement,
    nor load-bearing.
 5. **Evidence over false standards.** Every *bundled* grammar is derived from a

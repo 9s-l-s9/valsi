@@ -15,7 +15,7 @@
 ;; by a pure type discriminator over (uri, frontmatter).  The load-time model is
 ;; first-class: the frontmatter is `eager' (always in the model's context, the
 ;; trigger) and the body is `lazy' (loaded only when the trigger fires) -- see
-;; the `:disclosure' node prop.  See research/05-promptfile-grammar.md.
+;; the `:disclosure' node prop.
 ;;
 ;; Evidence tier: emergent (single-vendor conventions, promoted).
 

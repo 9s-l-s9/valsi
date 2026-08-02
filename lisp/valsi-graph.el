@@ -15,7 +15,7 @@
 ;; An edge is a (SRC KIND TARGET) triple; the driver tags each with the file it
 ;; came from so the view can navigate.  The edge sources are **pluggable**: a
 ;; family registers one with `valsi-graph-register-edge-source' and its edges join
-;; the graph with no change to the core -- the extension point Sprint 11 families
+;; the graph with no change to the core -- the extension point future families
 ;; (ADR supersedes, handoff chains, commit/PR issue-refs, changelog provenance,
 ;; journal->memory promotion) hang off of.
 

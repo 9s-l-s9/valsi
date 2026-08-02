@@ -1,7 +1,7 @@
 # Valsi architecture
 
-Seed document (fleshed out in Sprint 2, T208). For the *why*, see the ADRs in
-`doc/adr/`. For the roadmap, see `PLAN.md`.
+For the *why*, see the ADRs in
+`doc/adr/`.
 
 ## Artifact application and agent boundary
 
@@ -22,7 +22,7 @@ The later named-instance, collision-warning, and Git-worktree model is
 specified in `doc/multi-agent.md`.  It extends this boundary without adding an
 agent messaging or transcript layer.
 
-The Sprint 13 `valsi-harness`/`valsi-pi` RPC implementation and native Elisp
+The earlier `valsi-harness`/`valsi-pi` RPC implementation and native Elisp
 agent loop remain historical/test source outside the product load graph. The
 only retained Pi integration is the narrow, read-only AAP artifact extension.
 
@@ -86,7 +86,7 @@ is JSON-serializable and is the center of every AAP message.
    document supports given the structure its grammar actually resolved — a grammar
    advertising what it can answer, not server incompleteness.
 
-The spec is *extracted* from this running server at Sprint 8 (`doc/aap-spec.md`),
+The spec is *extracted* from this running server (`doc/aap-spec.md`),
 once two grammar genres prove adaptability — not designed up front.
 
 ## Grammars are plugins
@@ -95,4 +95,4 @@ Every artifact family (plan/tasks, instruction, prompt-file, memory, and the
 v1.x decision/journal/changelog/handoff families) is an AAP grammar plugin: a set
 of recognizers → node types → the requests/commands it advertises. Adding a new
 artifact type is writing and registering a grammar — the third-party on-ramp
-(grammar SDK, Sprint 12). See `doc/defining-a-grammar.md` (Sprint 2).
+(a future grammar SDK).

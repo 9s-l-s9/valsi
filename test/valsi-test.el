@@ -345,7 +345,7 @@
       ;; all children open -> interior open
       (should (eq 'open (valsi-plan-effective-state one))))))
 
-;;;; Structure editing (Sprint 4): insert / renumber / add-dep
+;;;; Structure editing: insert / renumber / add-dep
 
 (ert-deftest valsi-test-plan-insert ()
   "insert-task appends the next Tnnn id in a speckit buffer."
@@ -494,7 +494,7 @@ interior-state contradictions."
          (issues (valsi-plan--lint-issues (valsi-plan-parse content))))
     (should (null issues))))
 
-;;;; Cross-artifact (Sprint 5): trace / coverage / staleness
+;;;; Cross-artifact: trace / coverage / staleness
 
 (ert-deftest valsi-test-plan-coverage ()
   "coverage groups tasks by the requirement ids they trace to."
@@ -736,7 +736,7 @@ interior-state contradictions."
       ;; server tree untouched by the client's shift
       (should (= off (valsi-node-beg task))))))
 
-;;;; Plan x agent (Sprint 7): context bundle, verify, node-diff review
+;;;; Plan x agent: context bundle, verify, node-diff review
 
 (defconst valsi-test--plan-agent-fixture
   (concat "## Sprint 1\n\n"

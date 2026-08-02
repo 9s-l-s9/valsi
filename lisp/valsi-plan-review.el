@@ -5,7 +5,7 @@
 
 ;;; Commentary:
 
-;; "Write through the grammar" made concrete (Sprint 7, T703): after an agent
+;; "Write through the grammar" made concrete: after an agent
 ;; edits a plan, Valsi shows a *node-level structural diff* -- which tasks were
 ;; added / removed / modified -- and lets the user accept or reject each change,
 ;; then applies only the accepted ones.  Never a silent overwrite.

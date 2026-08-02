@@ -65,7 +65,7 @@ compatibility, a packaging dependency, and process-failure handling. Pinning a
 tested Pi version, keeping protocol fixtures, reporting stderr separately, and
 retaining a small fallback backend contain those costs.
 
-## SDK host re-evaluation (T1312)
+## SDK host re-evaluation
 
 Pi 0.80.6 also exports `createAgentSession`, `createAgentSessionRuntime`,
 `AuthStorage`, `ModelRegistry`, and `SessionManager` for a TypeScript host.

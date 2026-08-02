@@ -5,8 +5,8 @@
 
 ;;; Commentary:
 
-;; AAP grammar plugin for the agent-written memory family (see
-;; research/06-memory-grammar.md).  A memory store is two node genres that
+;; AAP grammar plugin for the agent-written memory family,
+;; derived from a corpus of real-world examples.  A memory store is two node genres that
 ;; reference each other:
 ;;
 ;;   index   -- MEMORY.md, a list of pointer lines: - [Title](file.md) -- hook

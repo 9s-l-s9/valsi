@@ -36,4 +36,4 @@ implementation, bind `valsi-aap-request-function` to a client of that server
 (anything with the signature `(method params) → response-plist`) and provide the
 node-model JSON shape from `doc/aap-spec.md` §5. Passing the suite is the v0
 conformance bar. A second independent implementation passing it is the trigger to
-promote AAP from "extracted spec" to "standard" (v1.x, Sprint 12).
+promote AAP from "extracted spec" to "standard" (v1.x).

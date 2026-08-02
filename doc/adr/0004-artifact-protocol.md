@@ -4,17 +4,17 @@ Date: 2026-07-13
 
 ## Status
 
-Accepted. Shapes the Sprint 2 substrate and everything downstream. Supersedes the
+Accepted. Shapes the substrate and everything downstream. Supersedes the
 implicit "Valsi is an in-process Emacs minor-mode" assumption in ADR 0001's
 framing (0001's *descriptive-grammar* decision still holds).
 
-**Realized at Sprint 8.** Decision 7 ("extract the spec, don't invent it") is now
+**Realized.** Decision 7 ("extract the spec, don't invent it") is now
 executed: with two independent grammar genres running as plugins (plan/tasks +
 instruction), the protocol was extracted from the working server into
 [`doc/aap-spec.md`](../aap-spec.md) as **v0**, shipping with a machine-checkable
 conformance suite (`test/conformance/`, `make conformance`). Per this ADR it
 remains an *extracted spec*, not a *standard*, until a second independent
-implementation passes the suite (targeted v1.x, Sprint 12).
+implementation passes the suite (targeted v1.x).
 
 ## Context
 
@@ -72,12 +72,12 @@ LSP-style **wire protocol (JSON-RPC)** focused on agent artifacts.
    is the Emacs client (views/keymaps from buffers). Valsi does not chase UI
    editor-neutrality; it bets the best client lives in Emacs while the model stays
    portable.
-7. **Extract the spec, don't invent it.** AAP exists from Sprint 2 as Valsi's
-   *internal* contract. It is *formalized/published as v0 at Sprint 8*, only once
+7. **Extract the spec, don't invent it.** AAP exists from the start as Valsi's
+   *internal* contract. It is *formalized/published as v0* only once
    two independent grammar genres (plan/tasks + instruction) run as plugins and
    prove the adaptability — Valsi's own "derive, don't invent" method applied to
    the protocol. A conformance suite ships with it. It is not called a standard
-   until a second independent consumer exists (v1.x, Sprint 12).
+   until a second independent consumer exists (v1.x).
 
 ## Consequences
 
@@ -97,8 +97,8 @@ LSP-style **wire protocol (JSON-RPC)** focused on agent artifacts.
   registration; an in-process transport (same JSON types, no stdio) is a drop-in
   fallback if needed.
 - More architecture up front: `valsi-proto`, `valsi-registry`, `valsi-server`, and a
-  client/server discipline the substrate sprint must carry.
-- Standard-building has governance/neutrality obligations — deferred to Sprint 12,
+  client/server discipline the substrate must carry.
+- Standard-building has governance/neutrality obligations — deferred,
   kept light until adoption warrants it.
 
 **Neutral**

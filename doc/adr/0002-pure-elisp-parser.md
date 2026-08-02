@@ -5,7 +5,7 @@ Date: 2026-07-13
 ## Status
 
 Accepted. Records the parser strategy, the build toolchain, and the pinned Emacs
-floor (the latter verified in Sprint 0, T005).
+floor.
 
 ## Context
 
@@ -18,8 +18,8 @@ dependency, reproducible Guix package** (tooling decision, 2026-07-13).
 Separately, tree-sitter's *style* (declarative grammar-as-data + S-expression
 queries + robust/error-tolerant parsing) is attractive and compatible with the
 descriptive thesis — but that is a **style to borrow when extracting a grammar
-format (Sprint 8)**, not a reason to take the tree-sitter *engine* as a
-dependency. See the "Grammars are yours to define" principle in `PLAN.md`.
+format**, not a reason to take the tree-sitter *engine* as a
+dependency. See the "Grammars are yours to define" principle in ADR 0001.
 
 ## Decision
 
@@ -31,10 +31,10 @@ dependency. See the "Grammars are yours to define" principle in `PLAN.md`.
 - **Emacs floor: 29.1**; **dev/CI runs on 30.2** (what Guix currently provides).
   29.1 gives mature `jsonrpc.el`, bundled eglot (client reference), `secure-hash`,
   `base64url-encode-string`, and `make-network-process` — everything
-  `valsi-agent-auth` (research/03a) and the server/client need, without
+  `valsi-agent-auth` and the server/client need, without
   tree-sitter.
 
-## Verification (T005, 2026-07-13)
+## Verification (2026-07-13)
 
 ```
 guix shell nss-certs emacs emacs-markdown-mode emacs-package-lint -- \
@@ -51,9 +51,9 @@ not on the base PATH here — they come via `guix shell`, as expected.)
 - **Positive**: no native grammar install, no Emacs-29-tree-sitter requirement,
   fully controllable descriptive/degradation behaviour, reproducible builds.
 - **Negative**: we hand-write recognizers (cheap — they're line/block regex
-  classes) and own incremental-reparse performance (profiled in Sprint 10,
-  T1003). If a pure-elisp parser proves too slow on very large files, revisiting
+  classes) and own incremental-reparse performance (profiled during v1.0
+  hardening). If a pure-elisp parser proves too slow on very large files, revisiting
   tree-sitter as an *optional* accelerated backend remains open — this ADR is the
   record of that trade-off.
 - **Neutral**: the tree-sitter-*style* declarative grammar format + query layer
-  can still be adopted at Sprint 8 without adopting the engine.
+  can still be adopted without adopting the engine.

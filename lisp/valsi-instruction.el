@@ -9,8 +9,8 @@
 ;; .cursor/rules/*.mdc, .github/instructions/*.  Biggest install base, weakest
 ;; inherent structure -- the best degradation test.  Recognizes two scope axes
 ;; (heading location + frontmatter glob predicate), instruction items,
-;; imperative emphasis markers, @imports, and [[links]].  See
-;; research/04-instruction-grammar.md for the derived grammar.
+;; imperative emphasis markers, @imports, and [[links]].
+;; The grammar is derived from a corpus of real-world examples.
 ;;
 ;; Evidence tier: emergent (a convention, not a standard).
 

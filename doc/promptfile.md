@@ -7,8 +7,7 @@ degradation test; prompt files are **the one place a real, near-mandatory
 schema lives at the top of the file**. A `SKILL.md` without a `name` and
 `description` does not load; a subagent without a `description` never gets
 delegated to. So here Valsi's value is *validation and completion of a known
-vocabulary* — the opposite end of the ladder. The derived grammar is in
-[`research/05-promptfile-grammar.md`](../research/05-promptfile-grammar.md).
+vocabulary* — the opposite end of the ladder. The grammar was derived from a corpus of real-world examples.
 
 A prompt file is two documents stacked: a **strict, typed frontmatter header**
 and a **free-prose body** (the actual prompt).

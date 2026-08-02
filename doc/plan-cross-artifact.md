@@ -56,5 +56,5 @@ work-in-progress count. `RET` visits the file on the row.
 
 `valsi-plan-next-actionable` is the **agent-handoff primitive**: it jumps to the
 first open task whose dependencies are all satisfied (falling back to the first
-open task in document order below the rung). This is the query the Sprint 7 agent
+open task in document order below the rung). This is the query the agent
 bridge will call to pick the next task to dispatch.

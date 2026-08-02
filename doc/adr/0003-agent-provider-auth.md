@@ -4,7 +4,7 @@ Date: 2026-07-13
 
 ## Status
 
-Accepted; **implemented** (Sprint 6). Records the agent-core layering, the
+Accepted; **implemented**. Records the agent-core layering, the
 provider abstraction, and — the load-bearing part — the **authentication
 strategy**. The design landed as `valsi-agent-{provider,auth,tools,session}.el`
 and `valsi-agent.el`: the mock loop, tool contract, scoping, sessions, the
@@ -82,7 +82,7 @@ protocol surface.
    allow-lists), mutating tools are confirmed, dry-run exists — the invariant, not
    a feature flag.
 
-## Acceptance (M5, Sprint 6)
+## Acceptance
 
 With **no `ANTHROPIC_API_KEY` set**, Valsi authenticates via the Claude
 subscription (OAuth token reused from Claude Code, or a fresh PKCE login) and
