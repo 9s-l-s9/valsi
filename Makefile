@@ -20,7 +20,8 @@ ELC = $(SRC:.el=.elc)
 
 BATCH = $(EMACS) -Q --batch -L lisp -L test -L test/conformance
 
-.PHONY: all check check-all compile test test-extension conformance lint clean \
+.PHONY: all check check-all compile ensure-emacs test test-extension \
+	conformance lint clean \
 	run demo guix-check guix-check-all guix-test-extension \
 	guix-profile-smoke help
 
@@ -37,7 +38,14 @@ help:
 	@echo "make guix-check-all  run Emacs and extension gates in Guix"
 	@echo "make guix-profile-smoke  build installed package and require it in Emacs -Q"
 
-compile: clean
+# Fail early with a hint when no Emacs is available (e.g. outside guix shell).
+ensure-emacs:
+	@command -v $(EMACS) >/dev/null 2>&1 || { \
+	  echo "valsi: '$(EMACS)' not found."; \
+	  echo "  Try 'make guix-check', or 'make check EMACS=/path/to/emacs'."; \
+	  exit 1; }
+
+compile: ensure-emacs clean
 	$(BATCH) --eval "(setq byte-compile-error-on-warn t)" \
 	  -f batch-byte-compile $(SRC)
 
