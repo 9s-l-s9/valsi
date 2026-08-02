@@ -1,4 +1,4 @@
 (valsi
  :fetcher github
- :repo "s-l-s/valsi"
+ :repo "9s-l-s9/valsi"
  :files ("lisp/*.el" ("doc" "doc/valsi.texi")))
