@@ -102,6 +102,32 @@ path-specific corpus or documentation exceptions."
   :type '(repeat string)
   :group 'valsi-app)
 
+(defcustom valsi-app-dictionary-entry
+  '("valsi /ˈval.si/ · gismu"
+    "x1 is a word meaning x2 in language x3")
+  "Dictionary-entry lines heading the full hub, or nil for a plain header.
+The first line reads as headword, pronunciation, and word class; the
+headword (text before the first space) is emphasized.  Any further
+lines carry the definition.  The compact sidebar always uses the plain
+one-line header."
+  :type '(choice (const nil) (repeat string))
+  :group 'valsi-app)
+
+(defface valsi-headword-face
+  '((t :inherit bold :height 1.2))
+  "Face for the headword of the hub's dictionary entry."
+  :group 'valsi-app)
+
+(defface valsi-entry-face
+  '((t :inherit (font-lock-comment-face italic)))
+  "Face for the pronunciation and definition of the hub's dictionary entry."
+  :group 'valsi-app)
+
+(defface valsi-logo-face
+  '((t :inherit (font-lock-function-name-face bold)))
+  "Face for the Valsi wordmark in the hub header."
+  :group 'valsi-app)
+
 (defcustom valsi-app-tree-function nil
   "Optional command used by `valsi-app-project-tree'.
 Nil falls back to `project-dired'."
@@ -583,8 +609,25 @@ Diagnostics and semantic staleness count only for an open artifact."
 
 (defun valsi-app--insert-header (root recognized markdown agents)
   "Insert the hub header for ROOT over RECOGNIZED, MARKDOWN, and AGENTS."
-  (insert (propertize (format "Valsi  %s\n" (valsi-app--project-name root))
-                      'face 'bold))
+  (if (and valsi-app-dictionary-entry (not valsi-app--compact))
+      (let* ((head (car valsi-app-dictionary-entry))
+             (split (string-search " " head)))
+        (if split
+            (insert (propertize (substring head 0 split)
+                                'face 'valsi-headword-face)
+                    (propertize (substring head split)
+                                'face 'valsi-entry-face)
+                    "\n")
+          (insert (propertize head 'face 'valsi-headword-face) "\n"))
+        (when (cdr valsi-app-dictionary-entry)
+          (insert "\n")
+          (dolist (line (cdr valsi-app-dictionary-entry))
+            (insert (propertize line 'face 'valsi-entry-face) "\n")))
+        (insert "\n\n")
+        (insert (propertize (format "%s\n" (valsi-app--project-name root))
+                            'face 'bold)))
+    (insert (propertize (format "Valsi  %s\n" (valsi-app--project-name root))
+                        'face 'bold)))
   (insert (propertize
            (if valsi-app--compact
                (format "%d artifacts · %d attention\n"
