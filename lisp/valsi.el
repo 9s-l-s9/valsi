@@ -3,7 +3,7 @@
 ;; Copyright (C) 2026 Samuel Schmidt
 ;; Author: Samuel Schmidt <schmidt.l.samuel@gmail.com>
 ;; Version: 1.0.0
-;; Package-Requires: ((emacs "29.1") (eat "0.9.4"))
+;; Package-Requires: ((emacs "29.1"))
 ;; Keywords: convenience, docs, tools
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 ;; URL: https://github.com/9s-l-s9/valsi
@@ -23,6 +23,13 @@
 ;;
 ;; The buffer stays plain markdown: `valsi-artifact-minor-mode' only layers
 ;; font-lock + a keymap on top (the minor-mode / liveness invariant).
+;;
+;; Optional dependencies (soft-required, never installed by this package):
+;; markdown-mode for the usual markdown editing on top of the views, and Eat
+;; (>= 0.9.4) for `valsi-agent' terminals.  The Package-Requires header above
+;; is the single source of truth for the hard dependency set; README, the
+;; manual, and the Guix package defer to it and `make verify-meta' checks
+;; that the version and URL they repeat agree with it.
 
 ;;; Code:
 
