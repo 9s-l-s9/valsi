@@ -181,7 +181,7 @@ server without a global npm installation.")
           (files '("share/emacs/site-lisp")))))
   ;; nss-certs is here so the dev shell has the TLS roots the R-track needs.
   (native-inputs (list nss-certs))
-  (home-page "https://github.com/s-l-s/valsi")
+  (home-page "https://github.com/9s-l-s9/valsi")
   (synopsis "Emacs application for agent artifacts and terminal agents")
   (description
    "Valsi is an Emacs client/server harness for the structured markdown

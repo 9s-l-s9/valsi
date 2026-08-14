@@ -6,7 +6,7 @@
 ;; Package-Requires: ((emacs "29.1") (eat "0.9.4"))
 ;; Keywords: convenience, docs, tools
 ;; SPDX-License-Identifier: GPL-3.0-or-later
-;; URL: https://github.com/s-l-s/valsi
+;; URL: https://github.com/9s-l-s9/valsi
 
 ;;; Commentary:
 
