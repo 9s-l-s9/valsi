@@ -18,6 +18,7 @@ SRC = lisp/valsi-node.el lisp/valsi-parse.el lisp/valsi-view.el \
       lisp/valsi-plan-review.el lisp/valsi-plan-agent.el \
       lisp/valsi.el
 ELC = $(SRC:.el=.elc)
+TESTS = $(sort $(wildcard test/*-test.el))
 
 BATCH = $(EMACS) -Q --batch -L lisp -L test -L test/conformance
 
@@ -53,10 +54,9 @@ compile: ensure-emacs clean
 %.elc: %.el
 	$(BATCH) -f batch-byte-compile $<
 
+# Every test/*-test.el is loaded; valsi-test.el requires the conformance suite.
 test:
-	$(BATCH) -l ert -l test/valsi-test.el \
-	  -l test/valsi-app-live-refresh-test.el \
-	  -l test/valsi-app-test.el \
+	$(BATCH) -l ert $(patsubst %,-l %,$(TESTS)) \
 	  -f ert-run-tests-batch-and-exit
 
 test-extension:
