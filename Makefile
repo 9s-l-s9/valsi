@@ -4,7 +4,8 @@
 
 EMACS ?= emacs
 GUIX  ?= guix
-BUN   ?= bun
+# The extension tests are node:test files; Bun runs them too (CI uses Bun).
+NODE  ?= node
 
 # Load order matters (dependencies first).
 SRC = lisp/valsi-node.el lisp/valsi-parse.el lisp/valsi-view.el \
@@ -30,7 +31,7 @@ all: check
 help:
 	@echo "make compile  byte-compile (warnings->errors)"
 	@echo "make test     run ERT suite"
-	@echo "make test-extension  run Pi extension tests with Bun"
+	@echo "make test-extension  run Pi extension tests (node --test; NODE=bun works too)"
 	@echo "make lint     checkdoc"
 	@echo "make check    compile + checkdoc + test"
 	@echo "make run      launch demo Emacs with Valsi"
@@ -59,7 +60,7 @@ test:
 	  -f ert-run-tests-batch-and-exit
 
 test-extension:
-	$(BUN) test extensions/valsi-pi/test/*.test.mjs
+	$(NODE) --test extensions/valsi-pi/test/*.test.mjs
 
 # Run only the AAP conformance suite (what a third-party implementation runs).
 conformance:
@@ -80,7 +81,7 @@ guix-check:
 	$(GUIX) shell -D -f valsi.scm -- $(MAKE) check EMACS=emacs
 
 guix-test-extension:
-	$(GUIX) shell bun -- bun test extensions/valsi-pi/test/*.test.mjs
+	$(GUIX) shell node -- $(MAKE) test-extension NODE=node
 
 guix-check-all: guix-check guix-test-extension
 	@echo "Valsi: all Guix checks OK"

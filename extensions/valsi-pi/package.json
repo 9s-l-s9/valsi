@@ -1,12 +1,12 @@
 {
-  "name": "valsi-pi-policy-gate",
+  "name": "valsi-pi",
   "private": true,
+  "description": "Valsi artifact bridge for Pi: the read-only valsi_artifact AAP tool",
   "type": "module",
   "scripts": {
     "test": "node --test test/*.test.mjs"
   },
   "engines": {
-    "node": ">=22.19.0"
+    "node": ">=22"
   }
 }
-
