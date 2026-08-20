@@ -6,6 +6,7 @@ EMACS ?= emacs
 GUIX  ?= guix
 # The extension tests are node:test files; Bun runs them too (CI uses Bun).
 NODE  ?= node
+MAKEINFO ?= makeinfo
 
 # Load order matters (dependencies first).
 SRC = lisp/valsi-node.el lisp/valsi-parse.el lisp/valsi-view.el \
@@ -23,7 +24,7 @@ TESTS = $(sort $(wildcard test/*-test.el))
 BATCH = $(EMACS) -Q --batch -L lisp -L test -L test/conformance
 
 .PHONY: all check check-all compile ensure-emacs test test-extension \
-	conformance lint clean \
+	conformance lint info clean \
 	run demo guix-check guix-check-all guix-test-extension \
 	guix-profile-smoke help
 
@@ -34,6 +35,7 @@ help:
 	@echo "make test     run ERT suite"
 	@echo "make test-extension  run Pi extension tests (node --test; NODE=bun works too)"
 	@echo "make lint     checkdoc"
+	@echo "make info     build doc/valsi.info from the texinfo manual"
 	@echo "make check    compile + checkdoc + test"
 	@echo "make run      launch demo Emacs with Valsi"
 	@echo "make guix-check  run 'make check' inside 'guix shell'"
@@ -70,6 +72,11 @@ conformance:
 lint:
 	$(BATCH) --eval "(mapc #'checkdoc-file '($(patsubst %,\"%\",$(SRC))))"
 
+info: doc/valsi.info
+
+doc/valsi.info: doc/valsi.texi
+	$(MAKEINFO) --no-split -o $@ $<
+
 check: compile lint test
 	@echo "Valsi: check OK"
 
@@ -97,4 +104,4 @@ run demo:
 	$(GUIX) shell -D -f valsi.scm -- $(EMACS) -Q -L lisp -l valsi-demo.el
 
 clean:
-	rm -f $(ELC)
+	rm -f $(ELC) doc/valsi.info

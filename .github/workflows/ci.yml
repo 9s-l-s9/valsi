@@ -20,6 +20,13 @@ jobs:
       # compile (warnings are errors) + checkdoc + ERT, same gate as local.
       - run: make check
 
+  info:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y texinfo
+      - run: make info
+
   extension:
     runs-on: ubuntu-latest
     steps:
