@@ -24,7 +24,7 @@ TESTS = $(sort $(wildcard test/*-test.el))
 BATCH = $(EMACS) -Q --batch -L lisp -L test -L test/conformance
 
 .PHONY: all check check-all compile ensure-emacs test test-extension \
-	conformance lint info clean \
+	conformance lint verify-meta info clean \
 	run demo guix-check guix-check-all guix-test-extension \
 	guix-profile-smoke help
 
@@ -35,8 +35,9 @@ help:
 	@echo "make test     run ERT suite"
 	@echo "make test-extension  run Pi extension tests (node --test; NODE=bun works too)"
 	@echo "make lint     checkdoc"
+	@echo "make verify-meta  check version/URL/deps agree with lisp/valsi.el"
 	@echo "make info     build doc/valsi.info from the texinfo manual"
-	@echo "make check    compile + checkdoc + test"
+	@echo "make check    compile + checkdoc + verify-meta + test"
 	@echo "make run      launch demo Emacs with Valsi"
 	@echo "make guix-check  run 'make check' inside 'guix shell'"
 	@echo "make guix-check-all  run Emacs and extension gates in Guix"
@@ -72,12 +73,35 @@ conformance:
 lint:
 	$(BATCH) --eval "(mapc #'checkdoc-file '($(patsubst %,\"%\",$(SRC))))"
 
+# lisp/valsi.el's header is the single source of truth for the version, URL
+# and hard dependencies (package.el, MELPA and Guix all read it).  Everything
+# that repeats a fact from it is checked here rather than typed twice.
+verify-meta: ensure-emacs
+	@$(BATCH) -l lisp-mnt --eval '(with-temp-buffer (insert-file-contents "lisp/valsi.el") (princ (format "%s\n%s\n" (lm-version) (lm-homepage))))' > .meta.tmp
+	@v=$$(sed -n 1p .meta.tmp); u=$$(sed -n 2p .meta.tmp); \
+	  slug=$${u#https://github.com/}; rm -f .meta.tmp; ok=1; \
+	  grep -q "(version \"$$v\")" valsi.scm \
+	    || { echo "verify-meta: valsi.scm version != $$v"; ok=0; }; \
+	  grep -q "(home-page \"$$u\")" valsi.scm \
+	    || { echo "verify-meta: valsi.scm home-page != $$u"; ok=0; }; \
+	  grep -q ":repo \"$$slug\"" recipes/valsi \
+	    || { echo "verify-meta: recipes/valsi :repo != $$slug"; ok=0; }; \
+	  grep -q "^## \[$$v\]" CHANGELOG.md \
+	    || { echo "verify-meta: CHANGELOG.md has no ## [$$v] entry"; ok=0; }; \
+	  grep -q '"name": "valsi-pi"' extensions/valsi-pi/package.json \
+	    || { echo "verify-meta: extension package.json name != valsi-pi"; ok=0; }; \
+	  if git remote get-url origin >/dev/null 2>&1; then \
+	    o=$$(git remote get-url origin | sed 's#\.git$$##; s#^git@github.com:#https://github.com/#'); \
+	    [ "$$o" = "$$u" ] || echo "verify-meta: note: origin ($$o) != URL header ($$u)"; \
+	  fi; \
+	  [ $$ok = 1 ] && echo "verify-meta: $$v $$u OK"
+
 info: doc/valsi.info
 
 doc/valsi.info: doc/valsi.texi
 	$(MAKEINFO) --no-split -o $@ $<
 
-check: compile lint test
+check: compile lint verify-meta test
 	@echo "Valsi: check OK"
 
 check-all: check test-extension
@@ -104,4 +128,4 @@ run demo:
 	$(GUIX) shell -D -f valsi.scm -- $(EMACS) -Q -L lisp -l valsi-demo.el
 
 clean:
-	rm -f $(ELC) doc/valsi.info
+	rm -f $(ELC) .meta.tmp doc/valsi.info

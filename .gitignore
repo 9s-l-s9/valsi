@@ -11,3 +11,6 @@
 # Build / doc artifacts
 *.info
 /doc/*.html
+
+# make verify-meta scratch
+.meta.tmp
