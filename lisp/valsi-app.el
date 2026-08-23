@@ -1208,8 +1208,9 @@ Every hint is validated against SOURCE's live keymaps."
 
 (defun valsi-app-show-command-rail (&optional source root)
   "Show command chrome for SOURCE when the current frame is wide enough.
-Return nil without complaint when SOURCE belongs to no Emacs project, so
-callers on the `find-file' path degrade instead of signaling."
+ROOT is the project root of SOURCE; it is computed when nil.  Return nil
+without complaint when SOURCE belongs to no Emacs project, so callers on
+the `find-file' path degrade instead of signaling."
   (when-let* ((valsi-app-auto-command-rail)
               ((>= (frame-width) valsi-app-command-rail-minimum-frame-width))
               (source (or source (current-buffer)))
@@ -1306,7 +1307,7 @@ When FORCE is non-nil, honor an explicit request even on a narrow frame."
 
 (defun valsi-app-hide-sidebars (&optional frame)
   "Delete every Valsi contextual sidebar in FRAME.
-FRAME defaults to the selected frame. Primary windows are never deleted."
+FRAME defaults to the selected frame.  Primary windows are never deleted."
   (interactive)
   (let ((frame (or frame (selected-frame))))
     (dolist (window (window-list frame 'nomini))
