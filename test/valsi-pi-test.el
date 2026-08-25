@@ -430,10 +430,24 @@
           (should (equal (valsi-pi--extension-file) extension)))
       (delete-directory root t))))
 
+(defun valsi-pi-test--pinned-version ()
+  "Return the Pi version the harness is pinned to, from the protocol id."
+  (car (last (split-string valsi-pi-protocol-version "/"))))
+
+(defun valsi-pi-test--installed-version (pi)
+  "Return the version string printed by the executable PI, or nil."
+  (with-temp-buffer
+    (when (eq 0 (ignore-errors (call-process pi nil t nil "--version")))
+      (string-trim (buffer-string)))))
+
 (ert-deftest valsi-pi-test-live-pinned-extension-smoke ()
-  "A discoverable Pi starts in RPC mode with the audited deny-all gate."
+  "A discoverable Pi at the pinned version starts in RPC mode.
+Skipped, not failed, when the Pi on PATH is another version: the wire
+contract is pinned, and a dev machine may carry a newer or older Pi."
   (let ((pi (executable-find valsi-pi-program)))
     (skip-unless pi)
+    (skip-unless (equal (valsi-pi-test--installed-version pi)
+                        (valsi-pi-test--pinned-version)))
     (let* ((client (valsi-pi-create :program pi))
            result)
       (unwind-protect
