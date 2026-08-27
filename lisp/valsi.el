@@ -464,15 +464,38 @@ dashboards: same node tree, same sectioned rendering as the sidebar."
 
 ;;;; Global auto-enable
 
+(defcustom valsi-detect-head-limit 65536
+  "How many characters of a buffer grammar detection reads.
+`valsi-global-mode' runs `valsi-registry-detect' on every markdown buffer it
+sees, on each major-mode change.  Every bundled grammar scores on the file
+name plus signals near the top of the file (frontmatter, the first task
+lines), so reading the whole of a large buffer is wasted work.  Nil means
+read the whole buffer."
+  :type '(choice (const :tag "Whole buffer" nil) (natnum :tag "Characters"))
+  :group 'valsi)
+
+(defun valsi--detection-text ()
+  "Return the text `valsi--maybe-enable' hands to grammar detection.
+Honors `valsi-detect-head-limit' and ignores narrowing."
+  (save-restriction
+    (widen)
+    (buffer-substring-no-properties
+     (point-min)
+     (if valsi-detect-head-limit
+         (min (point-max) (+ (point-min) valsi-detect-head-limit))
+       (point-max)))))
+
 (defun valsi--maybe-enable ()
-  "Enable `valsi-artifact-minor-mode' if a grammar matches this buffer."
-  (unless valsi--initialized (valsi-init))
-  (when (and (derived-mode-p 'text-mode 'markdown-mode 'fundamental-mode)
-             buffer-file-name
+  "Enable `valsi-artifact-minor-mode' if a grammar matches this buffer.
+The cheap file-name test runs first; grammar detection, which needs the
+buffer text, only runs for markdown files."
+  (when (and buffer-file-name
              (string-match-p "\\.\\(md\\|mdc\\|markdown\\)\\'" buffer-file-name)
-             (not (eq (valsi-registry-detect buffer-file-name (buffer-string))
-                      'generic)))
-    (valsi-artifact-minor-mode 1)))
+             (derived-mode-p 'text-mode 'markdown-mode 'fundamental-mode))
+    (unless valsi--initialized (valsi-init))
+    (unless (eq (valsi-registry-detect buffer-file-name (valsi--detection-text))
+                'generic)
+      (valsi-artifact-minor-mode 1))))
 
 ;;;###autoload
 (define-globalized-minor-mode valsi-global-mode
