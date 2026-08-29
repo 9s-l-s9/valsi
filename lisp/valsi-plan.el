@@ -47,96 +47,116 @@
   "Parse the current buffer into a plan/tasks node tree (buffer positions)."
   (let* ((root (valsi-node-create :type 'plan :beg (point-min) :end (point-max)
                                  :recognizer 'valsi-plan))
-         (lines (valsi-parse-lines (current-buffer)))
-         (heading-stack nil)          ; (level . group-node)
-         (task-stack nil)             ; list of task nodes, deepest first
+         (heading-stack nil)          ; (level . group-node), innermost first
+         (task-stack nil)             ; task nodes, deepest first
          (current-group root)
          (current-task nil))
-    (dolist (line lines)
+    (dolist (line (valsi-parse-lines (current-buffer)))
       (let* ((text (valsi-line-text line))
              (heading (valsi-parse-heading text))
-             (checkbox (valsi-parse-checkbox text)))
+             (checkbox (and (not heading) (valsi-parse-checkbox text))))
         (cond
-         ;; Heading -> group
+         ;; Heading -> group; reset the task context.
          (heading
-          (let ((g (valsi-node-create
-                    :type 'group
-                    :beg (valsi-line-beg line) :end (valsi-line-end line)
-                    :recognizer 'valsi-plan-r4
-                    :props (list :level (car heading) :title (cdr heading)))))
-            (while (and heading-stack (>= (caar heading-stack) (car heading)))
-              (pop heading-stack))
-            (if heading-stack
-                (valsi-node-add-child (cdar heading-stack) g)
-              (valsi-node-add-child root g))
-            (push (cons (car heading) g) heading-stack)
-            (setq current-group g task-stack nil current-task nil)))
-         ;; Checkbox -> task
+          (let ((g (valsi-plan--group-node line heading)))
+            (setq heading-stack (valsi-plan--push-group root heading-stack g)
+                  current-group g
+                  task-stack nil
+                  current-task nil)))
+         ;; Checkbox -> task, parented by id-prefix, indent, or group.
          (checkbox
-          (let* ((rest (plist-get checkbox :rest))
-                 (indent (plist-get checkbox :indent))
-                 (id (valsi-parse-id rest))
-                 (key (valsi-parse-sort-key id))
-                 (task (valsi-node-create
-                        :type 'task
-                        :beg (valsi-line-beg line) :end (valsi-line-end line)
-                        :confidence 'exact
-                        :recognizer 'valsi-plan-r1
-                        :props (list :state (plist-get checkbox :state)
-                                     :char (plist-get checkbox :char)
-                                     :id id
-                                     :sort-key key
-                                     :indent indent
-                                     :tags (valsi-parse-tags rest)
-                                     :deps (valsi-parse-deps rest)
-                                     :pathrefs (valsi-parse-pathrefs rest)
-                                     :desc rest
-                                     :line (valsi-line-n line)))))
-            ;; Find parent: by id-prefix, else by indent, else group.
-            (let ((parent (valsi-plan--find-parent task task-stack)))
-              (if parent
-                  (valsi-node-add-child parent task)
-                (valsi-node-add-child current-group task)))
-            ;; Maintain task stack (drop siblings/deeper).
-            (setq task-stack
-                  (cons task
-                        (cl-remove-if
-                         (lambda (tk)
-                           (not (valsi-plan--ancestor-p tk task)))
-                         task-stack)))
-            (setq current-task task)))
-         ;; Requirements trace (R6a) -> attach to current task
-         ((valsi-parse-requirements text)
-          (when current-task
-            (valsi-node-put
-             current-task :traces
-             (append (valsi-node-prop current-task :traces)
-                     (valsi-parse-requirements text)))
-            (valsi-node-add-child
-             current-task
-             (valsi-node-create :type 'trace
-                               :beg (valsi-line-beg line) :end (valsi-line-end line)
-                               :recognizer 'valsi-plan-r6a
-                               :props (list :reqs (valsi-parse-requirements text))))))
-         ;; Meta label (R4/R9/R10) -> attach to task or group
-         ((valsi-parse-meta-label text)
-          (let ((m (valsi-node-create
-                    :type 'meta
-                    :beg (valsi-line-beg line) :end (valsi-line-end line)
-                    :recognizer 'valsi-plan-r9
-                    :props (list :label (valsi-parse-meta-label text)
-                                 :text text))))
-            (valsi-node-add-child (or current-task current-group) m)))
-         ;; Plain bullet under a task -> step (R7)
-         ((and current-task (valsi-parse-bullet text))
-          (valsi-node-add-child
-           current-task
-           (valsi-node-create :type 'step
-                             :beg (valsi-line-beg line) :end (valsi-line-end line)
-                             :recognizer 'valsi-plan-r7
-                             :props (list :text (cdr (valsi-parse-bullet text)))))))))
+          (let ((task (valsi-plan--task-node line checkbox)))
+            (setq task-stack (valsi-plan--push-task task task-stack current-group)
+                  current-task task)))
+         ;; Anything else: trace / meta / step, attached to the current context.
+         (t (valsi-plan--attach-line-node line text current-task current-group)))))
     (valsi-node-put root :dialect (valsi-plan--detect-dialect root))
     root))
+
+(defun valsi-plan--group-node (line heading)
+  "Build the group node (R4) for LINE, whose parsed HEADING is (LEVEL . TITLE)."
+  (valsi-node-create
+   :type 'group
+   :beg (valsi-line-beg line) :end (valsi-line-end line)
+   :recognizer 'valsi-plan-r4
+   :props (list :level (car heading) :title (cdr heading))))
+
+(defun valsi-plan--push-group (root heading-stack group)
+  "Attach GROUP under the enclosing heading in HEADING-STACK, or under ROOT.
+HEADING-STACK is a list of (LEVEL . GROUP-NODE), innermost first; headings
+at the same or a deeper level than GROUP are closed.  Return the new stack
+with GROUP on top."
+  (let ((level (valsi-node-prop group :level)))
+    (while (and heading-stack (>= (caar heading-stack) level))
+      (pop heading-stack))
+    (valsi-node-add-child (if heading-stack (cdar heading-stack) root) group)
+    (cons (cons level group) heading-stack)))
+
+(defun valsi-plan--task-node (line checkbox)
+  "Build the task node (R1) for LINE from its parsed CHECKBOX plist."
+  (let* ((rest (plist-get checkbox :rest))
+         (id (valsi-parse-id rest)))
+    (valsi-node-create
+     :type 'task
+     :beg (valsi-line-beg line) :end (valsi-line-end line)
+     :confidence 'exact
+     :recognizer 'valsi-plan-r1
+     :props (list :state (plist-get checkbox :state)
+                  :char (plist-get checkbox :char)
+                  :id id
+                  :sort-key (valsi-parse-sort-key id)
+                  :indent (plist-get checkbox :indent)
+                  :tags (valsi-parse-tags rest)
+                  :deps (valsi-parse-deps rest)
+                  :pathrefs (valsi-parse-pathrefs rest)
+                  :desc rest
+                  :line (valsi-line-n line)))))
+
+(defun valsi-plan--push-task (task task-stack current-group)
+  "Attach TASK to its parent in TASK-STACK (else CURRENT-GROUP).
+The parent is found by id-prefix, else by indent.  Return the new stack:
+TASK on top of the ancestors that remain open (siblings and deeper tasks
+are dropped)."
+  (valsi-node-add-child (or (valsi-plan--find-parent task task-stack)
+                            current-group)
+                        task)
+  (cons task
+        (cl-remove-if (lambda (tk) (not (valsi-plan--ancestor-p tk task)))
+                      task-stack)))
+
+(defun valsi-plan--attach-line-node (line text current-task current-group)
+  "Attach the trace, meta, or step node for LINE (with TEXT), if any.
+Requirements traces (R6a) and plain bullets (R7) go under CURRENT-TASK;
+meta labels (R9) go under CURRENT-TASK, or CURRENT-GROUP when no task is
+open.  Return the node added, or nil when LINE is none of these."
+  (let ((reqs (valsi-parse-requirements text))
+        (label (valsi-parse-meta-label text))
+        (bullet (valsi-parse-bullet text)))
+    (cond
+     (reqs
+      (when current-task
+        (valsi-node-put current-task :traces
+                        (append (valsi-node-prop current-task :traces) reqs))
+        (valsi-node-add-child
+         current-task
+         (valsi-node-create :type 'trace
+                            :beg (valsi-line-beg line) :end (valsi-line-end line)
+                            :recognizer 'valsi-plan-r6a
+                            :props (list :reqs reqs)))))
+     (label
+      (valsi-node-add-child
+       (or current-task current-group)
+       (valsi-node-create :type 'meta
+                          :beg (valsi-line-beg line) :end (valsi-line-end line)
+                          :recognizer 'valsi-plan-r9
+                          :props (list :label label :text text))))
+     ((and current-task bullet)
+      (valsi-node-add-child
+       current-task
+       (valsi-node-create :type 'step
+                          :beg (valsi-line-beg line) :end (valsi-line-end line)
+                          :recognizer 'valsi-plan-r7
+                          :props (list :text (cdr bullet))))))))
 
 (defun valsi-plan--ancestor-p (candidate task)
   "Return non-nil if CANDIDATE could be an ancestor of TASK.
