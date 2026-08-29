@@ -8,7 +8,8 @@
 ;;   guix shell nss-certs emacs emacs-markdown-mode -- emacs -Q -L lisp -l valsi-demo.el
 ;;   (or simply: make run)
 ;;
-;; It loads Valsi, turns on `valsi-global-mode', opens PLAN.md with the plan
+;; It loads Valsi, turns on `valsi-global-mode', opens the project's PLAN.md
+;; (or the sample plan under examples/ when there is none) with the plan
 ;; grammar active, and prints the keymap so you can drive it.
 
 ;;; Code:
@@ -20,9 +21,13 @@
 (valsi-init)
 (valsi-global-mode 1)
 
-;; Open the flagship artifact -- a real plan/tasks file.
-(let ((plan (expand-file-name "PLAN.md" default-directory)))
-  (when (file-exists-p plan)
+;; Open the flagship artifact -- a real plan/tasks file.  The repository has
+;; none of its own, so fall back to the bundled sample.
+(let ((plan (seq-find #'file-exists-p
+                      (list (expand-file-name "PLAN.md" default-directory)
+                            (expand-file-name "examples/PLAN.md"
+                                              default-directory)))))
+  (when plan
     (find-file plan)
     (unless (bound-and-true-p valsi-artifact-minor-mode)
       (valsi-artifact-minor-mode 1))))
