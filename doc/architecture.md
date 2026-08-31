@@ -19,7 +19,7 @@ process/focus conveniences, and explicit artifact handoff. It never scrapes
 terminal cells to reproduce structured state.
 
 The later named-instance, collision-warning, and Git-worktree model is
-specified in `doc/multi-agent.md`.  It extends this boundary without adding an
+specified in `design/multi-agent.md`.  It extends this boundary without adding an
 agent messaging or transcript layer.
 
 The earlier `valsi-harness`/`valsi-pi` RPC implementation and native Elisp

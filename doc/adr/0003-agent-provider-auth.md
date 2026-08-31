@@ -119,6 +119,6 @@ api-key path. A mock-provider ERT run drives the same loop deterministically.
 - The provider interface leaves room for api-key, openai-compatible, and gptel
   adapters as secondary paths without disturbing the primary OAuth design.
 
-_Cross-refs: `research/03-agent-core-references.md` (layering, tool contract,
+_Cross-refs: `design/agent-core.md` (formerly `research/03-agent-core-references.md`) (layering, tool contract,
 session format), `research/03a-oauth-flow-notes.md` (constants + flow), ADR 0004
 (why agent dispatch is out of AAP scope)._
