@@ -25,10 +25,11 @@ so a bespoke, per-project artifact type is a normal thing to add.
 
 ## Requirements
 
-Emacs 29.1 or later and markdown-mode.  The optional terminal-agent
-integration additionally uses Eat and an agent CLI (Pi is the tested
-default; Codex CLI and Claude Code also work).  Guix is convenient but
-not required.
+Emacs 29.1 or later, as declared in the `Package-Requires` header of
+`lisp/valsi.el` (the single source of truth for version, URL, and
+dependencies).  markdown-mode and Eat are optional; the terminal-agent
+integration uses Eat plus an agent CLI (Pi is the tested default; Codex
+CLI and Claude Code also work).  Guix is convenient but not required.
 
 ## Installation
 
@@ -84,15 +85,24 @@ Valsi hands it artifact context rather than wrapping it.
 To try everything in a scratch Emacs:
 
     make run      # guix shell + emacs -Q -l valsi-demo.el
-    make check    # byte-compile (warnings as errors) + Checkdoc + ERT
+    make check    # byte-compile (warnings as errors) + Checkdoc + verify-meta + ERT
+
+`make run` opens the project's PLAN.md, or `examples/PLAN.md` when the
+project has none.
 
 ## Documentation
 
-The reference manual is `doc/valsi.texi` (`makeinfo doc/valsi.texi`).
-`doc/architecture.md` describes the client/server split over the Agent
-Artifact Protocol; the protocol itself is specified in
+The reference manual is `doc/valsi.texi` (`make info` builds
+`doc/valsi.info`).  Per-family references: `doc/plan-editing.md`,
+`doc/plan-cross-artifact.md`, `doc/plan-agent.md` (plan),
+`doc/instruction.md` (instruction), and `doc/promptfile.md`
+(prompt-file).  `doc/architecture.md` describes the client/server split
+over the Agent Artifact Protocol; the protocol itself is specified in
 `doc/aap-spec.md` with a conformance suite under `test/conformance/`.
-Design decisions are recorded in `doc/adr/`.
+Design decisions are recorded in `doc/adr/`; design notes and
+historical working notes are under `design/`.  `CHANGELOG.md` records
+releases (Keep a Changelog) and `AGENTS.md` holds the working rules for
+contributors and agents.
 
 ## License
 

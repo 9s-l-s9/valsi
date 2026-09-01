@@ -49,9 +49,13 @@ file stays ordinary, diffable, and portable.
 * Instruction family::   AGENTS.md / CLAUDE.md scoped rules.
 * Prompt-file family::   SKILL.md, subagents, commands.
 * Memory family::        Index + record store.
+* Changelog family::     CHANGELOG.md, Keep a Changelog.
+* Decision family::      ADR/MADR records under doc/adr/.
+* Overview family::      README.md, ARCHITECTURE.md: the degradation floor.
 * Cross-artifact graph:: The thesis capstone.
 * The agent harness::    Artifact application and terminal-native agents.
 * The AAP protocol::     The open wire contract Valsi implements.
+* Developing::           AGENTS.md, CHANGELOG.md, and the metadata rule.
 * Index::                Concept index.
 @end menu
 
@@ -91,11 +95,28 @@ guix build -f valsi.scm                  # build + byte-compile
 guix shell -D -f valsi.scm -- make check # dev shell + full test suite
 @end example
 
-The package also propagates Eat, a pinned Pi 0.80.6 runtime, and Valsi's optional
-read-only AAP artifact extension. Pi owns its normal authentication, tools,
-permissions, and sessions. MELPA and source installations need Eat and a
-compatible agent CLI separately.
-The Emacs floor is 29.1 and CI runs on 30.2.
+The Guix package takes the hard dependency set from the
+@code{Package-Requires} header of @file{lisp/valsi.el} (@pxref{Requirements}).
+On top of that it propagates Eat, a pinned Pi 0.80.6 runtime, and Valsi's
+optional read-only AAP artifact extension, so a Guix install has the agent
+terminals working out of the box.  Pi owns its normal authentication, tools,
+permissions, and sessions.
+
+@anchor{Requirements}
+@section Requirements
+
+The hard dependencies are declared in the @code{Package-Requires} header of
+@file{lisp/valsi.el}; that header is the single source of truth for the
+version, URL, and dependencies, and @code{make verify-meta} checks the Guix
+package, MELPA recipe, and changelog against it.  At the time of writing the
+only hard requirement is Emacs 29.1 or later.  CI runs the full check gate on
+Emacs 29.1 and 30.1.
+
+@code{markdown-mode} and Eat are optional and loaded only when present:
+@code{markdown-mode} improves highlighting of artifact buffers, and Eat
+(together with an agent CLI) is needed for the agent terminals
+(@pxref{The agent harness}).  MELPA and source installations obtain those
+separately.
 
 @section With MELPA
 
@@ -110,9 +131,13 @@ M-x package-install RET valsi RET
 Clone the repository, then:
 
 @example
-make check           # byte-compile (warnings->errors) + ERT
+make check           # byte-compile, lint, verify-meta, ERT
+make info            # build doc/valsi.info from doc/valsi.texi
 make run             # launch a demo Emacs with Valsi loaded
 @end example
+
+@code{make run} opens the project's @file{PLAN.md}, or @file{examples/PLAN.md}
+when the project has none.
 
 Add @file{lisp/} to your @code{load-path} and @code{(require 'valsi)}.  Enable
 @code{valsi-global-mode} to auto-activate on markdown buffers; the per-artifact
@@ -149,6 +174,11 @@ staleness against file mtime, a cross-file dashboard, and
 @code{next-actionable} --- the agent-handoff primitive.  Wired to the agent
 core it gains dispatch, a verification runner, and reviewable node-diffs.
 
+The reference documents are @file{doc/plan-editing.md} (editing commands),
+@file{doc/plan-cross-artifact.md} (trace, coverage, and dashboard views), and
+@file{doc/plan-agent.md} (dispatch and review).  Design notes live in
+@file{design/}.
+
 @node Instruction family
 @chapter Instruction family
 
@@ -158,7 +188,8 @@ test.  It recognizes two scope axes: heading @emph{location} and frontmatter
 instruction items, emphasis markers, @code{@@imports}, and @code{[[links]]}.
 Commands: effective-instructions-at-point (nearest-wins), a transitive import
 graph, lint, one-source-to-many @code{sync} via an idempotent managed region,
-and scaffold.
+and scaffold.  The reference document is @file{doc/instruction.md}; design
+notes live in @file{design/}.
 
 @node Prompt-file family
 @chapter Prompt-file family
@@ -170,7 +201,8 @@ progressive-disclosure load model is first-class: frontmatter is @emph{eager}
 (always in context, the trigger), the body is @emph{lazy} (loaded on trigger).
 Commands: validate (required keys, unknown-key warnings, the
 description-as-trigger lint), complete a known key, @code{test-fire} (would
-this prompt match?), and scaffold a skill directory.
+this prompt match?), and scaffold a skill directory.  The reference document
+is @file{doc/promptfile.md}; design notes live in @file{design/}.
 
 @node Memory family
 @chapter Memory family
@@ -183,6 +215,63 @@ Beyond follow and backlinks it adds two curation commands that only report,
 never merge: @code{dedupe} (duplicate pointer targets, near-identical record
 descriptions) and @code{stale-check} (pointers whose file is gone, dangling
 links).
+
+@node Changelog family
+@chapter Changelog family
+
+@file{CHANGELOG.md} (also @file{HISTORY.md} and @file{NEWS.md}) in the Keep a
+Changelog format; evidence tier @code{standardized}.  The grammar recognizes
+release headings of the form @code{## [1.2.0] - 2026-09-01} and
+@code{## [Unreleased]} (a leading @samp{v} and a missing date are tolerated),
+the six fixed category headings @code{### Added}, @code{Changed},
+@code{Deprecated}, @code{Removed}, @code{Fixed}, and @code{Security}, and the
+bullet entries beneath them.  Other headings and prose are left alone.
+
+Commands are gated on at least one release being present: next and previous
+release, an @code{info} readout of the release at point (version, date,
+category and entry counts), a releases dashboard listing version, date, and
+entry count per release, and a lint that reports releases out of
+newest-first SemVer order, non-ISO dates, and empty or unknown categories.
+The lint only reports; it never rewrites the file.
+
+@node Decision family
+@chapter Decision family
+
+Architecture Decision Records under @file{doc/adr/} (also @file{docs/adr/},
+@file{adr/}, or a @file{decisions/} directory) in the Nygard or MADR shape;
+evidence tier @code{standardized}.  The grammar takes the first level-1
+heading as the title, records every other heading as a section, and reads the
+status from the first non-blank line after @code{## Status}, recognizing the
+lifecycle values @code{Proposed}, @code{Accepted}, @code{Rejected},
+@code{Deprecated}, and @code{Superseded} with an optional @samp{by ADR-NNNN}
+clause.  Any other status line is kept verbatim.  @code{Context},
+@code{Decision}, and @code{Consequences} are the canonical sections;
+@code{Supersedes}/@code{Superseded by}/@code{Amends} references are
+highlighted but not resolved.
+
+Commands: @code{info} (title, status, and the sections present),
+@code{set-status} (also bound to toggle; rewrites the status value line from a
+completing-read over the lifecycle values, available once a status exists), a
+lint that reports a missing or non-standard status and missing canonical
+sections, and a dashboard listing every ADR in the decision directory with its
+title and status; @key{RET} on a row visits the record.
+
+@node Overview family
+@chapter Overview family
+
+@file{README.md}, @file{ARCHITECTURE.md}, and similar mostly-prose documents
+(@file{OVERVIEW}, @file{GUIDE}, @file{INTRO}); evidence tier
+@code{converging}.  This is the degradation floor: the grammar's match score
+is deliberately low so any more specific grammar wins, but every headed
+markdown file gets a weak overview claim.  It recognizes the heading outline
+(nested sections by level, the first heading as the title), fenced code blocks
+with their language, and inline @code{[label](target)} links.
+
+Commands follow structure: outline and narrowing always; next and previous
+section plus a table-of-contents dashboard (@key{RET} jumps to the section)
+once headings exist; and @code{follow} on a link once links exist, which opens
+a local file target or echoes a URL.  Highlighting is otherwise left to
+@code{markdown-mode}.
 
 @node Cross-artifact graph
 @chapter Cross-artifact graph
@@ -272,6 +361,23 @@ symbols, diagnostics, and edits.  AAP standardizes the envelope, node model,
 and grammar-declaration --- never the specific grammars.  The specification is
 @file{doc/aap-spec.md} (v0) and a machine-checkable conformance suite runs via
 @code{make conformance}.
+
+@node Developing
+@chapter Developing
+
+@file{AGENTS.md} at the repository root holds the working rules for
+contributors and coding agents; @file{CHANGELOG.md} records notable changes in
+Keep a Changelog form and is itself a Valsi artifact (@pxref{Changelog
+family}).  Design notes and historical working notes live under
+@file{design/}; the per-family reference documents are under @file{doc/}.
+
+The header of @file{lisp/valsi.el} is the single source of truth for the
+version, URL, and hard dependencies.  @code{make verify-meta}, part of
+@code{make check}, fails when @file{valsi.scm}, @file{recipes/valsi},
+@file{CHANGELOG.md}, or @file{extensions/valsi-pi/package.json} disagree with
+it.  To release, bump the @code{Version} header, add a matching
+@code{## [version]} entry to @file{CHANGELOG.md}, and update the version in
+@file{valsi.scm}; then run @code{make check}.
 
 @node Index
 @unnumbered Index
