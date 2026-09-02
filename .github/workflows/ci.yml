@@ -39,9 +39,16 @@ jobs:
             (package-initialize)
             (package-refresh-contents)
             (dolist (p '(markdown-mode eat)) (package-install p)))"
+      # EMACS must be a bare program name (ensure-emacs runs command -v on
+      # it), so wrap the package-initialize call in a script.
       - name: make check with optional packages on the load path
         run: |
-          make check EMACS="emacs --eval \"(progn (require 'package) (package-initialize))\""
+          cat > /usr/local/bin/emacs-with-packages <<'SH'
+          #!/bin/sh
+          exec emacs --eval "(progn (require 'package) (package-initialize))" "$@"
+          SH
+          chmod +x /usr/local/bin/emacs-with-packages
+          make check EMACS=emacs-with-packages
 
   info:
     runs-on: ubuntu-latest
