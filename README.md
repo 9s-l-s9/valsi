@@ -1,27 +1,45 @@
-# Valsi
+# valsi
 
-Valsi (Lojban for "word") is an Emacs harness for the Markdown
-artifacts that accumulate around coding agents: PLAN.md, AGENTS.md,
-SKILL.md, MEMORY.md, CHANGELOG.md, and their relatives.
+*Lojban · [/ˈvalsi/](https://www.lojban.org/publications/reference_grammar/chapter3.html) · [word](https://vlasisku.lojban.org/valsi)*
 
-Peter Naur argued in "Programming as Theory Building" that the real
-program lives in the programmer's head and the files are lossy carriers
-of it.  Working with agents makes this acute: the shared theory has to
-live in artifacts that both sides can read and write.  Valsi treats
-those artifacts as the workspace:
+An Emacs workspace for the Markdown you share with coding agents. Navigate
+plans, review changes, and give your own document conventions dedicated tools.
 
-    Artifact = Data + Grammar + View + Actions + Keymap
+![Emacs Lisp](https://img.shields.io/badge/core-Emacs_Lisp-555555?style=flat-square)
+![Markdown](https://img.shields.io/badge/artifacts-Markdown-555555?style=flat-square)
+[![GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-555555?style=flat-square)](COPYING)
 
-Grammars are descriptive, not normative: sets of recognizers over plain
-Markdown, closer to a linguist's grammar than to a validator's schema.
-A file that only partially matches is not invalid; it resolves less
-detail and gets the subset of views and commands its structure
-supports.  Agents read and write artifacts through the same grammar,
-and their edits are checked back against it.  Files stay ordinary
-Markdown on disk; close Valsi and they are still just files.
+## What you can do
 
-Grammars are plugins and can be defined or redefined while Emacs runs,
-so a bespoke, per-project artifact type is a normal thing to add.
+- **Work across project knowledge.** A Magit-like project hub, family dashboards
+  and a cross-artifact graph bring plans, instructions, skills and decisions
+  together. Navigate elements, follow references and find actionable tasks.
+- **Give your conventions their own tools.** Define or redefine a grammar while
+  Emacs runs. Recognizers attach structure, views, actions and keymaps to the
+  document types your project actually uses.
+- **Keep context close to the work.** Run an agent CLI in an Emacs terminal,
+  hand it explicit artifact context and use structured review views for edits.
+  The CLI owns its tools and sessions; Valsi owns the artifact workspace.
+
+## How it fits together
+
+```text
+Markdown + grammar -> structured nodes -> views, actions, keymaps
+```
+
+Grammars describe the structure they recognize. A partially matching document
+gets the functions its recognized structure supports, and unrecognized text
+remains intact. You can adopt Valsi incrementally and extend it as your project
+conventions develop.
+
+The parser, grammar registry and node model sit behind the Agent Artifact
+Protocol (AAP) boundary. The current implementation runs inside Emacs; the Emacs
+client turns that model into editable buffers, dashboards and review views.
+See the [architecture](doc/architecture.md) for the boundaries and extension model.
+
+Valsi is for developers who treat the plans and decisions around their code as
+part of the engineering work, and enjoy building an editor environment around
+that knowledge.
 
 ## Requirements
 
