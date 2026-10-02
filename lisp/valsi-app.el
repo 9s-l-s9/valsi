@@ -143,6 +143,9 @@ Nil falls back to `project-dired'."
 (defvar-local valsi-app--last-layout nil)
 (defvar-local valsi-app--command-rail nil)
 
+(defvar-local valsi-app--sidebar-buffer nil
+  "Contextual sidebar belonging to this artifact, if it has been displayed.")
+
 (defvar-local valsi-app--sidebar-dismissed nil
   "Non-nil in an artifact buffer after the user manually hid its sidebar.
 Manual `s' remains authoritative: automatic restore skips this artifact.")
@@ -397,7 +400,8 @@ WARNINGS is a cached count of structural plan findings, when available."
                           (valsi-node-prop node :name)
                           (valsi-node-prop node :title))))
              (state (and node (valsi-node-prop node :state)))
-             (deps (and node (or (valsi-node-prop node :depends)
+             (deps (and node (or (valsi-node-prop node :deps)
+                                 (valsi-node-prop node :depends)
                                  (valsi-node-prop node :dependencies)))))
         (list :file buffer-file-name
               :grammar (and (boundp 'valsi--grammar) valsi--grammar)
@@ -417,6 +421,8 @@ WARNINGS is a cached count of structural plan findings, when available."
              (node (and tree (fboundp 'valsi-node-at)
                         (valsi-node-at tree (point)))))
         (list source
+              (buffer-chars-modified-tick)
+              valsi-registry-generation
               (and node (valsi-node-type node))
               (and node (or (valsi-node-prop node :id)
                             (valsi-node-prop node :name)
@@ -431,7 +437,7 @@ WARNINGS is a cached count of structural plan findings, when available."
     (lint "l" "lint" valsi-lint)
     (goto "G" "goto id/name" valsi-goto)
     (progress "%" "progress" valsi-progress)
-    (occur-state "o" "occur" valsi-occur-state)
+    (occur-state "o" "occur" valsi-occur)
     (dashboard "d" "outline" valsi-outline))
   "Capability, suffix key, and label shown for contextual artifact commands.")
 
@@ -1013,7 +1019,10 @@ Return an artifact buffer whose sidebar must be shown, or nil."
           (delete-window window))))
     (and valsi-app-auto-sidebar
          artifact
-         (not (window-live-p sidebar))
+         (or (not (window-live-p sidebar))
+             (not (eq artifact
+                      (buffer-local-value 'valsi-app--source-buffer
+                                          (window-buffer sidebar)))))
          (valsi-app--sidebar-width-for-frame (frame-width frame))
          artifact)))
 
@@ -1115,14 +1124,22 @@ Use compact rendering when COMPACT is non-nil.  SOURCE is the artifact buffer
 whose contextual commands should be shown."
   (let ((buffer (get-buffer-create (valsi-app--buffer-name root compact))))
     (with-current-buffer buffer
-      (valsi-app-mode)
+      (unless (derived-mode-p 'valsi-app-mode) (valsi-app-mode))
       (setq valsi-app--root root
             valsi-app--compact compact
             valsi-app--source-buffer source
             default-directory root)
       (valsi-app-live-refresh-subscribe
        (current-buffer) root #'valsi-app-refresh)
-      (valsi-app-refresh))
+      ;; Paint context immediately; reconcile the project after an idle pause.
+      ;; Artifact switches must not wait for project discovery or diagnostics.
+      (if compact
+          (progn
+            (setq valsi-app--context-signature
+                  (valsi-app-context-signature source))
+            (valsi-app--render)
+            (valsi-app-live-refresh-schedule root))
+        (valsi-app-refresh)))
     buffer))
 
 (defun valsi-app--sidebar-width-for-frame (frame-columns &optional force)
@@ -1333,6 +1350,8 @@ When FORCE is non-nil, honor an explicit request even on a narrow frame."
                    `((side . ,valsi-app-sidebar-side)
                      (slot . 0)
                      (window-width . ,sidebar-width)))))
+            (with-current-buffer source
+              (setq valsi-app--sidebar-buffer buffer))
             (set-window-dedicated-p window t)
             (set-window-parameter window 'no-other-window nil)
             ;; The command rail may have fixed the shared side width first;

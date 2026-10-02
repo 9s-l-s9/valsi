@@ -229,6 +229,44 @@
       (valsi-app-live-refresh-reset root)
       (delete-directory root t))))
 
+(ert-deftest valsi-responsiveness-hub-reentry-keeps-place ()
+  "Reentering a hub preserves its filter, folds, and selected row."
+  (let* ((root (file-name-as-directory (make-temp-file "valsi-hub-" t)))
+         hub)
+    (unwind-protect
+        (cl-letf (((symbol-function 'valsi-app--scan) (lambda (_) nil)))
+          (setq hub (valsi-app--buffer root nil))
+          (with-current-buffer hub
+            (setq valsi-app--filter "plan")
+            (goto-char (point-min))
+            (re-search-forward "^[▾▸] Artifacts")
+            (beginning-of-line)
+            (valsi-view-toggle-section))
+          (should (eq hub (valsi-app--buffer root nil)))
+          (with-current-buffer hub
+            (should (equal "plan" valsi-app--filter))
+            (should-not (valsi-view-section-expanded-p 'artifacts t))
+            (should (equal "section:artifacts"
+                           (get-text-property (point) 'valsi-row-id)))))
+      (when (buffer-live-p hub) (kill-buffer hub))
+      (valsi-app-live-refresh-reset root)
+      (delete-directory root t))))
+
+(ert-deftest valsi-responsiveness-sidebar-defers-discovery ()
+  "Showing context must not perform a project scan on the window hook."
+  (let* ((root (file-name-as-directory (make-temp-file "valsi-sidebar-" t)))
+         sidebar)
+    (unwind-protect
+        (cl-letf (((symbol-function 'valsi-app--scan)
+                   (lambda (_) (ert-fail "Synchronous sidebar scan"))))
+          (with-temp-buffer
+            (setq sidebar (valsi-app--buffer root t (current-buffer))))
+          (should (timerp (valsi-app-live-refresh--project-timer
+                           (valsi-app-live-refresh--project root)))))
+      (when (buffer-live-p sidebar) (kill-buffer sidebar))
+      (valsi-app-live-refresh-reset root)
+      (delete-directory root t))))
+
 (ert-deftest valsi-responsiveness-dispatch-shares-snapshot ()
   "Hub and sidebar see the same new-file state from a single scan per event."
   (let* ((root (file-name-as-directory (make-temp-file "valsi-dispatch-" t)))
@@ -343,6 +381,57 @@
       (kill-buffer hub)
       (valsi-app-live-refresh-reset root)
       (delete-directory root t))))
+
+(ert-deftest valsi-responsiveness-sidebar-follows-buffer-switch ()
+  "Switching artifacts retargets an existing sidebar without a per-key lookup."
+  (let ((source (generate-new-buffer " *valsi-source*"))
+        (old-source (generate-new-buffer " *valsi-old-source*"))
+        (sidebar (generate-new-buffer " *valsi-context*")))
+    (unwind-protect
+        (save-window-excursion
+          (delete-other-windows)
+          (switch-to-buffer source)
+          (setq-local valsi-artifact-minor-mode t)
+          (setq-local valsi--tree (valsi-node-create :beg 1 :end 1))
+          (setq-local buffer-file-name "/tmp/valsi-context/PLAN.md")
+          (setq-local valsi-app--sidebar-buffer sidebar)
+          (with-current-buffer sidebar
+            (valsi-app-mode)
+            (setq valsi-app--compact t valsi-app--source-buffer old-source))
+          (display-buffer-in-side-window sidebar '((side . right)))
+          (let ((renders 0))
+            (cl-letf (((symbol-function 'frame-width) (lambda (&optional _) 140))
+                      ((symbol-function 'valsi-app--root)
+                       (lambda () (ert-fail "Project lookup during navigation")))
+                      ((symbol-function 'valsi-app--render) (lambda () (cl-incf renders))))
+              (should (eq source (valsi-app--sync-chrome (selected-frame))))
+              (valsi--update-sidebar-context)
+              (should (eq source (buffer-local-value 'valsi-app--source-buffer sidebar)))
+              (should (= renders 1))
+              (setq valsi--tree nil)
+              (valsi--update-sidebar-context)
+              (should (= renders 1))
+              (let ((signature (valsi-app-context-signature source)))
+                (insert "edit")
+                (should-not (equal signature (valsi-app-context-signature source)))))))
+      (kill-buffer source)
+      (kill-buffer old-source)
+      (kill-buffer sidebar))))
+
+(ert-deftest valsi-responsiveness-context-includes-plan-dependencies ()
+  "The sidebar exposes dependencies from the plan grammar's actual property."
+  (let ((source (generate-new-buffer " *valsi-dep-source*")))
+    (unwind-protect
+        (progn
+          (with-current-buffer source
+            (insert "- [ ] T002 Second (depends on T001)\n")
+            (setq valsi--tree (valsi-node-shift
+                               (valsi-plan-parse (buffer-string)) 1))
+            (goto-char (point-min)))
+          (with-temp-buffer
+            (setq valsi-app--source-buffer source)
+            (should (equal '("T001") (plist-get (valsi-app--context) :dependencies)))))
+      (kill-buffer source))))
 
 (ert-deftest valsi-responsiveness-lazy-fontification-preserves-text ()
   "Lazy fontification applies and removes artifact faces without changing text."

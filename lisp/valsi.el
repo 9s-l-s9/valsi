@@ -346,12 +346,13 @@ See `valsi-enter-browse-hook'.")
   "Keep the visible project sidebar contextual to the selected artifact."
   (when (and valsi-app-auto-sidebar
              buffer-file-name
+             ;; Keep the last context visible during a burst of typing.  The
+             ;; idle refresh replaces it once the edited tree is available.
+             valsi--tree
              (eq (window-buffer (selected-window)) (current-buffer)))
-    (let* ((source (current-buffer))
-           (root (ignore-errors (valsi-app--root)))
-           (sidebar (and root
-                         (get-buffer (valsi-app--buffer-name root t)))))
-      (when (and sidebar (get-buffer-window sidebar t))
+    (let ((source (current-buffer))
+          (sidebar valsi-app--sidebar-buffer))
+      (when (and (buffer-live-p sidebar) (get-buffer-window sidebar t))
         (let ((signature (valsi-app-context-signature source)))
           (with-current-buffer sidebar
             (unless (equal valsi-app--context-signature signature)
