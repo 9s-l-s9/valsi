@@ -23,7 +23,7 @@ TESTS = $(sort $(wildcard test/*-test.el))
 
 BATCH = $(EMACS) -Q --batch -L lisp -L test -L test/conformance
 
-.PHONY: all check check-all compile ensure-emacs test test-extension \
+.PHONY: all check check-all compile ensure-emacs test test-extension benchmark \
 	conformance lint verify-meta info clean \
 	run demo guix-check guix-check-all guix-test-extension \
 	guix-profile-smoke help
@@ -33,6 +33,7 @@ all: check
 help:
 	@echo "make compile  byte-compile (warnings->errors)"
 	@echo "make test     run ERT suite"
+	@echo "make benchmark  measure project and artifact interaction latency"
 	@echo "make test-extension  run Pi extension tests (node --test; NODE=bun works too)"
 	@echo "make lint     checkdoc"
 	@echo "make verify-meta  check version/URL/deps agree with lisp/valsi.el"
@@ -64,6 +65,9 @@ test:
 
 test-extension:
 	$(NODE) --test extensions/valsi-pi/test/*.test.mjs
+
+benchmark: ensure-emacs
+	$(BATCH) -l test/valsi-benchmark.el
 
 # Run only the AAP conformance suite (what a third-party implementation runs).
 conformance:

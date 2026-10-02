@@ -9,6 +9,11 @@ grammar activates.
 
 ### Added
 
+- `make benchmark` measures project scans, hub reentry, sidebar display,
+  dependency lint, source refresh, and editing latency.
+- Direct Browse actions: `t` toggles, `A` selects the next actionable task,
+  `G` jumps by id/name, `l` validates, `%` reports progress, and `o` filters
+  by state. Toggles preserve Browse and respect preexisting read-only buffers.
 - `make verify-meta`, run by `make check`: the `lisp/valsi.el` header is
   the single source of truth for version, URL and dependencies, and the
   Guix package, MELPA recipe, this changelog and the Pi extension are
@@ -27,6 +32,12 @@ grammar activates.
 
 ### Changed
 
+- Artifact synchronization parses once per text revision; typing updates
+  semantic context after an idle pause, and fontification stays lazy.
+- Project views reuse unchanged trees and structural diagnostics, refresh
+  edited rows incrementally, and share one snapshot between subscribers.
+- Sidebars show source context before project discovery. Returning to the hub
+  preserves filters, folds, and the selected row.
 - `Package-Requires` no longer declares Eat: it was always soft-required
   and the README already called it optional.  markdown-mode and Eat are
   documented as optional dependencies in the library header.
@@ -36,6 +47,18 @@ grammar activates.
 
 ### Fixed
 
+- Hub navigation advances to the next row, Attention entries open their files,
+  and overflow entries expand. File selection survives new Attention/Active
+  rows. Edit and handoff work from any column on the selected row, and opening
+  an artifact through the hub enables its grammar even without global mode.
+- Nested task state evaluation visits each subtree once. Progress counts leaf
+  tasks without counting their parents again; completed hierarchies no longer
+  cause exponential work in lint, navigation, or task inspection.
+- Dependency lint handles long chains and cycles without repeated recursive
+  traversal or evaluation-depth errors that hid warnings in the hub.
+- Narrowed buffers retain full-document coordinates and summaries.
+- Sidebar context follows artifact switches, shows plan dependencies, and
+  dispatches the existing occur command. Closed hubs detach observation hooks.
 - The `URL:` header and the Guix package home page pointed at a repository
   slug that no longer exists.
 - The Pi extension's `package.json` still carried the removed policy-gate

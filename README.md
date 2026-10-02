@@ -82,6 +82,17 @@ terminals, with single-key navigation (`n`/`p`, `TAB`, `RET`, `g`,
 terminal; the CLI keeps its own prompt, tools, and credentials, and
 Valsi hands it artifact context rather than wrapping it.
 
+In an artifact's Browse state, use `n`/`p` to move, `t` to cycle its
+state, `A` for the next actionable task, and `G` to jump by id/name.
+`i` enters text editing; `ESC` returns to Browse. `c` returns to the
+hub with its filter, folds, and selection preserved. `a` opens the
+agent, and `@` inserts the current artifact reference into its prompt
+for review. `SPC` shows the remaining commands.
+
+The sidebar appears immediately from source context; project counts and
+diagnostics reconcile after an idle pause. `g` explicitly refreshes the
+current view. For repeatable latency measurements, run `make benchmark`.
+
 To try everything in a scratch Emacs:
 
     make run      # guix shell + emacs -Q -l valsi-demo.el
