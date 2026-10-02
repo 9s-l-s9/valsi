@@ -22,6 +22,57 @@
                                (if (= id 1) count (1- id))))))
            (number-sequence 1 count) "")))
 
+(ert-deftest valsi-responsiveness-nested-task-states ()
+  "Deep completed hierarchies do bounded work when linted or inspected."
+  (let* ((tree (valsi-plan-parse
+                (mapconcat
+                 (lambda (n) (format "%s- [x] Nested task\n"
+                                     (make-string (* 2 n) ?\s)))
+                 (number-sequence 0 39) "")))
+         (task (car (valsi-node-of-type tree 'task)))
+         (property (symbol-function 'valsi-node-prop))
+         (reads 0))
+    (cl-letf (((symbol-function 'valsi-node-prop)
+               (lambda (&rest args)
+                 (cl-incf reads)
+                 (when (> reads 10000)
+                   (ert-fail "Repeatedly traversed completed descendants"))
+                 (apply property args))))
+      (should (eq 'done (valsi-plan-effective-state task)))
+      (should-not (valsi-plan--lint-collect tree))
+      (should (equal '(1 1 0) (valsi-plan--leaf-stats tree))))))
+
+(ert-deftest valsi-responsiveness-progress-counts-leaves ()
+  "Progress counts actual work once and derives parent states from leaf tasks."
+  (let* ((tree (valsi-plan-parse
+                (concat "- [x] T001 Parent\n"
+                        "  - [x] T001.1 Completed\n"
+                        "  - [-] T001.2 Active\n"
+                        "  - [x] T001.3 Marked done prematurely\n"
+                        "    - [ ] T001.3.1 Open\n"
+                        "- [c] T002 Cancelled\n"
+                        "- [?] T003 Unknown\n")))
+         (tasks (valsi-node-of-type tree 'task)))
+    (should (equal '(1 5 1) (valsi-plan--leaf-stats tree)))
+    (should (equal '(in-progress done in-progress open open cancelled unknown)
+                   (mapcar #'valsi-plan-effective-state tasks)))
+    (should (equal '(0 0 0) (valsi-plan--leaf-stats (valsi-plan-parse "# Empty\n"))))
+    (should (equal '("T001: marked done but has an unfinished child"
+                     "T001.3: marked done but has an unfinished child"
+                     "T003: unknown state char \"?\"")
+                   (valsi-plan--lint-issues tree)))))
+
+(ert-deftest valsi-responsiveness-actionable-uses-derived-parent-state ()
+  "A parent's completed children satisfy dependencies even if its box is open."
+  (with-temp-buffer
+    (insert (concat "- [ ] T001 Parent (depends on missing)\n"
+                    "  - [x] T001.1 Completed\n"
+                    "- [ ] T002 Next (depends on T001)\n"))
+    (let ((tree (valsi-node-shift (valsi-plan-parse (buffer-string)) 1)))
+      (cl-letf (((symbol-function 'valsi-tree) (lambda () tree)))
+        (should (equal "T002" (valsi-node-prop (valsi-plan-next-actionable) :id)))
+        (should (looking-at "- \\[ \\] T002"))))))
+
 (ert-deftest valsi-responsiveness-long-dependencies ()
   "Long chains and cycles lint completely without recursive graph traversal."
   (let ((max-lisp-eval-depth 100))

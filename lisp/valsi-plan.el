@@ -184,18 +184,40 @@ By id sort-key prefix when both have keys, else by indent."
 
 ;;;; Effective state (interior tasks derive from children)
 
+(defun valsi-plan--state-index (root)
+  "Return effective states and leaf counts for every node below ROOT.
+Each value has :state, :done, :total and :active fields.  Visit children before
+parents so each subtree contributes once, without recursive recomputation."
+  (let ((index (make-hash-table :test #'eq))
+        (pending (list root))
+        order)
+    (while pending
+      (let ((node (pop pending)))
+        (push node order)
+        (dolist (child (valsi-node-children node)) (push child pending))))
+    (dolist (node order)
+      (let ((done 0) (total 0) (active 0) state)
+        (dolist (child (valsi-node-children node))
+          (let ((stats (gethash child index)))
+            (cl-incf done (plist-get stats :done))
+            (cl-incf total (plist-get stats :total))
+            (cl-incf active (plist-get stats :active))))
+        (if (and (eq (valsi-node-type node) 'task) (zerop total))
+            (setq state (valsi-node-prop node :state)
+                  total 1
+                  done (if (eq state 'done) 1 0)
+                  active (if (eq state 'in-progress) 1 0))
+          (setq state (cond ((zerop total) nil)
+                            ((= done total) 'done)
+                            ((> (+ done active) 0) 'in-progress)
+                            (t 'open))))
+        (puthash node (list :state state :done done :total total :active active)
+                 index)))
+    index))
+
 (defun valsi-plan-effective-state (task)
   "Return the effective state of TASK (done iff all child tasks done)."
-  (let ((children (valsi-node-of-type task 'task)))
-    (setq children (cl-remove task children))
-    (if (null children)
-        (valsi-node-prop task :state)
-      (cond ((cl-every (lambda (c) (eq (valsi-plan-effective-state c) 'done))
-                       children) 'done)
-            ((cl-some (lambda (c) (memq (valsi-plan-effective-state c)
-                                        '(in-progress done)))
-                      children) 'in-progress)
-            (t 'open)))))
+  (plist-get (gethash task (valsi-plan--state-index task)) :state))
 
 ;;;; Dialect detection
 
@@ -338,18 +360,10 @@ By id sort-key prefix when both have keys, else by indent."
        (length (valsi-node-of-type task 'step))))))
 
 (defun valsi-plan--leaf-stats (root)
-  "Return (DONE TOTAL INPROG) over ROOT's leaf tasks (all tasks if none)."
-  (let* ((tasks (valsi-node-of-type root 'task))
-         ;; Leaves: tasks with no child tasks.
-         (leaves (or (cl-remove-if (lambda (tk) (valsi-node-of-type tk 'task))
-                                   tasks)
-                     tasks)))
-    (list (cl-count-if (lambda (tk) (eq (valsi-plan-effective-state tk) 'done))
-                       leaves)
-          (length leaves)
-          (cl-count-if (lambda (tk) (eq (valsi-plan-effective-state tk)
-                                        'in-progress))
-                       leaves))))
+  "Return (DONE TOTAL INPROG) over ROOT's leaf tasks."
+  (let ((stats (gethash root (valsi-plan--state-index root))))
+    (list (plist-get stats :done) (plist-get stats :total)
+          (plist-get stats :active))))
 
 (defun valsi-plan-progress ()
   "Report done/total task counts for the buffer."
@@ -376,18 +390,20 @@ By id sort-key prefix when both have keys, else by indent."
   (interactive)
   (let* ((root (valsi-tree))
          (tasks (valsi-node-of-type root 'task))
-         (done-ids (delq nil
-                         (mapcar (lambda (tk)
-                                   (and (eq (valsi-plan-effective-state tk) 'done)
-                                        (valsi-node-prop tk :id)))
-                                 tasks)))
+         (states (valsi-plan--state-index root))
+         (done-ids (make-hash-table :test #'equal))
          (target
-          (cl-find-if
-           (lambda (tk)
-             (and (eq (valsi-node-prop tk :state) 'open)
-                  (cl-every (lambda (d) (member d done-ids))
-                            (valsi-node-prop tk :deps))))
-           tasks)))
+          (progn
+            (dolist (task tasks)
+              (when (eq (plist-get (gethash task states) :state) 'done)
+                (when-let* ((id (valsi-node-prop task :id)))
+                  (puthash id t done-ids))))
+            (cl-find-if
+             (lambda (tk)
+               (and (eq (valsi-node-prop tk :state) 'open)
+                    (cl-every (lambda (d) (gethash d done-ids))
+                              (valsi-node-prop tk :deps))))
+             tasks))))
     (if target
         (progn
           (goto-char (valsi-node-beg target))
@@ -781,6 +797,7 @@ build on this; the buffer/filesystem checks are layered on top there."
          (ids (delq nil (mapcar (lambda (tk) (valsi-node-prop tk :id)) tasks)))
          (seen (make-hash-table :test #'equal))
          (cyclic (valsi-plan--cyclic-ids tasks))
+         (states (valsi-plan--state-index root))
          (found nil))
     ;; duplicate ids (document-global)
     (dolist (id ids)
@@ -806,7 +823,7 @@ build on this; the buffer/filesystem checks are layered on top there."
             (push (cons tk (format "%s: dependency cycle" self)) found)))
         ;; interior-state contradiction: marked done but a child is not done
         (when (and (eq (valsi-node-prop tk :state) 'done)
-                   (not (eq (valsi-plan-effective-state tk) 'done)))
+                   (not (eq (plist-get (gethash tk states) :state) 'done)))
           (push (cons tk (format "%s: marked done but has an unfinished child" id))
                 found))))
     (nreverse found)))
@@ -819,9 +836,11 @@ build on this; the buffer/filesystem checks are layered on top there."
   "Return (NODE . MESSAGE) findings for done tasks whose manifest files are gone.
 ROOT is the plan tree.  DIR (default `default-directory') resolves relative
 path-refs."
-  (let ((dir (or dir default-directory)) (found nil))
+  (let ((dir (or dir default-directory))
+        (states (valsi-plan--state-index root))
+        (found nil))
     (dolist (tk (valsi-node-of-type root 'task))
-      (when (eq (valsi-plan-effective-state tk) 'done)
+      (when (eq (plist-get (gethash tk states) :state) 'done)
         (dolist (pr (valsi-node-prop tk :pathrefs))
           (let ((file (car (split-string pr ":"))))
             (unless (file-exists-p (expand-file-name file dir))
