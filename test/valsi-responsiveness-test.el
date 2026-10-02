@@ -106,5 +106,80 @@
     (should (member "T006: dangling dep T999" issues))
     (should (member "duplicate id T004 (2)" issues))))
 
+(ert-deftest valsi-responsiveness-sync-once-and-idle-edit ()
+  "Opening and refreshing parse once; typing waits for idle, queries stay fresh."
+  (valsi-init)
+  (with-temp-buffer
+    (insert "# Plan\n- [ ] T001 First\n")
+    (setq buffer-file-name "/tmp/valsi-responsive/PLAN.md")
+    (let ((parse (symbol-function 'valsi-registry-parse-content))
+          (count 0)
+          (valsi-app-auto-sidebar nil))
+      (cl-letf (((symbol-function 'valsi-registry-parse-content)
+                 (lambda (&rest args) (cl-incf count) (apply parse args))))
+        (unwind-protect
+            (progn
+              (valsi-artifact-minor-mode 1)
+              (should (= count 1))
+              (valsi-tree)
+              (should (= count 1))
+              (valsi-refresh)
+              (should (= count 2))
+              (valsi-enter-insert)
+              (goto-char (point-max))
+              (insert "- [ ] T002 ")
+              (insert "Second\n")
+              (should (= count 2))
+              (should (timerp valsi--refresh-timer))
+              (valsi--cancel-refresh)
+              (valsi--idle-refresh (current-buffer))
+              (should (= count 3))
+              (should (= 2 (length (valsi-node-of-type (valsi-tree) 'task))))
+              (let ((tree valsi--tree))
+                (put-text-property (point-min) (point-max) 'face 'bold)
+                (should (eq tree (valsi-tree)))
+                (should (= count 3)))
+              (insert "- [ ] T003 Third\n")
+              (should (= 3 (length (valsi-node-of-type (valsi-tree) 'task))))
+              (should (= count 4)))
+          (valsi-artifact-minor-mode -1)
+          (should-not valsi--refresh-timer))))))
+
+(ert-deftest valsi-responsiveness-narrowed-artifact ()
+  "Narrowing does not truncate AAP documents or shift their coordinates."
+  (valsi-init)
+  (with-temp-buffer
+    (insert "# Plan\n- [ ] T001 First\n- [ ] T002 Second\n")
+    (setq buffer-file-name "/tmp/valsi-narrowed/PLAN.md")
+    (goto-char (point-min))
+    (forward-line 2)
+    (let ((second (point)))
+      (narrow-to-region second (point-max))
+      (unwind-protect
+          (progn
+            (valsi-artifact-minor-mode 1)
+            (let ((tasks (valsi-node-of-type (valsi-tree) 'task)))
+              (should (= 2 (length tasks)))
+              (should (= second (valsi-node-beg (cadr tasks))))))
+        (valsi-artifact-minor-mode -1)))))
+
+(ert-deftest valsi-responsiveness-lazy-fontification-preserves-text ()
+  "Lazy fontification applies and removes artifact faces without changing text."
+  (with-temp-buffer
+    (insert "- [ ] T001 First\n")
+    (setq-local font-lock-defaults '(nil t))
+    (let ((font-lock-mode t)
+          (original (buffer-string))
+          (ensure (symbol-function 'font-lock-ensure)))
+      (cl-letf (((symbol-function 'font-lock-ensure)
+                 (lambda (&rest _) (ert-fail "Eager whole-buffer fontification"))))
+        (valsi-view-set-font-lock valsi-plan-font-lock-keywords))
+      (funcall ensure)
+      (should (get-text-property 4 'face))
+      (valsi-view-set-font-lock nil)
+      (funcall ensure)
+      (should-not (get-text-property 4 'face))
+      (should (equal original (buffer-substring-no-properties (point-min) (point-max)))))))
+
 (provide 'valsi-responsiveness-test)
 ;;; valsi-responsiveness-test.el ends here

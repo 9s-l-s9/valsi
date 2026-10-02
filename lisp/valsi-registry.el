@@ -33,6 +33,9 @@
 (defvar valsi-registry-hook nil
   "Run with the grammar id after a grammar is (re)registered.")
 
+(defvar valsi-registry-generation 0
+  "Revision of grammar definitions, for invalidating derived caches.")
+
 ;;;; Registration (grammar/register, grammar/reload)
 
 (defun valsi-registry-register (spec)
@@ -41,6 +44,7 @@ Takes effect immediately (hot-reload); returns the id."
   (let ((id (plist-get spec :id)))
     (unless id (error "Grammar spec has no :id"))
     (puthash id spec valsi-registry--table)
+    (cl-incf valsi-registry-generation)
     (run-hook-with-args 'valsi-registry-hook id)
     id))
 
@@ -190,7 +194,8 @@ optional `:confidence', and optional capture-index `:properties'."
 
 (defun valsi-registry-unregister (id)
   "Remove grammar ID from the registry."
-  (remhash id valsi-registry--table))
+  (remhash id valsi-registry--table)
+  (cl-incf valsi-registry-generation))
 
 (defun valsi-registry-get (id)
   "Return the spec for grammar ID, or nil."

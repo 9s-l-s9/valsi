@@ -92,6 +92,21 @@ Nil means stale; `valsi-tree' refetches it from the server via the proto layer."
 (defvar-local valsi--capabilities nil
   "Advertised action symbols for the current document (the degradation ladder).")
 
+(defvar-local valsi--synced-version nil
+  "Text tick and grammar revision last synchronized with the server.")
+
+(defcustom valsi-idle-delay 0.15
+  "Idle seconds before updating semantic context after an artifact edit."
+  :type 'number
+  :group 'valsi)
+
+(defvar-local valsi--refresh-timer nil
+  "Pending idle refresh of this artifact's semantic context.")
+
+(defun valsi--version ()
+  "Return the current widened document's text and grammar revision."
+  (list (buffer-chars-modified-tick) valsi-registry-generation (valsi--uri)))
+
 (defun valsi--uri ()
   "Return the document uri for the current buffer."
   (or buffer-file-name (buffer-name)))
@@ -100,28 +115,34 @@ Nil means stale; `valsi-tree' refetches it from the server via the proto layer."
   "Push the buffer's content to the server (didChange, or didOpen when OPEN).
 Records the resolved grammar + capabilities.  Marks the local tree stale."
   (unless valsi--initialized (valsi-init))
-  (let ((resp (valsi--request (if open 'artifact/didOpen 'artifact/didChange)
-                             (list :uri (valsi--uri) :text (buffer-string)))))
+  (let ((resp (save-restriction
+                (widen)
+                (valsi--request
+                 (if open 'artifact/didOpen 'artifact/didChange)
+                 (list :uri (valsi--uri)
+                       :text (buffer-substring-no-properties
+                              (point-min) (point-max)))))))
     (setq valsi--grammar (plist-get resp :grammar))
     (setq valsi--capabilities (plist-get resp :capabilities))
     (setq valsi--tree nil)
+    (setq valsi--synced-version (valsi--version))
     resp))
 
 (defun valsi-tree ()
   "Return the current buffer's tree in buffer coordinates, fetching if stale.
 The server holds the model in document offsets; the client owns the single
 offset->buffer-position translation here."
-  (unless valsi--grammar (valsi--sync t))
+  (unless (equal valsi--synced-version (valsi--version))
+    (valsi--sync (null valsi--grammar)))
   (or valsi--tree
       (progn
-        (valsi--sync)
         (let ((sym (valsi--request 'artifact/symbols (list :uri (valsi--uri)))))
           (setq valsi--tree
                 (when sym
                   ;; Deep-copy so shifting never mutates the server's tree, then
                   ;; translate document offsets to this buffer's positions.
                   (let ((local (valsi-node-deep-copy sym)))
-                    (valsi-node-shift local (point-min))
+                    (valsi-node-shift local 1)
                     local)))))))
 
 ;; Backwards-compatible accessor name used by earlier client code.
@@ -359,25 +380,49 @@ a keymap (\\{valsi-artifact-mode-map})."
         (add-hook 'after-change-functions #'valsi--after-change nil t)
         (add-hook 'after-save-hook #'valsi-refresh nil t)
         (add-hook 'post-command-hook #'valsi--update-sidebar-context nil t)
+        (add-hook 'kill-buffer-hook #'valsi--cancel-refresh nil t)
         ;; No explicit sidebar display here: chrome is reconciled with the
         ;; displayed buffers by `valsi-app--sync-chrome' on the window hooks,
         ;; which fire once this buffer is actually shown.
         (valsi-app--install-window-hooks)
         (valsi-enter-browse))
     (valsi--request 'artifact/didClose (list :uri (valsi--uri)))
+    (setq valsi--tree nil valsi--synced-version nil)
     (valsi-view-set-font-lock nil)
     (setq-local header-line-format nil)
     (remove-hook 'after-change-functions #'valsi--after-change t)
     (remove-hook 'after-save-hook #'valsi-refresh t)
     (remove-hook 'post-command-hook #'valsi--update-sidebar-context t)
+    (remove-hook 'kill-buffer-hook #'valsi--cancel-refresh t)
+    (valsi--cancel-refresh)
     (valsi-browse-mode -1)
     (setq valsi--interaction-state nil)
-    (read-only-mode (if valsi--original-read-only 1 -1))
-    (when font-lock-mode (font-lock-flush) (font-lock-ensure))))
+    (read-only-mode (if valsi--original-read-only 1 -1))))
+
+(defun valsi--cancel-refresh ()
+  "Cancel the current artifact's pending idle refresh."
+  (when valsi--refresh-timer
+    (cancel-timer valsi--refresh-timer)
+    (setq valsi--refresh-timer nil)))
+
+(defun valsi--idle-refresh (buffer)
+  "Refresh BUFFER's semantic context after editing pauses."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (setq valsi--refresh-timer nil)
+      (when valsi-artifact-minor-mode
+        (valsi-tree)
+        (valsi--update-sidebar-context)))))
 
 (defun valsi--after-change (&rest _)
-  "Mark the local tree stale after an edit; the next `valsi-tree' resyncs."
-  (setq valsi--tree nil))
+  "Invalidate edited text and defer semantic work until an idle pause."
+  ;; Fontification changes properties, not the document sent to AAP.
+  (unless (equal valsi--synced-version (valsi--version))
+    (setq valsi--tree nil)
+    (valsi--cancel-refresh)
+    (setq valsi--refresh-timer
+          (run-with-idle-timer valsi-idle-delay nil
+                               #'valsi--idle-refresh (current-buffer)))))
 
 ;;;; Transient menu (discoverable entry point)
 

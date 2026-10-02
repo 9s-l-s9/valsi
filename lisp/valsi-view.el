@@ -282,8 +282,9 @@ See `valsi-view-insert-outline' for DEPTH and ROW-LIMIT."
   (when keywords
     (font-lock-add-keywords nil keywords 'append))
   (when font-lock-mode
-    (font-lock-flush)
-    (font-lock-ensure)))
+    ;; Redisplay fontifies visible text; enabling a view should not eagerly
+    ;; fontify an entire large artifact before the first frame can be drawn.
+    (font-lock-flush)))
 
 (defvar-local valsi-view--installed-keywords nil
   "The keyword list currently installed by Valsi, for clean removal.")
