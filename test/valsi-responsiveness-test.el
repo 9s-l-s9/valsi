@@ -163,6 +163,27 @@
               (should (= second (valsi-node-beg (cadr tasks))))))
         (valsi-artifact-minor-mode -1)))))
 
+(ert-deftest valsi-responsiveness-browse-toggle-and-read-only ()
+  "Semantic toggles work in Browse while preexisting read-only stays protected."
+  (valsi-init)
+  (dolist (read-only '(nil t))
+    (with-temp-buffer
+      (insert "- [ ] T001 First\n")
+      (goto-char (point-min))
+      (setq buffer-file-name "/tmp/valsi-toggle/PLAN.md"
+            buffer-read-only read-only)
+      (unwind-protect
+          (progn
+            (valsi-artifact-minor-mode 1)
+            (should (eq (key-binding (kbd "t")) #'valsi-toggle))
+            (if read-only
+                (should-error (valsi-toggle) :type 'buffer-read-only)
+              (call-interactively (key-binding (kbd "t")))
+              (should (string-match-p "\\[-\\]" (buffer-string)))
+              (should buffer-read-only)
+              (should valsi-browse-mode)))
+        (valsi-artifact-minor-mode -1)))))
+
 (ert-deftest valsi-responsiveness-scan-cache-freshness ()
   "Scans reuse trees but observe buffer, disk, file-set, and grammar changes."
   (valsi-init)

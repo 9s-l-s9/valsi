@@ -1214,6 +1214,9 @@ whose KEY does not resolve to COMMAND in the live buffer are omitted."
 (defcustom valsi-app-rail-browse-hints
   '(("n" "next" valsi-next)
     ("p" "previous" valsi-previous)
+    ("t" "toggle" valsi-toggle)
+    ("A" "actionable" valsi-next-actionable)
+    ("G" "goto" valsi-goto)
     ("TAB" "fold" valsi-browse-toggle-fold)
     ("RET" "follow" valsi-follow)
     ("i" "edit" valsi-enter-insert)

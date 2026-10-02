@@ -95,6 +95,9 @@ Nil means stale; `valsi-tree' refetches it from the server via the proto layer."
 (defvar-local valsi--synced-version nil
   "Text tick and grammar revision last synchronized with the server.")
 
+(defvar valsi--interaction-state)
+(defvar valsi--original-read-only)
+
 (defcustom valsi-idle-delay 0.15
   "Idle seconds before updating semantic context after an artifact edit."
   :type 'number
@@ -169,7 +172,12 @@ offset->buffer-position translation here."
   (unless valsi--grammar (valsi-refresh))
   (let ((cmd (valsi-registry-command valsi--grammar action)))
     (if (and cmd (fboundp cmd))
-        (call-interactively cmd)
+        (let ((inhibit-read-only
+               (or inhibit-read-only
+                   (and (eq action 'toggle)
+                        (eq valsi--interaction-state 'browse)
+                        (not valsi--original-read-only)))))
+          (call-interactively cmd))
       (message "Valsi: `%s' not supported by the %s grammar"
                action (or valsi--grammar 'generic)))))
 
@@ -247,6 +255,12 @@ offset->buffer-position translation here."
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "n") #'valsi-next)
     (define-key map (kbd "p") #'valsi-previous)
+    (define-key map (kbd "t") #'valsi-toggle)
+    (define-key map (kbd "l") #'valsi-lint)
+    (define-key map (kbd "G") #'valsi-goto)
+    (define-key map (kbd "%") #'valsi-progress)
+    (define-key map (kbd "o") #'valsi-occur)
+    (define-key map (kbd "A") #'valsi-next-actionable)
     (define-key map (kbd "TAB") #'valsi-browse-toggle-fold)
     (define-key map (kbd "<tab>") #'valsi-browse-toggle-fold)
     (define-key map (kbd "RET") #'valsi-follow)
