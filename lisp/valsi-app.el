@@ -142,6 +142,7 @@ Nil falls back to `project-dired'."
 (defvar-local valsi-app--context-signature nil)
 (defvar-local valsi-app--last-layout nil)
 (defvar-local valsi-app--command-rail nil)
+(defvar-local valsi-app--show-all-attention nil)
 
 (defvar-local valsi-app--sidebar-buffer nil
   "Contextual sidebar belonging to this artifact, if it has been displayed.")
@@ -345,7 +346,9 @@ WARNINGS is a cached count of structural plan findings, when available."
 (defun valsi-app--visit-button (button)
   "Visit artifact represented by BUTTON."
   (valsi-app-hide-sidebars)
-  (find-file (button-get button 'valsi-file)))
+  (find-file (button-get button 'valsi-file))
+  (unless (bound-and-true-p valsi-artifact-minor-mode)
+    (valsi--maybe-enable)))
 
 (defun valsi-app--family-button (button)
   "Expand or collapse the artifact family represented by BUTTON."
@@ -375,9 +378,10 @@ WARNINGS is a cached count of structural plan findings, when available."
     (switch-to-buffer buffer)
     (valsi-app-show-command-rail buffer root)))
 
-(defun valsi-app--insert-file (entry root)
-  "Insert artifact ENTRY relative to ROOT."
-  (let ((file (plist-get entry :file)))
+(defun valsi-app--insert-file (entry root &optional section)
+  "Insert artifact ENTRY relative to ROOT, identified within SECTION."
+  (let ((file (plist-get entry :file))
+        (start (point)))
     (insert "  ")
     (insert-text-button
      (file-relative-name file root)
@@ -386,7 +390,10 @@ WARNINGS is a cached count of structural plan findings, when available."
      'action #'valsi-app--visit-button)
     (insert (format "  %-18s%s\n"
                     (plist-get entry :state)
-                    (or (plist-get entry :summary) "")))))
+                    (or (plist-get entry :summary) "")))
+    (add-text-properties
+     start (point)
+     `(valsi-row-id ,(format "file:%s:%s" (or section 'family) file)))))
 
 (defun valsi-app--context ()
   "Return contextual artifact data for the current compact application buffer."
@@ -532,8 +539,8 @@ WARNINGS is a cached count of structural plan findings, when available."
   (let ((key (key-description (this-command-keys-vector))))
     (if (not valsi-app--compact)
         (pcase key
-          ("n" (forward-button 1 t t))
-          ("p" (backward-button 1 t t))
+          ("n" (end-of-line) (forward-button 1 t t))
+          ("p" (beginning-of-line) (backward-button 1 t t))
           ("t" (valsi-view-toggle-section))
           (_ (user-error "%s is contextual to the artifact sidebar" key)))
       (unless (buffer-live-p valsi-app--source-buffer)
@@ -730,15 +737,16 @@ LAYOUT caps how many rows are shown before the overflow row."
   (valsi-view-insert-section
    'attention "Attention"
    (lambda ()
-     (let* ((limit (pcase layout
+     (let* ((limit (if valsi-app--show-all-attention (length attention)
+                    (pcase layout
                      ('narrow 3)
                      ('medium 5)
-                     (_ (length attention))))
+                     (_ (length attention)))))
             (visible (seq-take attention limit)))
        (dolist (entry visible)
-         (let ((file (plist-get entry :file)))
-           (valsi-app--row
-            (concat "attention:" file)
+         (let ((file (plist-get entry :file))
+               (start (point)))
+           (insert-text-button
             (format "  %-18s %s%s"
                     (valsi-app--attention-reason entry)
                     (if (eq layout 'wide)
@@ -747,16 +755,28 @@ LAYOUT caps how many rows are shown before the overflow row."
                     (if (equal (valsi-app--attention-reason entry) "warning")
                         (format " · %d warnings" (plist-get entry :warnings))
                       ""))
-            'valsi-attention-face)))
+            'face 'valsi-attention-face
+            'follow-link t 'valsi-file file
+            'action #'valsi-app--visit-button)
+           (insert "\n")
+           (add-text-properties start (point)
+                                `(valsi-row-id ,(concat "attention:" file)))))
        (when (> (length attention) limit)
-         (valsi-app--row
-          "attention:more"
-          (format "  … %d more; RET opens artifact details"
-                  (- (length attention) limit))
-          'valsi-state-face))))
+         (let ((start (point)))
+           (insert-text-button
+            (format "  … %d more; RET shows all" (- (length attention) limit))
+            'face 'valsi-state-face 'follow-link t
+            'action #'valsi-app--expand-attention)
+           (insert "\n")
+           (add-text-properties start (point) '(valsi-row-id "attention:more"))))))
    (format "%d item%s" (length attention)
            (if (= (length attention) 1) "" "s"))
    t))
+
+(defun valsi-app--expand-attention (_button)
+  "Show every attention entry after activating the overflow BUTTON."
+  (setq valsi-app--show-all-attention t)
+  (valsi-app--render))
 
 (defun valsi-app--insert-active-section (entries agents root)
   "Insert the Active section: modified/open ENTRIES and running AGENTS.
@@ -771,7 +791,7 @@ ROOT is the project root; the section is omitted when empty."
        'active "Active"
        (lambda ()
          (dolist (entry active)
-           (valsi-app--insert-file entry root))
+           (valsi-app--insert-file entry root 'active))
          (dolist (agent agents)
            (valsi-app--row
             (format "active-agent:%s"
@@ -801,7 +821,7 @@ ROOT is the project root."
    'markdown "Markdown"
    (lambda ()
      (dolist (entry markdown)
-       (valsi-app--insert-file entry root)))
+       (valsi-app--insert-file entry root 'markdown)))
    (format "%d unsupported file%s"
            (length markdown)
            (if (= (length markdown) 1) "" "s"))
@@ -1056,18 +1076,20 @@ application buffer remains."
               (message
                "Valsi sidebar hidden after resize; C-c n s restores it"))))))))
 
+(defun valsi-app--button-on-line ()
+  "Return the button at point or the first button on the same line."
+  (or (button-at (point))
+      (save-excursion
+        (beginning-of-line)
+        (let ((next (next-button (point) t)))
+          (and next (<= (button-start next) (line-end-position)) next)))))
+
 (defun valsi-app-activate ()
   "Activate the actionable row at point or toggle its section.
 Only a button on the current line qualifies; RET never jumps to a
 target belonging to a different row."
   (interactive)
-  (let ((button (or (button-at (point))
-                    (save-excursion
-                      (beginning-of-line)
-                      (let ((next (next-button (point) t)))
-                        (and next
-                             (<= (button-start next) (line-end-position))
-                             next))))))
+  (let ((button (valsi-app--button-on-line)))
     (cond (button (button-activate button))
           ((get-text-property (line-beginning-position) 'valsi-section-id)
            (valsi-view-toggle-section))
@@ -1312,10 +1334,14 @@ the `find-file' path degrade instead of signaling."
   "Open current project hub; use COMPACT for artifact-index rendering."
   (let* ((root (valsi-app--root))
          (buffer (valsi-app--buffer root compact
-                                   (and compact (current-buffer)))))
+                                   (and compact (current-buffer))))
+         (position (with-current-buffer buffer (point))))
     (unless compact
       (valsi-app-hide-sidebars))
     (switch-to-buffer buffer)
+    ;; A hidden buffer's redraw invalidates the window's previous-point
+    ;; marker.  Preserve the semantic position restored by the renderer.
+    (goto-char position)
     (unless compact
       (valsi-app-show-command-rail buffer root))
     buffer))
@@ -1434,7 +1460,7 @@ An empty query clears the filter."
 
 (defun valsi-app--artifact-file-at-point ()
   "Return the artifact file represented at point or by the current buffer."
-  (let ((button (button-at (point))))
+  (let ((button (valsi-app--button-on-line)))
     (or (and button (button-get button 'valsi-file))
         (and button
              (when-let* ((entry (button-get button 'valsi-entry)))
