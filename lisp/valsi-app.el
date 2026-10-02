@@ -199,8 +199,10 @@ When COMPACT is non-nil, return the artifact-index name."
 (defun valsi-app--file-text (file)
   "Return current text used to classify FILE."
   (if-let* ((buffer (get-file-buffer file)))
-      (with-current-buffer buffer (buffer-substring-no-properties
-                                   (point-min) (point-max)))
+      (with-current-buffer buffer
+        (save-restriction
+          (widen)
+          (buffer-substring-no-properties (point-min) (point-max))))
     (with-temp-buffer
       (insert-file-contents file nil 0 valsi-app-max-file-bytes)
       (buffer-string))))
@@ -211,11 +213,10 @@ When COMPACT is non-nil, return the artifact-index name."
       (if (buffer-modified-p buffer) "modified" "open")
     "clean"))
 
-(defun valsi-app--artifact-summary (grammar text)
-  "Return a compact semantic summary for GRAMMAR over TEXT."
+(defun valsi-app--artifact-summary (grammar tree)
+  "Return a compact semantic summary for GRAMMAR over TREE."
   (condition-case nil
-      (let* ((tree (valsi-registry-parse-content grammar text))
-             (tasks (and (eq grammar 'plan)
+      (let* ((tasks (and (eq grammar 'plan)
                          (valsi-node-of-type tree 'task))))
         (when tasks
           (let ((open 0) (active 0) (done 0))
@@ -232,16 +233,16 @@ When COMPACT is non-nil, return the artifact-index name."
              " · "))))
     (error nil)))
 
-(defun valsi-app--artifact-diagnostics (grammar text file)
-  "Return (:warnings N :stale N) for GRAMMAR TEXT at FILE."
+(defun valsi-app--artifact-diagnostics (grammar tree file &optional warnings)
+  "Return (:warnings N :stale N) for GRAMMAR TREE at FILE.
+WARNINGS is a cached count of structural plan findings, when available."
   (condition-case nil
-      (let* ((tree (valsi-registry-parse-content grammar text))
-             (warnings
+      (let* ((warnings
               (pcase grammar
                 ('plan
-                 (if (fboundp 'valsi-plan--lint-collect)
-                     (length (valsi-plan--lint-collect tree))
-                   0))
+                 (or warnings (if (fboundp 'valsi-plan--lint-collect)
+                                  (length (valsi-plan--lint-collect tree))
+                                0)))
                 ('instruction
                  (if (fboundp 'valsi-instruction--lint-collect)
                      (length
@@ -257,28 +258,75 @@ When COMPACT is non-nil, return the artifact-index name."
         (list :warnings warnings :stale stale))
     (error (list :warnings 0 :stale 0))))
 
+(defun valsi-app--file-cache-key (file)
+  "Return the disk, buffer, and grammar revision used to analyze FILE."
+  (let ((buffer (get-file-buffer file)))
+    (list :signature (valsi-app-live-refresh--signature file) :buffer buffer
+          :tick (and buffer (buffer-chars-modified-tick buffer))
+          :generation valsi-registry-generation :limit valsi-app-max-file-bytes)))
+
 (defun valsi-app--scan (root)
   "Return recognized and generic Markdown entries below ROOT."
   (unless (bound-and-true-p valsi--initialized)
     (when (fboundp 'valsi-init) (valsi-init)))
-  (let (entries)
-    (dolist (file (valsi-app--project-files root))
-      (condition-case nil
-          (let* ((text (valsi-app--file-text file))
-                 (grammar (valsi-registry-detect file text))
-                 (diagnostics
-                  (unless (eq grammar 'generic)
-                    (valsi-app--artifact-diagnostics grammar text file))))
-            (push (list :file file :grammar grammar
-                        :state (valsi-app--file-state file)
-                        :summary (unless (eq grammar 'generic)
-                                   (valsi-app--artifact-summary grammar text))
-                        :warnings (or (plist-get diagnostics :warnings) 0)
-                        :stale (or (plist-get diagnostics :stale) 0)
-                        :mtime (file-attribute-modification-time
-                                (file-attributes file)))
-                  entries))
-        (file-error nil)))
+  (let ((cache (valsi-app-live-refresh--project-cache
+                (valsi-app-live-refresh--project root)))
+        (seen (make-hash-table :test #'equal))
+        entries)
+    (let ((incremental
+           (and valsi-app-live-refresh-changed-files
+                ;; Notifications can be lost.  A change outside the edited
+                ;; buffers upgrades this pass to authoritative discovery.
+                (cl-loop for file being the hash-keys of cache using (hash-values cached)
+                         always (or (member file valsi-app-live-refresh-changed-files)
+                                    (equal (plist-get cached :key)
+                                           (valsi-app--file-cache-key file))))
+                (seq-every-p (lambda (file) (gethash file cache))
+                             valsi-app-live-refresh-changed-files))))
+      (when incremental
+        (maphash
+         (lambda (file cached)
+           (unless (member file valsi-app-live-refresh-changed-files)
+             (puthash file t seen)
+             (push (plist-get cached :entry) entries)))
+         cache))
+      (dolist (file (if incremental valsi-app-live-refresh-changed-files
+                      (valsi-app--project-files root)))
+        (condition-case nil
+            (let* ((key (valsi-app--file-cache-key file))
+                   (cached (gethash file cache))
+                   (fresh (equal key (plist-get cached :key)))
+                   (text (unless fresh (valsi-app--file-text file)))
+                   (grammar (if fresh (plist-get cached :grammar)
+                              (valsi-registry-detect file text)))
+                   (tree (if fresh (plist-get cached :tree)
+                           (unless (eq grammar 'generic)
+                             (condition-case nil
+                                 (valsi-registry-parse-content grammar text)
+                               (error nil)))))
+                   (diagnostics
+                    (unless (eq grammar 'generic)
+                      (valsi-app--artifact-diagnostics
+                       grammar tree file
+                       (and fresh (plist-get cached :warnings)))))
+                   (summary (if fresh (plist-get cached :summary)
+                              (valsi-app--artifact-summary grammar tree))))
+              (puthash file t seen)
+              (push (list :file file :grammar grammar
+                          :state (valsi-app--file-state file)
+                          :summary summary
+                          :warnings (or (plist-get diagnostics :warnings) 0)
+                          :stale (or (plist-get diagnostics :stale) 0)
+                          :mtime (car (plist-get key :signature)))
+                    entries)
+              (puthash file (list :key key :grammar grammar :tree tree
+                                  :summary summary :entry (car entries)
+                                  :warnings (plist-get diagnostics :warnings))
+                       cache))
+          (file-error nil))))
+    (maphash (lambda (file _entry)
+               (unless (gethash file seen) (remhash file cache)))
+             cache)
     (sort entries
           (lambda (left right)
             (string< (plist-get left :file) (plist-get right :file))))))
@@ -1349,8 +1397,7 @@ not restored automatically."
   (interactive)
   (unless valsi-app--root (user-error "This buffer has no Valsi project"))
   (setq valsi-app--entries
-        (valsi-app-live-refresh-reconcile
-         valsi-app--root (valsi-app--scan valsi-app--root)))
+        (valsi-app-live-refresh-snapshot valsi-app--root #'valsi-app--scan))
   (valsi-app--render))
 
 (defun valsi-app-filter (query)

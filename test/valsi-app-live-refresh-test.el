@@ -155,7 +155,7 @@
             (valsi-app-live-refresh-subscribe hub root #'ignore))
           (setq buffer (find-file-noselect file))
           (cl-letf (((symbol-function 'valsi-app-live-refresh-schedule)
-                     (lambda (changed-root)
+                     (lambda (changed-root &optional _file)
                        (setq scheduled changed-root))))
             (with-current-buffer buffer
               (goto-char (point-max))

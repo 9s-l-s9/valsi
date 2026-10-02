@@ -34,15 +34,28 @@
   initialized
   signatures
   known
+  cache
   subscribers
   watches
+  changed-files
+  rescan
   timer)
 
 (defvar valsi-app-live-refresh--projects (make-hash-table :test #'equal)
   "Canonical project roots mapped to live-refresh state.")
 
+(defvar valsi-app-live-refresh--snapshots nil
+  "Snapshots shared by subscribers during one refresh dispatch.")
+
+(defvar valsi-app-live-refresh-changed-files nil
+  "Edited files during an incremental dispatch, or nil for a full scan.
+Disk notifications and explicit refreshes always request a full scan.")
+
 (defvar-local valsi-app-live-refresh--buffer-root nil
   "Canonical project root whose hub observes this artifact buffer.")
+
+(defvar-local valsi-app-live-refresh--buffer-tick nil
+  "Last observed text modification tick; fontification does not change it.")
 
 (defvar valsi-app-live-refresh--find-file-hook-installed nil
   "Non-nil when live-refresh discovery is installed in `find-file-hook'.")
@@ -53,7 +66,9 @@
 
 (defun valsi-app-live-refresh--project (root)
   "Return or create live-refresh state for ROOT."
-  (let* ((root (valsi-app-live-refresh--canonical-root root))
+  (let* ((root (if (gethash root valsi-app-live-refresh--projects)
+                   root
+                 (valsi-app-live-refresh--canonical-root root)))
          (project (gethash root valsi-app-live-refresh--projects)))
     (or project
         (let ((fresh
@@ -61,6 +76,7 @@
                 :root root
                 :signatures (make-hash-table :test #'equal)
                 :known (make-hash-table :test #'equal)
+                :cache (make-hash-table :test #'equal)
                 :subscribers nil
                 :watches nil)))
           (puthash root fresh valsi-app-live-refresh--projects)
@@ -95,8 +111,12 @@
 
 (defun valsi-app-live-refresh--buffer-after-change (&rest _)
   "Schedule refresh after an observed artifact buffer edit."
-  (when valsi-app-live-refresh--buffer-root
-    (valsi-app-live-refresh-schedule valsi-app-live-refresh--buffer-root)))
+  (when (and valsi-app-live-refresh--buffer-root
+             (not (equal valsi-app-live-refresh--buffer-tick
+                         (buffer-chars-modified-tick))))
+    (setq valsi-app-live-refresh--buffer-tick (buffer-chars-modified-tick))
+    (valsi-app-live-refresh-schedule valsi-app-live-refresh--buffer-root
+                                      buffer-file-name)))
 
 (defun valsi-app-live-refresh--buffer-after-save ()
   "Record an observed save and schedule affected hubs."
@@ -118,10 +138,23 @@
   (when-let* ((buffer (valsi-app-live-refresh--file-buffer file)))
     (with-current-buffer buffer
       (setq-local valsi-app-live-refresh--buffer-root root)
+      (setq-local valsi-app-live-refresh--buffer-tick (buffer-chars-modified-tick))
       (add-hook 'after-change-functions
                 #'valsi-app-live-refresh--buffer-after-change nil t)
       (add-hook 'after-save-hook
                 #'valsi-app-live-refresh--buffer-after-save nil t))))
+
+(defun valsi-app-live-refresh--unobserve (root)
+  "Detach artifact buffer hooks for ROOT when observation ends."
+  (dolist (buffer (buffer-list))
+    (with-current-buffer buffer
+      (when (equal valsi-app-live-refresh--buffer-root root)
+        (remove-hook 'after-change-functions
+                     #'valsi-app-live-refresh--buffer-after-change t)
+        (remove-hook 'after-save-hook
+                     #'valsi-app-live-refresh--buffer-after-save t)
+        (setq valsi-app-live-refresh--buffer-root nil
+              valsi-app-live-refresh--buffer-tick nil)))))
 
 (defun valsi-app-live-refresh--find-file ()
   "Observe a newly visited file when an active project already indexes it."
@@ -211,10 +244,28 @@ reverted or overwritten."
           (lambda (left right)
             (string< (plist-get left :file) (plist-get right :file))))))
 
+(defun valsi-app-live-refresh-snapshot (root scan)
+  "Return reconciled entries for ROOT using SCAN, shared during dispatch.
+SCAN is called with ROOT.  Explicit calls outside a dispatch always reconcile."
+  (let ((cached (and valsi-app-live-refresh--snapshots
+                     (gethash root valsi-app-live-refresh--snapshots))))
+    (if cached
+        (cdr cached)
+      (let ((entries (valsi-app-live-refresh-reconcile root (funcall scan root))))
+        (when valsi-app-live-refresh--snapshots
+          (puthash root (cons t entries) valsi-app-live-refresh--snapshots))
+        entries))))
+
 (defun valsi-app-live-refresh--dispatch (project)
   "Refresh all live hub subscribers of PROJECT."
   (setf (valsi-app-live-refresh--project-timer project) nil)
-  (let (live)
+  (let ((valsi-app-live-refresh--snapshots (make-hash-table :test #'equal))
+        (valsi-app-live-refresh-changed-files
+         (unless (valsi-app-live-refresh--project-rescan project)
+           (valsi-app-live-refresh--project-changed-files project)))
+        live)
+    (setf (valsi-app-live-refresh--project-changed-files project) nil
+          (valsi-app-live-refresh--project-rescan project) nil)
     (dolist (subscriber (valsi-app-live-refresh--project-subscribers project))
       (pcase-let ((`(,buffer . ,function) subscriber))
         (when (buffer-live-p buffer)
@@ -223,9 +274,14 @@ reverted or overwritten."
             (funcall function)))))
     (setf (valsi-app-live-refresh--project-subscribers project) (nreverse live))))
 
-(defun valsi-app-live-refresh-schedule (root)
-  "Schedule one debounced refresh for subscribers of ROOT."
+(defun valsi-app-live-refresh-schedule (root &optional file)
+  "Schedule one debounced refresh for subscribers of ROOT.
+FILE identifies a buffer edit; nil requests full filesystem reconciliation."
   (let ((project (valsi-app-live-refresh--project root)))
+    (if file
+        (cl-pushnew file (valsi-app-live-refresh--project-changed-files project)
+                    :test #'equal)
+      (setf (valsi-app-live-refresh--project-rescan project) t))
     (when-let* ((timer (valsi-app-live-refresh--project-timer project)))
       (cancel-timer timer))
     (setf (valsi-app-live-refresh--project-timer project)
@@ -291,6 +347,8 @@ retaining the authoritative snapshot for the next hub entry."
              (valsi-app-live-refresh--project-subscribers project))))
       (setf (valsi-app-live-refresh--project-subscribers project) subscribers)
       (unless subscribers
+        (valsi-app-live-refresh--unobserve
+         (valsi-app-live-refresh--project-root project))
         (when-let* ((timer (valsi-app-live-refresh--project-timer project)))
           (cancel-timer timer)
           (setf (valsi-app-live-refresh--project-timer project) nil))
@@ -308,6 +366,7 @@ This is primarily useful for tests and explicit application teardown."
              (list (valsi-app-live-refresh--canonical-root root))
            (hash-table-keys valsi-app-live-refresh--projects))))
     (dolist (key roots)
+      (valsi-app-live-refresh--unobserve key)
       (when-let* ((project (gethash key valsi-app-live-refresh--projects)))
         (when-let* ((timer (valsi-app-live-refresh--project-timer project)))
           (cancel-timer timer))
