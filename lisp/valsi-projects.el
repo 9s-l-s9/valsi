@@ -320,6 +320,9 @@ A project with a running agent must be stopped explicitly before removal."
   (if-let* ((state (frame-parameter nil 'valsi-projects-origin)))
       (progn
         (window-state-put state (frame-root-window) 'safe)
+        ;; Emacs 29 restores the selected window without making its
+        ;; buffer current.
+        (select-window (frame-selected-window))
         (set-frame-parameter nil 'valsi-projects-origin nil))
     (quit-window)))
 

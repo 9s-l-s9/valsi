@@ -365,7 +365,7 @@
       (valsi-projects--resized (selected-frame))
       (should (eq 'narrow valsi-projects--layout))
       (should (equal b (valsi-projects--selected-root)))
-      (should (string-match-p (regexp-quote (directory-file-name b)) (buffer-string)))
+      (should (string-match-p (regexp-quote (valsi-project-label b)) (buffer-string)))
       (should-not (valsi-view-section-expanded-p b t)))
     (kill-buffer (current-buffer))
     (should-not (memq #'valsi-projects--resized window-size-change-functions))))
