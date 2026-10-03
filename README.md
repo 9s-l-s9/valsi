@@ -82,6 +82,36 @@ terminals, with single-key navigation (`n`/`p`, `TAB`, `RET`, `g`,
 terminal; the CLI keeps its own prompt, tools, and credentials, and
 Valsi hands it artifact context rather than wrapping it.
 
+`M-x valsi-projects` opens the working-project overview. Use `+` to add a
+project from Emacs's known projects (or choose another directory), `RET` to
+resume it, `c` for its hub, `a` for its primary agent, and `N` for a new named
+agent. Each project shows artifact attention and named terminals. `TAB` folds,
+`/` filters, `g` refreshes, and `-` removes a project from the list without
+closing its buffers or deleting files. Stop live agents explicitly before
+removing their project.
+
+`P` returns to Projects and `w` switches projects from Valsi Browse views.
+In editable artifacts and terminals use `C-c n P` and `C-c n w`; these actions
+also appear in `M-n`. Switching restores each project's windows and selection
+in the current frame, leaving unsaved text and running terminals intact.
+`q` in Projects restores the layout from which you opened it. Outside a
+project, `M-x valsi` opens Projects; `C-u M-x valsi` does so from anywhere.
+
+Projects opened in this session appear automatically. Explicit `+` additions
+are remembered in `valsi-project-file`; set it to nil for session-only use.
+Only roots persist: window layouts and running processes last for this Emacs
+session. Unavailable roots stay listed, and remote roots are opened explicitly
+instead of connecting during background overview refresh.
+
+Agent rows report `running` or `stopped` from the process. Explicit task reports
+can show `working`, `needs input`, `ready to review`, or `idle`; the middle two
+also contribute to project attention. Use `M-x valsi-terminal-agent-set-status`
+to record a status manually. Backend adapters can call
+`valsi-terminal-agent-report-status` with the current instance. Automatic
+backend task reporting is not yet connected; Valsi does not infer task state
+from terminal output. The plan and boundaries are in
+[design/multi-project.md](design/multi-project.md).
+
 In an artifact's Browse state, use `n`/`p` to move, `t` to cycle its
 state, `A` for the next actionable task, and `G` to jump by id/name.
 `i` enters text editing; `ESC` returns to Browse. `c` returns to the
@@ -89,9 +119,11 @@ hub with its filter, folds, and selection preserved. `a` opens the
 agent, and `@` inserts the current artifact reference into its prompt
 for review. `SPC` shows the remaining commands.
 
-The sidebar appears immediately from source context; project counts and
-diagnostics reconcile after an idle pause. `g` explicitly refreshes the
-current view. For repeatable latency measurements, run `make benchmark`.
+The hub and sidebar appear immediately; project counts and diagnostics refresh
+in small batches while Emacs remains available for input. Existing rows stay
+visible with a refreshing indicator until the new snapshot is ready. `g`
+requests a fresh scan. For repeatable latency measurements, including initial
+display and the longest processing turn, run `make benchmark`.
 
 To try everything in a scratch Emacs:
 

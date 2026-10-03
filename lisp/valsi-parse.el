@@ -28,7 +28,8 @@ parse a pure function of text -- independent of any live buffer or point.
 This is the seam a wire transport (or a non-Emacs server) plugs into."
   (with-temp-buffer
     (insert content)
-    (let ((tree (funcall parse-fn)))
+    (let* ((valsi-node--child-tails (make-hash-table :test #'eq))
+           (tree (funcall parse-fn)))
       ;; temp-buffer positions are 1-based; shift to 0-based content offsets.
       (valsi-node-shift tree (- (point-min)))
       tree)))

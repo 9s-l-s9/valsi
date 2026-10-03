@@ -64,16 +64,19 @@
   (let ((root (valsi-changelog-parse
                (concat "# Changelog\n\n"
                        "## [1.0.0] - 2025-12-01\n\n### Added\n\n- x\n\n"
-                       "## [1.1.0] - 15/01/2026\n\n### Fixed\n"))))
-    (cl-letf (((symbol-function 'valsi-tree) (lambda () root))
-              ((symbol-function 'switch-to-buffer) #'ignore))
-      (valsi-changelog-lint)
-      (with-current-buffer "*valsi-changelog-lint*"
-        (goto-char (point-min))
-        (should (search-forward "non-ISO date" nil t))
-        (should (search-forward "out of order" nil t))
-        (should (search-forward "empty category Fixed" nil t)))
-      (kill-buffer "*valsi-changelog-lint*"))))
+                       "## [1.1.0] - 15/01/2026\n\n### Fixed\n")))
+        result)
+    (unwind-protect
+        (cl-letf (((symbol-function 'valsi-tree) (lambda () root))
+                  ((symbol-function 'switch-to-buffer)
+                   (lambda (buffer &rest _) (setq result buffer))))
+          (valsi-changelog-lint)
+          (with-current-buffer result
+            (goto-char (point-min))
+            (should (search-forward "non-ISO date" nil t))
+            (should (search-forward "out of order" nil t))
+            (should (search-forward "empty category Fixed" nil t))))
+      (when (buffer-live-p result) (kill-buffer result)))))
 
 ;;;; Decision (ADR)
 

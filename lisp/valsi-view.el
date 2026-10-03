@@ -15,6 +15,7 @@
 (require 'subr-x)
 (require 'transient)
 (require 'valsi-node)
+(require 'valsi-project)
 
 ;;;; Faces
 
@@ -289,10 +290,51 @@ See `valsi-view-insert-outline' for DEPTH and ROW-LIMIT."
 (defvar-local valsi-view--installed-keywords nil
   "The keyword list currently installed by Valsi, for clean removal.")
 
+;;;; Source-scoped diagnostic views
+
+(defmacro valsi-view-with-result-buffer (name &rest body)
+  "Render BODY in a source-specific result buffer based on NAME.
+Keep project navigation and directory context associated with the source."
+  (declare (indent 1) (debug (form body)))
+  (let ((source (make-symbol "source")))
+    `(let ((,source (current-buffer)))
+       (with-current-buffer
+           (get-buffer-create
+            (format "%s <%s>" ,name
+                    (with-current-buffer ,source
+                      (if buffer-file-name (abbreviate-file-name buffer-file-name)
+                        (buffer-name)))))
+         (let ((inhibit-read-only t)) ,@body)
+         (setq valsi-view--source-buffer ,source
+               default-directory (buffer-local-value 'default-directory ,source)
+               valsi-project-root (with-current-buffer ,source (valsi-project-current-root)))
+         (use-local-map (copy-keymap (current-local-map)))
+         (local-set-key (kbd "P") #'valsi-projects)
+         (local-set-key (kbd "w") #'valsi-project-switch)
+         (local-set-key (kbd "M-n") #'valsi-project-menu)
+         (local-set-key (kbd "?") #'valsi-project-menu)
+         (set-buffer-modified-p nil)))))
+
 ;;;; Tabulated-list agenda factory
 
 (defvar-local valsi-view--refresh-fn nil
   "Buffer-local function recomputing tabulated entries for refresh.")
+
+(defvar-local valsi-view--source-buffer nil
+  "Artifact buffer whose context produced this table.")
+
+(defun valsi-view-visit-source ()
+  "Visit the current row's position in the table's source artifact."
+  (interactive)
+  (let ((position (tabulated-list-get-id)))
+    (unless (integer-or-marker-p position)
+      (user-error "This row has no source position"))
+    (unless (buffer-live-p valsi-view--source-buffer)
+      (user-error "The table's source buffer has been closed"))
+    (pop-to-buffer valsi-view--source-buffer)
+    (widen)
+    (goto-char position)
+    (beginning-of-line)))
 
 (defun valsi-view-fold-at-point ()
   "Fold the current section, or explain that the view has no foldable row."
@@ -308,6 +350,8 @@ See `valsi-view-insert-outline' for DEPTH and ROW-LIMIT."
     ("p" "previous row" valsi-view-list-previous)
     ("TAB" "fold" valsi-view-fold-at-point)]
    ["View"
+    ("P" "projects" valsi-projects)
+    ("w" "switch project" valsi-project-switch)
     ("g" "refresh" revert-buffer)
     ("q" "back" quit-window)]])
 
@@ -336,35 +380,58 @@ See `valsi-view-insert-outline' for DEPTH and ROW-LIMIT."
     (define-key map (kbd "?") #'valsi-view-menu)
     (define-key map (kbd "SPC") #'valsi-view-menu)
     (define-key map (kbd "M-n") #'valsi-view-menu)
+    (define-key map (kbd "P") #'valsi-projects)
+    (define-key map (kbd "w") #'valsi-project-switch)
     (define-key map (kbd "q") #'quit-window)
     map)
   "Universal Browse bindings inherited by tabulated Valsi views.")
 
 (define-derived-mode valsi-view-list-mode tabulated-list-mode "Valsi-List"
   "Base mode for Valsi tabulated agenda/dashboard views."
+  (use-local-map (copy-keymap valsi-view-list-mode-map))
   (setq tabulated-list-padding 1)
   (add-hook 'tabulated-list-revert-hook #'valsi-view--revert nil t))
 
 (defun valsi-view--revert ()
   "Recompute entries via the buffer-local refresh function."
   (when valsi-view--refresh-fn
-    (setq tabulated-list-entries (funcall valsi-view--refresh-fn))))
+    (unless (buffer-live-p valsi-view--source-buffer)
+      (user-error "The table's source buffer has been closed"))
+    (let ((refresh valsi-view--refresh-fn))
+      (setq tabulated-list-entries
+            (with-current-buffer valsi-view--source-buffer
+              (save-excursion
+                (save-restriction
+                  (widen)
+                  (funcall refresh))))))))
 
 (defun valsi-view-tabulated (name columns entries &optional refresh-fn sort-key)
   "Pop up a tabulated-list buffer NAME with COLUMNS and ENTRIES.
 COLUMNS is a vector of (HEADER WIDTH SORT).  ENTRIES is a
 `tabulated-list-entries' value.  REFRESH-FN, if given, recomputes ENTRIES on
-revert.  SORT-KEY optionally sets the initial sort column.  Returns the
-buffer."
-  (let ((buf (get-buffer-create name)))
+revert in the originating buffer.  SORT-KEY optionally sets the initial
+sort column.  Reopening the same table preserves sorting and selection.
+Returns the buffer."
+  (let ((buf (get-buffer-create
+              (if buffer-file-name
+                  (format "%s <%s>" name (abbreviate-file-name buffer-file-name))
+                name)))
+        (source (current-buffer)))
     (with-current-buffer buf
-      (valsi-view-list-mode)
+      (unless (and (derived-mode-p 'valsi-view-list-mode)
+                   (eq valsi-view--source-buffer source)
+                   (equal tabulated-list-format columns))
+        (valsi-view-list-mode)
+        (setq tabulated-list-sort-key sort-key))
+      (setq valsi-view--source-buffer source
+            valsi-project-root (with-current-buffer source (valsi-project-current-root))
+            default-directory (buffer-local-value 'default-directory source))
+      (local-set-key (kbd "RET") #'valsi-view-visit-source)
       (setq tabulated-list-format columns)
       (setq valsi-view--refresh-fn refresh-fn)
       (setq tabulated-list-entries entries)
-      (when sort-key (setq tabulated-list-sort-key sort-key))
       (tabulated-list-init-header)
-      (tabulated-list-print))
+      (tabulated-list-print t))
     (switch-to-buffer buf)
     buf))
 

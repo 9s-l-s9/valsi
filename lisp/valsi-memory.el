@@ -293,7 +293,7 @@ Reports only -- the human decides what to merge (descriptive invariant)."
                     (valsi-memory--sibling-descriptions))))
     (if (and (null dup-targets) (null dup-descs))
         (message "valsi-memory: no duplicates found")
-      (with-current-buffer (get-buffer-create "*valsi-memory-dedupe*")
+      (valsi-view-with-result-buffer "*valsi-memory-dedupe*"
         (let ((inhibit-read-only t))
           (erase-buffer)
           (insert "Memory duplicate candidates:\n\n")
@@ -344,7 +344,7 @@ record not yet written."
            (valsi-memory--record-basenames dir))))
     (if (and (null missing) (null dangling))
         (message "valsi-memory: store is consistent")
-      (with-current-buffer (get-buffer-create "*valsi-memory-stale*")
+      (valsi-view-with-result-buffer "*valsi-memory-stale*"
         (let ((inhibit-read-only t))
           (erase-buffer)
           (insert "Memory store drift:\n\n")
@@ -382,7 +382,7 @@ record not yet written."
    [("Title" 30 t) ("File" 30 t) ("Hook" 50 nil)]
    (valsi-memory--dashboard-entries)
    #'valsi-memory--dashboard-entries)
-  (define-key valsi-view-list-mode-map (kbd "RET") #'valsi-memory--dashboard-visit))
+  (local-set-key (kbd "RET") #'valsi-memory--dashboard-visit))
 
 (defun valsi-memory--dashboard-visit ()
   "Open the memory file on the current index row."

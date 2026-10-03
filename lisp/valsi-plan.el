@@ -867,7 +867,7 @@ missing manifest files, placeholders, and unknown state chars."
                           (nreverse placeholders))))
       (if (null issues)
           (message "Valsi lint: clean (%d tasks)" (length tasks))
-        (with-current-buffer (get-buffer-create "*valsi-plan-lint*")
+        (valsi-view-with-result-buffer "*valsi-plan-lint*"
           (erase-buffer)
           (insert (format "Valsi plan lint: %d issue(s)\n\n" (length issues)))
           (dolist (i issues) (insert "  - " i "\n"))
@@ -1063,7 +1063,7 @@ A pair is stale when its task's path-ref target is newer than the plan."
   (let ((stale (valsi-plan--stale-tasks (valsi-tree) buffer-file-name)))
     (if (null stale)
         (message "Valsi stale-check: no tasks trailing their targets")
-      (with-current-buffer (get-buffer-create "*valsi-plan-stale*")
+      (valsi-view-with-result-buffer "*valsi-plan-stale*"
         (erase-buffer)
         (insert (format "Valsi stale-check: %d task(s) with newer targets\n\n"
                         (length stale)))
@@ -1122,7 +1122,7 @@ A pair is stale when its task's path-ref target is newer than the plan."
    [("File" 40 t) ("Dialect" 12 t) ("Done" 8 t) ("%" 6 t) ("WIP" 5 t)]
    (valsi-plan--dashboard-entries)
    #'valsi-plan--dashboard-entries)
-  (define-key valsi-view-list-mode-map (kbd "RET") #'valsi-plan--dashboard-visit))
+  (local-set-key (kbd "RET") #'valsi-plan--dashboard-visit))
 
 (defun valsi-plan--dashboard-visit ()
   "Open the plan file on the current dashboard row."

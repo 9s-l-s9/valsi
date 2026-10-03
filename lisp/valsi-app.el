@@ -19,6 +19,7 @@
 (require 'subr-x)
 (require 'valsi-registry)
 (require 'valsi-view)
+(require 'valsi-project)
 (require 'valsi-app-live-refresh)
 (require 'valsi-terminal-agent)
 
@@ -136,6 +137,7 @@ Nil falls back to `project-dired'."
 
 (defvar-local valsi-app--root nil)
 (defvar-local valsi-app--entries nil)
+(defvar-local valsi-app--refresh-status nil)
 (defvar-local valsi-app--compact nil)
 (defvar-local valsi-app--filter nil)
 (defvar-local valsi-app--source-buffer nil)
@@ -164,8 +166,8 @@ Manual `s' remains authoritative: automatic restore skips this artifact.")
 
 (defun valsi-app--root ()
   "Return canonical root for the current Emacs project."
-  (file-name-as-directory
-   (file-truename (project-root (valsi-app--project)))))
+  (or valsi-project-root
+      (valsi-project-canonical-root (project-root (valsi-app--project)))))
 
 (defun valsi-app--project-name (root)
   "Return display name for ROOT."
@@ -174,31 +176,36 @@ Manual `s' remains authoritative: automatic restore skips this artifact.")
 (defun valsi-app--buffer-name (root &optional compact)
   "Return application buffer name for ROOT.
 When COMPACT is non-nil, return the artifact-index name."
-  (format (if compact "*Valsi Artifacts: %s*" "*Valsi: %s*")
-          (valsi-app--project-name root)))
+  (valsi-project-buffer-name (if compact "Artifacts" "Hub") root))
 
 (defun valsi-app--command-rail-buffer-name (root)
   "Return the command-rail buffer name for ROOT."
-  (format "*Valsi Commands: %s*" (valsi-app--project-name root)))
+  (valsi-project-buffer-name "Commands" root))
+
+(defun valsi-app--project-candidates (root)
+  "Return the project backend's candidate file names for ROOT."
+  (let ((default-directory root))
+    (project-files (project-current nil root))))
+
+(iter-defun valsi-app--project-file-steps (root)
+  "Filter ROOT's project candidates one at a time, returning Markdown files."
+  (let ((candidates (valsi-app--project-candidates root)) files)
+    (iter-yield nil)
+    (dolist (candidate candidates)
+      (let ((file (expand-file-name candidate root)))
+        (when (and (string-match-p "\\.\\(?:md\\|mdc\\|markdown\\)\\'" file)
+                   (file-regular-p file)
+                   (not (seq-some
+                         (lambda (part)
+                           (member part valsi-app-excluded-directory-names))
+                         (file-name-split (file-relative-name file root)))))
+          (push file files)))
+      (iter-yield nil))
+    (nreverse files)))
 
 (defun valsi-app--project-files (root)
   "Return Markdown project files below ROOT."
-  (let* ((default-directory root)
-         (project (project-current nil root)))
-    (seq-filter
-     (lambda (file)
-       (and (string-match-p "\\.\\(?:md\\|mdc\\|markdown\\)\\'" file)
-            (file-regular-p file)
-            (not
-             (seq-some
-              (lambda (part)
-                (member part valsi-app-excluded-directory-names))
-              (file-name-split
-               (file-relative-name file root))))))
-     (mapcar
-      (lambda (file)
-        (if (file-name-absolute-p file) file (expand-file-name file root)))
-      (project-files project)))))
+  (iter-do (_step (valsi-app--project-file-steps root))))
 
 (defun valsi-app--file-text (file)
   "Return current text used to classify FILE."
@@ -269,71 +276,101 @@ WARNINGS is a cached count of structural plan findings, when available."
           :tick (and buffer (buffer-chars-modified-tick buffer))
           :generation valsi-registry-generation :limit valsi-app-max-file-bytes)))
 
-(defun valsi-app--scan (root)
-  "Return recognized and generic Markdown entries below ROOT."
+(defun valsi-app--analyze-file (file cache)
+  "Analyze FILE, reusing and updating its entry in CACHE."
+  (let* ((key (valsi-app--file-cache-key file))
+         (cached (gethash file cache))
+         (fresh (equal key (plist-get cached :key)))
+         (text (unless fresh (valsi-app--file-text file)))
+         (grammar (if fresh (plist-get cached :grammar)
+                    (valsi-registry-detect file text)))
+         (tree (if fresh (plist-get cached :tree)
+                 (unless (eq grammar 'generic)
+                   (condition-case nil
+                       (valsi-registry-parse-content grammar text)
+                     (error nil)))))
+         (diagnostics
+          (unless (eq grammar 'generic)
+            (valsi-app--artifact-diagnostics
+             grammar tree file (and fresh (plist-get cached :warnings)))))
+         (summary (if fresh (plist-get cached :summary)
+                    (valsi-app--artifact-summary grammar tree)))
+         (entry (list :file file :grammar grammar
+                      :state (valsi-app--file-state file) :summary summary
+                      :warnings (or (plist-get diagnostics :warnings) 0)
+                      :stale (or (plist-get diagnostics :stale) 0)
+                      :mtime (car (plist-get key :signature)))))
+    (puthash file (list :key key :grammar grammar :tree tree :summary summary
+                        :entry entry :warnings (plist-get diagnostics :warnings))
+             cache)
+    entry))
+
+(iter-defun valsi-app--scan-steps (root changed-files &optional versions)
+  "Analyze ROOT in steps, reusing CHANGED-FILES for incremental refreshes.
+When VERSIONS is a hash table, record each entry's analyzed revision there."
   (unless (bound-and-true-p valsi--initialized)
     (when (fboundp 'valsi-init) (valsi-init)))
-  (let ((cache (valsi-app-live-refresh--project-cache
-                (valsi-app-live-refresh--project root)))
-        (seen (make-hash-table :test #'equal))
-        entries)
-    (let ((incremental
-           (and valsi-app-live-refresh-changed-files
-                ;; Notifications can be lost.  A change outside the edited
-                ;; buffers upgrades this pass to authoritative discovery.
-                (cl-loop for file being the hash-keys of cache using (hash-values cached)
-                         always (or (member file valsi-app-live-refresh-changed-files)
-                                    (equal (plist-get cached :key)
-                                           (valsi-app--file-cache-key file))))
-                (seq-every-p (lambda (file) (gethash file cache))
-                             valsi-app-live-refresh-changed-files))))
-      (when incremental
-        (maphash
-         (lambda (file cached)
-           (unless (member file valsi-app-live-refresh-changed-files)
-             (puthash file t seen)
-             (push (plist-get cached :entry) entries)))
-         cache))
-      (dolist (file (if incremental valsi-app-live-refresh-changed-files
-                      (valsi-app--project-files root)))
-        (condition-case nil
-            (let* ((key (valsi-app--file-cache-key file))
-                   (cached (gethash file cache))
-                   (fresh (equal key (plist-get cached :key)))
-                   (text (unless fresh (valsi-app--file-text file)))
-                   (grammar (if fresh (plist-get cached :grammar)
-                              (valsi-registry-detect file text)))
-                   (tree (if fresh (plist-get cached :tree)
-                           (unless (eq grammar 'generic)
-                             (condition-case nil
-                                 (valsi-registry-parse-content grammar text)
-                               (error nil)))))
-                   (diagnostics
-                    (unless (eq grammar 'generic)
-                      (valsi-app--artifact-diagnostics
-                       grammar tree file
-                       (and fresh (plist-get cached :warnings)))))
-                   (summary (if fresh (plist-get cached :summary)
-                              (valsi-app--artifact-summary grammar tree))))
-              (puthash file t seen)
-              (push (list :file file :grammar grammar
-                          :state (valsi-app--file-state file)
-                          :summary summary
-                          :warnings (or (plist-get diagnostics :warnings) 0)
-                          :stale (or (plist-get diagnostics :stale) 0)
-                          :mtime (car (plist-get key :signature)))
-                    entries)
-              (puthash file (list :key key :grammar grammar :tree tree
-                                  :summary summary :entry (car entries)
-                                  :warnings (plist-get diagnostics :warnings))
-                       cache))
-          (file-error nil))))
-    (maphash (lambda (file _entry)
-               (unless (gethash file seen) (remhash file cache)))
-             cache)
-    (sort entries
-          (lambda (left right)
-            (string< (plist-get left :file) (plist-get right :file))))))
+  (let* ((project (valsi-app-live-refresh--project root))
+         (cache (valsi-app-live-refresh--project-cache project))
+         (seen (make-hash-table :test #'equal))
+         (incremental (and changed-files
+                           (seq-every-p (lambda (file) (gethash file cache))
+                                        changed-files)))
+         entries)
+    ;; Lost filesystem notifications must still upgrade an edit to a full scan.
+    (when incremental
+      (dolist (file (hash-table-keys cache))
+        (unless (or (member file changed-files)
+                    (equal (plist-get (gethash file cache) :key)
+                           (valsi-app--file-cache-key file)))
+          (setq incremental nil))
+        (iter-yield nil)))
+    (when incremental
+      (dolist (file (hash-table-keys cache))
+        (unless (member file changed-files)
+          (puthash file t seen)
+          (when versions (puthash file (plist-get (gethash file cache) :key) versions))
+          (push (plist-get (gethash file cache) :entry) entries))
+        (iter-yield nil)))
+    (dolist (file (if incremental changed-files
+                    (iter-yield-from (valsi-app--project-file-steps root))))
+      (condition-case nil
+          (let ((entry (valsi-app--analyze-file file cache)))
+            (puthash file t seen)
+            (when versions (puthash file (plist-get (gethash file cache) :key) versions))
+            (push entry entries)
+            (when (valsi-app-live-refresh--project-subscribers project)
+              (valsi-app-live-refresh--observe-buffer file root)
+              (valsi-app-live-refresh--watch-directory project (file-name-directory file))))
+        (file-error nil))
+      (iter-yield nil))
+    (dolist (file (hash-table-keys cache))
+      (unless (gethash file seen) (remhash file cache))
+      (iter-yield nil))
+    (sort entries (lambda (left right)
+                    (string< (plist-get left :file) (plist-get right :file))))))
+
+(defun valsi-app--scan (root)
+  "Return recognized and generic Markdown entries below ROOT synchronously."
+  (iter-do (_step (valsi-app--scan-steps root valsi-app-live-refresh-changed-files))))
+
+(iter-defun valsi-app--scan-project-steps (root changed-files)
+  "Return a reconciled ROOT snapshot, yielding between file operations.
+CHANGED-FILES identifies edits that may be analyzed incrementally."
+  (let* ((versions (make-hash-table :test #'equal))
+         (entries (iter-yield-from (valsi-app--scan-steps root changed-files versions)))
+         (generation valsi-registry-generation)
+         (limit valsi-app-max-file-bytes))
+    (iter-yield-from
+     (valsi-app-live-refresh--reconcile-steps
+      root entries
+      (lambda (entry)
+        (and (= generation valsi-registry-generation)
+             (equal limit valsi-app-max-file-bytes)
+             (or (null entry)
+                 (let ((file (plist-get entry :file)))
+                   (equal (gethash file versions)
+                          (valsi-app--file-cache-key file))))))))))
 
 (defun valsi-app--group (entries)
   "Group artifact ENTRIES by grammar."
@@ -375,6 +412,8 @@ WARNINGS is a cached count of structural plan findings, when available."
   (valsi-app-hide-sidebars)
   (let ((buffer (button-get button 'valsi-buffer))
         (root valsi-app--root))
+    (unless (buffer-live-p buffer)
+      (user-error "Terminal is closed; use a to open an agent"))
     (switch-to-buffer buffer)
     (valsi-app-show-command-rail buffer root)))
 
@@ -670,6 +709,9 @@ Diagnostics and semantic staleness count only for an open artifact."
 
 (defun valsi-app--insert-header (root recognized markdown agents)
   "Insert the hub header for ROOT over RECOGNIZED, MARKDOWN, and AGENTS."
+  (insert-text-button "Projects" 'follow-link t
+                      'action (lambda (_) (valsi-projects)))
+  (insert " / " (valsi-app--project-name root) "\n\n")
   (if (and valsi-app-dictionary-entry (not valsi-app--compact))
       (let* ((head (car valsi-app-dictionary-entry))
              (split (string-search " " head)))
@@ -691,13 +733,24 @@ Diagnostics and semantic staleness count only for an open artifact."
                         'face 'bold)))
   (insert (propertize
            (if valsi-app--compact
-               (format "%d artifacts · %d attention\n"
+               (format "%s\n%d artifacts · %d attention\n"
+                       (valsi-project-label root)
                        (length recognized)
                        (length (valsi-app--attention-entries recognized)))
              (format "%s  ·  %d artifacts  ·  %d markdown  ·  %d agents\n"
                      (abbreviate-file-name root)
                      (length recognized) (length markdown) (length agents)))
            'face 'valsi-state-face))
+  (let ((count (seq-count #'valsi-terminal-agent-attention-p agents)))
+    (when (> count 0)
+      (insert (propertize (format "%d agents need attention\n" count)
+                          'face 'valsi-attention-face))))
+  (when valsi-app--refresh-status
+    (insert (propertize
+             (if (eq valsi-app--refresh-status 'refreshing)
+                 "Refreshing artifacts…\n"
+               (concat valsi-app--refresh-status " · g retries\n"))
+             'face 'valsi-state-face)))
   (when valsi-app--filter
     (insert (propertize (format "filter: %s\n" valsi-app--filter)
                         'face 'valsi-state-face)))
@@ -798,7 +851,8 @@ ROOT is the project root; the section is omitted when empty."
                     (valsi-terminal-agent-instance-name agent))
             (format "  agent %-12s %s"
                     (valsi-terminal-agent-instance-name agent)
-                    (or (valsi-terminal-agent-instance-task agent) "idle")))))
+                    (or (valsi-terminal-agent-instance-task agent)
+                        (valsi-terminal-agent-status-label agent))))))
        nil t))))
 
 (defun valsi-app--insert-artifacts-section (recognized groups root)
@@ -835,9 +889,7 @@ LAYOUT selects the narrow or wide row format."
    (lambda ()
      (dolist (instance agents)
        (let* ((buffer (valsi-terminal-agent-instance-buffer instance))
-              (status (if (and (buffer-live-p buffer)
-                               (process-live-p (get-buffer-process buffer)))
-                          "running" "stopped"))
+              (status (valsi-terminal-agent-status-label instance))
               (start (point)))
          (insert "  ")
          (insert-text-button
@@ -851,13 +903,13 @@ LAYOUT selects the narrow or wide row format."
                     status
                     (valsi-terminal-agent-instance-backend instance)
                     (or (valsi-terminal-agent-instance-task instance)
-                        "idle"))))
+                        ""))))
          (add-text-properties
           start (point)
           `(valsi-row-id
             ,(format "agent:%s"
                      (valsi-terminal-agent-instance-name instance)))))))
-   (format "%d running" (length agents)) t))
+   (format "%d running" (seq-count #'valsi-terminal-agent--live-p agents)) t))
 
 (defun valsi-app--insert-project-section ()
   "Insert the Project section and the hub footer key hints."
@@ -870,7 +922,7 @@ LAYOUT selects the narrow or wide row format."
    nil nil)
   (insert "\n"
           (propertize
-           "TAB fold · RET open · g refresh · / filter · ? commands · q quit\n"
+           "P projects · w switch · TAB fold · RET open · g refresh · ? commands · q quit\n"
            'face 'valsi-state-face)))
 
 (defun valsi-app--render-contents ()
@@ -895,7 +947,7 @@ LAYOUT selects the narrow or wide row format."
     (if valsi-app--compact
         (progn
           (valsi-app--insert-context layout)
-          (insert "\n" (propertize "s hide · c hub · ? commands\n"
+          (insert "\n" (propertize "s hide · c hub · P projects · w switch · ? commands\n"
                                    'face 'valsi-state-face)))
       (valsi-app--insert-overview-section groups layout)
       (when attention
@@ -926,6 +978,8 @@ LAYOUT selects the narrow or wide row format."
     (define-key map (kbd "TAB") #'valsi-view-toggle-section)
     (define-key map (kbd "<backtab>") #'backward-button)
     (define-key map (kbd "a") #'valsi-agent)
+    (define-key map (kbd "N") #'valsi-agent-new)
+    (define-key map (kbd "S") #'valsi-agent-switch)
     (define-key map (kbd "@") #'valsi-app-handoff)
     (define-key map (kbd "f") #'project-find-file)
     (define-key map (kbd "D") #'project-dired)
@@ -938,6 +992,8 @@ LAYOUT selects the narrow or wide row format."
     (define-key map (kbd "M-n") #'valsi-app-menu)
     (define-key map (kbd "s") #'valsi-app-hide-sidebar)
     (define-key map (kbd "c") #'valsi)
+    (define-key map (kbd "P") #'valsi-projects)
+    (define-key map (kbd "w") #'valsi-project-switch)
     (define-key map (kbd "?") #'valsi-app-menu)
     (define-key map (kbd "q") #'quit-window)
     map)
@@ -1128,8 +1184,12 @@ target belonging to a different row."
     ("b" "buffers" project-switch-to-buffer)]
    ["Agents"
     ("a" "agent terminal" valsi-agent)
+    ("N" "new named agent" valsi-agent-new)
+    ("S" "switch agent" valsi-agent-switch)
     ("@" "hand off reference" valsi-app-handoff)]
    ["Session"
+    ("P" "projects" valsi-projects)
+    ("w" "switch project" valsi-project-switch)
     ("c" "project hub" valsi)
     ("q" "back" quit-window)]])
 
@@ -1144,24 +1204,24 @@ target belonging to a different row."
   "Return a populated project buffer for ROOT.
 Use compact rendering when COMPACT is non-nil.  SOURCE is the artifact buffer
 whose contextual commands should be shown."
+  (setq root (valsi-project-register root))
   (let ((buffer (get-buffer-create (valsi-app--buffer-name root compact))))
     (with-current-buffer buffer
       (unless (derived-mode-p 'valsi-app-mode) (valsi-app-mode))
       (setq valsi-app--root root
+            valsi-project-root root
             valsi-app--compact compact
             valsi-app--source-buffer source
             default-directory root)
       (valsi-app-live-refresh-subscribe
-       (current-buffer) root #'valsi-app-refresh)
-      ;; Paint context immediately; reconcile the project after an idle pause.
-      ;; Artifact switches must not wait for project discovery or diagnostics.
-      (if compact
-          (progn
-            (setq valsi-app--context-signature
-                  (valsi-app-context-signature source))
-            (valsi-app--render)
-            (valsi-app-live-refresh-schedule root))
-        (valsi-app-refresh)))
+       (current-buffer) root #'valsi-app--accept-snapshot #'valsi-app--scan-project-steps)
+      (setq valsi-app--context-signature (valsi-app-context-signature source))
+      ;; Reentering or adding a sidebar joins work already in progress.
+      (let ((project (valsi-app-live-refresh--project root)))
+        (unless (or (valsi-app-live-refresh--project-timer project)
+                    (valsi-app-live-refresh--project-iterator project))
+          (valsi-app-live-refresh-schedule root nil (not compact))))
+      (valsi-app--accept-snapshot))
     buffer))
 
 (defun valsi-app--sidebar-width-for-frame (frame-columns &optional force)
@@ -1246,6 +1306,8 @@ whose KEY does not resolve to COMMAND in the live buffer are omitted."
     ("/" "search" isearch-forward)
     gap
     ("c" "hub" valsi)
+    ("P" "projects" valsi-projects)
+    ("w" "switch project" valsi-project-switch)
     ("d" "outline" valsi-outline)
     ("a" "agent" valsi-agent)
     ("@" "reference" valsi-app-handoff)
@@ -1429,10 +1491,13 @@ not restored automatically."
       (valsi-app-show-sidebar (current-buffer) t))))
 
 ;;;###autoload
-(defun valsi ()
-  "Open the Magit-like Valsi artifact application for the current project."
-  (interactive)
-  (valsi-app--open nil))
+(defun valsi (&optional projects)
+  "Open the current project hub, or Projects when outside a project.
+With prefix argument PROJECTS, always show the working-project overview."
+  (interactive "P")
+  (if (or projects (not (valsi-project-current-root)))
+      (valsi-projects)
+    (valsi-app--open nil)))
 
 ;;;###autoload
 (defun valsi-artifacts ()
@@ -1440,13 +1505,19 @@ not restored automatically."
   (interactive)
   (valsi-app--open t))
 
+(defun valsi-app--accept-snapshot ()
+  "Redraw this view from its project's last complete snapshot and status."
+  (let ((project (valsi-app-live-refresh--project valsi-app--root)))
+    (setq valsi-app--entries (valsi-app-live-refresh--project-snapshot project)
+          valsi-app--refresh-status (valsi-app-live-refresh--project-status project))
+    (valsi-app--render)))
+
 (defun valsi-app-refresh ()
-  "Reconcile and redraw the current project artifact view."
+  "Schedule project reconciliation and keep the last complete view visible."
   (interactive)
   (unless valsi-app--root (user-error "This buffer has no Valsi project"))
-  (setq valsi-app--entries
-        (valsi-app-live-refresh-snapshot valsi-app--root #'valsi-app--scan))
-  (valsi-app--render))
+  (valsi-app-live-refresh-schedule valsi-app--root nil t)
+  (valsi-app-live-refresh--publish (valsi-app-live-refresh--project valsi-app--root)))
 
 (defun valsi-app-filter (query)
   "Filter artifact rows by family or path using QUERY.
@@ -1537,6 +1608,15 @@ This compatibility command no longer creates the former composition layout."
   (interactive)
   (valsi-app-hide-sidebars)
   (valsi-agent))
+
+(defun valsi-app--agents-changed ()
+  "Redraw live project views after terminal lifecycle changes."
+  (dolist (buffer (buffer-list))
+    (with-current-buffer buffer
+      (when (and (derived-mode-p 'valsi-app-mode) valsi-app--root)
+        (valsi-app--render)))))
+
+(add-hook 'valsi-terminal-agent-change-hook #'valsi-app--agents-changed)
 
 (provide 'valsi-app)
 ;;; valsi-app.el ends here

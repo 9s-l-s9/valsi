@@ -160,21 +160,12 @@
    [("" 8 nil) ("Section" 54 nil) ("Lvl" 4 t)]
    (valsi-overview--dashboard-entries)
    #'valsi-overview--dashboard-entries)
-  (define-key valsi-view-list-mode-map (kbd "RET") #'valsi-overview--visit))
+  (local-set-key (kbd "RET") #'valsi-overview--visit))
 
 (defun valsi-overview--visit ()
   "Jump to the section on the current outline row (in the other window)."
   (interactive)
-  (let ((pos (tabulated-list-get-id)))
-    (when (and pos (integerp pos))
-      (let ((buf (cl-find-if (lambda (b)
-                               (with-current-buffer b
-                                 (bound-and-true-p valsi-artifact-minor-mode)))
-                             (buffer-list))))
-        (when buf
-          (switch-to-buffer buf)
-          (goto-char (min pos (point-max)))
-          (beginning-of-line))))))
+  (valsi-view-visit-source))
 
 ;;;; Registration
 

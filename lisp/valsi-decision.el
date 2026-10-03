@@ -192,7 +192,7 @@ otherwise fall back to the whole cleaned line (kept descriptive)."
    [("File" 28 t) ("Title" 44 t) ("Status" 14 t)]
    (valsi-decision--dashboard-entries)
    #'valsi-decision--dashboard-entries)
-  (define-key valsi-view-list-mode-map (kbd "RET") #'valsi-decision--visit))
+  (local-set-key (kbd "RET") #'valsi-decision--visit))
 
 (defun valsi-decision--visit ()
   "Open the ADR on the current dashboard row."

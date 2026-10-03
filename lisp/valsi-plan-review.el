@@ -131,10 +131,15 @@ node, then apply.  With no changes, reports so and does nothing."
          (changes (valsi-plan-diff old new-content)))
     (if (null changes)
         (message "Valsi review: no task-level changes")
-      (let ((buf (get-buffer-create "*valsi-plan-review*")))
+      (let ((buf (get-buffer-create
+                  (if buffer-file-name
+                      (format "*Valsi Review: %s*" (abbreviate-file-name buffer-file-name))
+                    "*valsi-plan-review*"))))
         (with-current-buffer buf
           (valsi-plan-review-mode)
-          (setq valsi-plan-review--target target
+          (setq default-directory (buffer-local-value 'default-directory target)
+                valsi-project-root (with-current-buffer target (valsi-project-current-root))
+                valsi-plan-review--target target
                 valsi-plan-review--old old
                 valsi-plan-review--changes
                 (mapcar (lambda (c) (cons c t)) changes)) ; accepted by default
@@ -148,6 +153,10 @@ node, then apply.  With no changes, reports so and does nothing."
     (define-key m (kbd "a") #'valsi-plan-review-accept-all)
     (define-key m (kbd "r") #'valsi-plan-review-reject-all)
     (define-key m (kbd "RET") #'valsi-plan-review-apply)
+    (define-key m (kbd "P") #'valsi-projects)
+    (define-key m (kbd "M-n") #'valsi-project-menu)
+    (define-key m (kbd "?") #'valsi-project-menu)
+    (define-key m (kbd "w") #'valsi-project-switch)
     (define-key m (kbd "q") #'quit-window)
     m)
   "Keymap for `valsi-plan-review-mode'.")

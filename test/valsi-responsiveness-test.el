@@ -10,6 +10,7 @@
 
 (require 'ert)
 (require 'valsi)
+(require 'valsi-test-refresh)
 
 (defun valsi-responsiveness--chain (count &optional cycle)
   "Return a COUNT-task dependency chain, closing a cycle when CYCLE is non-nil."
@@ -194,7 +195,7 @@
          (count 0)
          buffer)
     (unwind-protect
-        (cl-letf (((symbol-function 'valsi-app--project-files) (lambda (_) files))
+        (cl-letf (((symbol-function 'valsi-app--project-candidates) (lambda (_) files))
                   ((symbol-function 'valsi-registry-parse-content)
                    (lambda (&rest args) (cl-incf count) (apply parse args))))
           (with-temp-file file (insert "- [ ] T001 First\n"))
@@ -237,7 +238,7 @@
          (file (expand-file-name "PLAN.md" root))
          (target (expand-file-name "code.el" root)))
     (unwind-protect
-        (cl-letf (((symbol-function 'valsi-app--project-files)
+        (cl-letf (((symbol-function 'valsi-app--project-candidates)
                    (lambda (_) (list file))))
           (with-temp-file target (insert "old"))
           (with-temp-file file (insert "- [x] T001 Edit `./code.el`\n"))
@@ -296,18 +297,20 @@
          (sidebar (generate-new-buffer " *valsi-sidebar-test*"))
          (scans 0))
     (unwind-protect
-        (cl-letf (((symbol-function 'valsi-app--scan)
+        (cl-letf (((symbol-function 'valsi-app--project-candidates)
                    (lambda (_)
                      (cl-incf scans)
-                     (list (list :file file :grammar 'plan)))))
+                     (list file))))
           (valsi-app-live-refresh-reconcile root nil)
           (with-temp-file file (insert "# Plan\n"))
           (dolist (buffer (list hub sidebar))
             (with-current-buffer buffer
               (valsi-app-mode)
               (setq valsi-app--root root)
-              (valsi-app-live-refresh-subscribe buffer root #'valsi-app-refresh)))
+              (valsi-app-live-refresh-subscribe
+               buffer root #'valsi-app--accept-snapshot #'valsi-app--scan-project-steps)))
           (valsi-app-live-refresh--dispatch (valsi-app-live-refresh--project root))
+          (valsi-test-refresh-drain root)
           (should (= 1 scans))
           (dolist (buffer (list hub sidebar))
             (should (equal "new" (plist-get
@@ -330,7 +333,7 @@
          (read-file (symbol-function 'valsi-app--file-text))
          buffer)
     (unwind-protect
-        (cl-letf (((symbol-function 'valsi-app--project-files)
+        (cl-letf (((symbol-function 'valsi-app--project-candidates)
                    (lambda (_) (cl-incf discoveries) files))
                   ((symbol-function 'valsi-app--file-text)
                    (lambda (file) (push file reads) (funcall read-file file))))
@@ -485,10 +488,11 @@
           (delete-other-windows)
           (with-temp-file file (insert "# Plan\n- [ ] T001 First\n"))
           (cl-letf (((symbol-function 'valsi-app--root) (lambda () root))
-                    ((symbol-function 'valsi-app--project-files) (lambda (_) (list file)))
+                    ((symbol-function 'valsi-app--project-candidates) (lambda (_) (list file)))
                     ((symbol-function 'valsi-terminal-agent-insert)
                      (lambda (text &optional _) (setq reference text))))
             (setq hub (valsi))
+            (valsi-test-refresh-drain root)
             (goto-char (point-min))
             (execute-kbd-macro (kbd "n RET n"))
             (setq row (get-text-property (line-beginning-position) 'valsi-row-id))
@@ -499,6 +503,7 @@
             (should valsi-artifact-minor-mode)
             (should (eq valsi--interaction-state 'browse))
             (execute-kbd-macro (kbd "n t c"))
+            (valsi-test-refresh-drain root)
             (should (eq hub (current-buffer)))
             ;; New Active and Attention rows above must not move this selection.
             (should (equal row (get-text-property (line-beginning-position) 'valsi-row-id)))

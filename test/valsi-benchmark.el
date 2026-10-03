@@ -31,10 +31,44 @@
                        label (* 1000 (/ (car timing) count)) count (cadr timing))))
     (error (princ (format "%-36s ERROR: %s\n" label (error-message-string error))))))
 
+(defun valsi-benchmark--chunked-scan (root)
+  "Report initial display, longest work turn, and completion time for ROOT."
+  (valsi-app-live-refresh-reset root)
+  (let ((advance (symbol-function 'valsi-app-live-refresh--continue))
+        started turns hub)
+    (unwind-protect
+        (cl-letf (((symbol-function 'valsi-app-live-refresh--continue)
+                   (lambda (&rest args)
+                     (let ((start (float-time)))
+                       (prog1 (apply advance args)
+                         (push (- (float-time) start) turns))))))
+          (setq started (float-time)
+                hub (valsi-app--buffer root nil))
+          (princ (format "%-36s %9.3f ms\n" "Cold hub initial display"
+                         (* 1000 (- (float-time) started))))
+          (let ((project (valsi-app-live-refresh--project root)))
+            (while (and (valsi-app-live-refresh--project-timer project)
+                        (< (- (float-time) started) 30))
+              (accept-process-output nil 0.01))
+            (when (or (valsi-app-live-refresh--project-timer project)
+                      (valsi-app-live-refresh--project-status project))
+              (error "Chunked scan did not finish: %s"
+                     (valsi-app-live-refresh--project-status project))))
+          (princ (format "%-36s %9.3f ms  (%d turns)\n" "Cold scan longest work turn"
+                         (* 1000 (apply #'max turns)) (length turns)))
+          (princ (format "%-36s %9.3f ms\n" "Cold scan total incl. yields"
+                         (* 1000 (- (float-time) started)))))
+      (when (buffer-live-p hub) (kill-buffer hub))
+      (valsi-app-live-refresh-reset root))))
+
 (valsi-init)
 ;; Exclude benchmark.el's first-call loading from the first measurement.
 (benchmark-call #'ignore)
 (princ (format "Emacs %s; project %s\n" emacs-version default-directory))
+(dolist (size '(2000 8000 16000))
+  (let ((content (valsi-benchmark--plan size)))
+    (valsi-benchmark--measure (format "Parse flat plan (%d tasks)" size) 3
+                              (lambda () (valsi-plan-parse content)))))
 (dolist (size '(100 300 600))
   (let ((tree (valsi-plan-parse (valsi-benchmark--plan size))))
     (valsi-benchmark--measure (format "Lint dependency chain (%d tasks)" size)
@@ -49,6 +83,11 @@
       hub sidebar)
   (unwind-protect
       (progn
+        ;; The user command resolves the project before opening its view.
+        ;; Report that one-time backend setup separately from artifact work.
+        (valsi-benchmark--measure "Project backend first lookup" 1
+                                  (lambda () (project-current nil root)))
+        (valsi-benchmark--chunked-scan root)
         (valsi-benchmark--measure "Project scan, cold" 1
                                   (lambda () (valsi-app--scan root)))
         (valsi-benchmark--measure "Project scan, unchanged" 10

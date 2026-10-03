@@ -18,6 +18,15 @@ confirmations, context accounting, and sessions. Valsi owns project association,
 process/focus conveniences, and explicit artifact handoff. It never scrapes
 terminal cells to reproduce structured state.
 
+ADR 0008 adds a Projects overview above those hubs. `valsi-project` owns
+canonical root identity and explicit working-set declarations;
+`valsi-projects` renders the same shared snapshots as the hubs and restores
+frame-local window layouts when switching projects. Artifact sources and
+terminal processes remain alive throughout navigation. Persisted state holds
+only explicitly remembered roots in the Emacs state directory. Terminal
+lifecycle and explicit task-status reports update the client views outside AAP.
+See `design/multi-project.md` for the interaction contract and verification.
+
 The later named-instance, collision-warning, and Git-worktree model is
 specified in `design/multi-agent.md`.  It extends this boundary without adding an
 agent messaging or transcript layer.

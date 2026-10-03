@@ -158,7 +158,7 @@ The row id is the absolute source file, so RET can visit it."
    (valsi-graph--entries)
    #'valsi-graph--entries
    '("Source" . nil))
-  (define-key valsi-view-list-mode-map (kbd "RET") #'valsi-graph-visit))
+  (local-set-key (kbd "RET") #'valsi-graph-visit))
 
 (provide 'valsi-graph)
 ;;; valsi-graph.el ends here

@@ -299,6 +299,34 @@ Project sections.  Native application buffers use direct Magit-like keys:
 @kbd{g} refreshes, @kbd{/} filters, and @kbd{?} shows commands.  Editable
 artifacts and terminals retain the @kbd{C-c n} prefix.
 
+@code{M-x valsi-projects} shows the working projects above their individual
+hubs.  @kbd{+} adds a project, @key{RET} resumes its saved windows, @kbd{c}
+opens its hub, @kbd{a} opens its agent, and @kbd{N} starts a named agent.
+@kbd{-} removes membership without deleting files or closing buffers; running
+agents must be stopped explicitly first.  @kbd{TAB} folds a project,
+@kbd{/} filters the list, and @kbd{g} schedules fresh artifact snapshots.
+@kbd{q} restores the layout from which Projects was opened.
+
+Use @kbd{P} for Projects and @kbd{w} to switch projects in Valsi Browse views;
+editable artifacts and terminals use @kbd{C-c n P} and @kbd{C-c n w}.
+@kbd{M-n} exposes these commands.  Switching preserves frame-local layouts,
+selection, unsaved source text and live processes.  Outside a project,
+@code{M-x valsi} opens Projects; a prefix argument always opens Projects.
+Canonical roots keep equal directory basenames and separate worktrees distinct.
+
+Only explicit additions persist in @code{valsi-project-file}.  A nil value
+keeps membership in memory.  Session visits appear automatically, but window
+layouts and processes are not restored after Emacs exits.  Missing directories
+remain visible.  Remote projects require explicit opening rather than automatic
+background connections.
+
+Agent process liveness is displayed as running or stopped.  Explicit reports
+can show working, needs input, ready to review, or idle.  Needs input and ready
+to review contribute to project attention.  Record a status manually with
+@code{valsi-terminal-agent-set-status}; integrations can use the client-side
+@code{valsi-terminal-agent-report-status} function.  Backend task reporting is
+not automatically connected, and no status is inferred from terminal text.
+
 The contextual artifact sidebar shows the current semantic node and at most
 four direct actions.  It is automatically suppressed when showing it would
 make the source or terminal narrower than @code{valsi-app-minimum-source-width}.

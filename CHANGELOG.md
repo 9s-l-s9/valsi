@@ -9,6 +9,15 @@ grammar activates.
 
 ### Added
 
+- A working-project overview (`valsi-projects`) with shared artifact attention,
+  named agents, add/remove/filter actions, and explicit root persistence.
+- Project switching restores each project's windows and selected buffer per
+  frame. `P`/`w` and terminal-safe `C-c n P`/`C-c n w` provide consistent access.
+- Terminal lifecycle updates and explicit task-status reporting, with stale
+  instance rejection and project-level attention for input/review requests.
+- Canonical project paths distinguish hubs, sidebars, command rails and agent
+  terminals; source paths separate outlines, tables and plan review buffers.
+
 - `make benchmark` measures project scans, hub reentry, sidebar display,
   dependency lint, source refresh, and editing latency.
 - Direct Browse actions: `t` toggles, `A` selects the next actionable task,
@@ -32,6 +41,13 @@ grammar activates.
 
 ### Changed
 
+- Project refreshes yield between small batches of file operations. Hub opens
+  return immediately, keep existing rows visible while refreshing, and share
+  one scan with the sidebar. Edits cancel stale work; closing the last view
+  cancels its timers. Failed scans preserve the last snapshot and allow retry.
+- Parsing appends sibling nodes in constant time, keeping large flat plans
+  and instruction lists responsive without changing the node model.
+- Reopening a family dashboard preserves its sorting and selected row.
 - Artifact synchronization parses once per text revision; typing updates
   semantic context after an idle pause, and fontification stays lazy.
 - Project views reuse unchanged trees and structural diagnostics, refresh
@@ -47,6 +63,10 @@ grammar activates.
 
 ### Fixed
 
+- Family dashboards refresh from their source artifacts, including unsaved
+  edits, instead of parsing their own rendered tables. Outline navigation
+  returns to the original artifact, and each dashboard keeps its own Enter
+  binding when other views open.
 - Hub navigation advances to the next row, Attention entries open their files,
   and overflow entries expand. File selection survives new Attention/Active
   rows. Edit and handoff work from any column on the selected row, and opening

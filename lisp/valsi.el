@@ -232,6 +232,8 @@ offset->buffer-position translation here."
     (define-key map (kbd "C-c n r") #'valsi-refresh)
     (define-key map (kbd "C-c n G") #'valsi-graph)
     (define-key map (kbd "C-c n c") #'valsi)
+    (define-key map (kbd "C-c n P") #'valsi-projects)
+    (define-key map (kbd "C-c n w") #'valsi-project-switch)
     (define-key map (kbd "C-c n s") #'valsi-app-toggle-sidebar)
     (define-key map (kbd "C-c n @") #'valsi-app-handoff)
     (define-key map (kbd "C-c n ?") #'valsi-describe-grammar)
@@ -271,6 +273,8 @@ offset->buffer-position translation here."
     (define-key map (kbd "?") #'valsi-menu)
     (define-key map (kbd "SPC") #'valsi-menu)
     (define-key map (kbd "M-n") #'valsi-menu)
+    (define-key map (kbd "P") #'valsi-projects)
+    (define-key map (kbd "w") #'valsi-project-switch)
     (define-key map (kbd "q") #'quit-window)
     (define-key map (kbd "c") #'valsi)
     (define-key map (kbd "d") #'valsi-outline)
@@ -452,6 +456,8 @@ a keymap (\\{valsi-artifact-mode-map})."
     (define-key map (kbd "?") #'valsi-menu)
     (define-key map (kbd "SPC") #'valsi-menu)
     (define-key map (kbd "M-n") #'valsi-menu)
+    (define-key map (kbd "P") #'valsi-projects)
+    (define-key map (kbd "w") #'valsi-project-switch)
     (define-key map (kbd "q") #'quit-window)
     map)
   "Keymap for `valsi-outline-mode'.")
@@ -489,10 +495,12 @@ dashboards: same node tree, same sectioned rendering as the sidebar."
   (let* ((source (current-buffer))
          (buffer (get-buffer-create
                   (format "*Valsi Outline: %s*"
-                          (file-name-nondirectory buffer-file-name)))))
+                          (abbreviate-file-name buffer-file-name)))))
     (with-current-buffer buffer
       (valsi-outline-mode)
-      (setq valsi-outline--source source)
+      (setq valsi-outline--source source
+            default-directory (buffer-local-value 'default-directory source)
+            valsi-project-root (with-current-buffer source (valsi-project-current-root)))
       (setq-local revert-buffer-function
                   (lambda (&rest _) (valsi-outline--render)))
       (valsi-outline--render))
@@ -513,6 +521,8 @@ dashboards: same node tree, same sectioned rendering as the sidebar."
     ("o" "occur by state" valsi-occur)
     ("l" "lint/validate" valsi-lint)]
    ["Views"
+    ("P" "projects" valsi-projects)
+    ("w" "switch project" valsi-project-switch)
     ("c" "project hub" valsi)
     ("A" "agent terminal" valsi-agent)
     ("@" "reference to agent" valsi-app-handoff)

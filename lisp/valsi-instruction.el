@@ -279,15 +279,14 @@ Also reports the frontmatter glob predicate when the file is glob-scoped."
   "Show the transitive @import graph rooted at this file."
   (interactive)
   (let ((root-file (or buffer-file-name (user-error "Buffer has no file")))
-        (seen (make-hash-table :test 'equal))
-        (buf (get-buffer-create "*Valsi import graph*")))
-    (with-current-buffer buf
+        (seen (make-hash-table :test 'equal)))
+    (valsi-view-with-result-buffer "*Valsi import graph*"
       (let ((inhibit-read-only t))
         (erase-buffer)
         (valsi-instruction--graph-insert root-file 0 seen)
         (goto-char (point-min))
-        (special-mode)))
-    (switch-to-buffer buf)))
+        (special-mode))
+      (switch-to-buffer (current-buffer)))))
 
 (defun valsi-instruction-follow ()
   "Follow the @import or [[link]] at point to its file."
@@ -334,7 +333,7 @@ with no globs/applyTo and not alwaysApply) and dangling imports."
          (findings (valsi-instruction--lint-collect root dir)))
     (if (null findings)
         (message "valsi-instruction: clean")
-      (with-current-buffer (get-buffer-create "*Valsi instruction lint*")
+      (valsi-view-with-result-buffer "*Valsi instruction lint*"
         (let ((inhibit-read-only t))
           (erase-buffer)
           (dolist (f findings) (insert (cdr f) "\n"))

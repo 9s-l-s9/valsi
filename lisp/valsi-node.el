@@ -48,10 +48,27 @@ typed fields.  CHILDREN is a list of `valsi-node'."
         (plist-put (valsi-node-props node) key value))
   node)
 
+(defvar valsi-node--child-tails nil
+  "Parse-local table of child-list heads and tails, keyed by parent node.
+Bound by `valsi-parse-in-content'; never retained in the node model.")
+
 (defun valsi-node-add-child (node child)
-  "Append CHILD to NODE's children and return NODE."
-  (setf (valsi-node-children node)
-        (nconc (valsi-node-children node) (list child)))
+  "Append CHILD to NODE's children and return NODE.
+During parsing, remember each parent's last cons to avoid walking siblings
+for every append.  The children remain in document order throughout."
+  (let* ((children (valsi-node-children node))
+         (cached (and valsi-node--child-tails
+                      (gethash node valsi-node--child-tails)))
+         (tail (if (and cached (eq (car cached) children)
+                        (null (cdr (cdr cached))))
+                   (cdr cached)
+                 (last children)))
+         (cell (list child)))
+    (if tail (setcdr tail cell)
+      (setf (valsi-node-children node) cell))
+    (when valsi-node--child-tails
+      (puthash node (cons (valsi-node-children node) cell)
+               valsi-node--child-tails)))
   node)
 
 ;;;; Region helpers

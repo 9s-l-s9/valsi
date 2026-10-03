@@ -171,7 +171,7 @@
               (push (format "%s: empty category %s" ver name) issues))))))
     (if (null issues)
         (message "Valsi changelog: clean (%d releases)" (length releases))
-      (with-current-buffer (get-buffer-create "*valsi-changelog-lint*")
+      (valsi-view-with-result-buffer "*valsi-changelog-lint*"
         (erase-buffer)
         (insert (format "Changelog lint: %d issue(s)\n\n" (length issues)))
         (dolist (i (nreverse issues)) (insert "  - " i "\n"))

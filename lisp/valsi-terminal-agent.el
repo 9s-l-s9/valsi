@@ -16,6 +16,7 @@
 (require 'seq)
 (require 'subr-x)
 (require 'transient)
+(require 'valsi-project)
 
 (defvar eat-terminal)
 (declare-function eat-term-send-string-as-yank "eat" (terminal args))
@@ -76,19 +77,71 @@ ROOT is the current logical project identity.  WORKTREE is the CLI's
 execution directory; they are equal until linked-worktree discovery lands.
 CAPABILITY describes Valsi integration, while TASK is an optional semantic
 artifact reference.  No transcript, session, or credential data belongs here."
-  name backend capability task root worktree buffer)
+  name backend capability task root worktree buffer status detail)
 
 (defvar valsi-terminal-agent--instances (make-hash-table :test #'equal)
   "Map project-root/name keys to terminal agent instances.")
 
+(defvar valsi-terminal-agent-change-hook nil
+  "Hook run after terminal lifecycle or explicit task status changes.")
+
+(defun valsi-terminal-agent-attention-p (instance)
+  "Return non-nil when live INSTANCE explicitly reports needing attention."
+  (and (valsi-terminal-agent--live-p instance)
+       (memq (valsi-terminal-agent-instance-status instance) '(blocked done))))
+
+(defun valsi-terminal-agent-status-label (instance)
+  "Return an evidence-based status label for INSTANCE."
+  (if (valsi-terminal-agent--live-p instance)
+      (pcase (valsi-terminal-agent-instance-status instance)
+        ('working "working") ('blocked "needs input") ('done "ready to review")
+        ('idle "idle") (_ "running"))
+    "stopped"))
+
+(defun valsi-terminal-agent-report-status (instance status &optional detail)
+  "Report explicit STATUS and optional DETAIL for the current INSTANCE.
+STATUS is working, blocked, done, idle, or nil for unknown task state.
+Stale reports from a replaced instance or an exited process are rejected.
+This client-side reporting boundary is outside AAP."
+  (unless (memq status '(nil working blocked done idle))
+    (user-error "Unknown agent task status: %s" status))
+  (unless (or (null detail) (stringp detail))
+    (user-error "Agent status detail must be text"))
+  (unless (and (eq instance
+                   (gethash (valsi-terminal-agent--key
+                             (valsi-terminal-agent-instance-root instance)
+                             (valsi-terminal-agent-instance-name instance))
+                            valsi-terminal-agent--instances))
+               (valsi-terminal-agent--live-p instance))
+    (user-error "Agent instance is no longer running"))
+  (setf (valsi-terminal-agent-instance-status instance) status
+        (valsi-terminal-agent-instance-detail instance) detail)
+  (run-hooks 'valsi-terminal-agent-change-hook))
+
+(defun valsi-terminal-agent-set-status ()
+  "Record an explicit task status for this project's named agent."
+  (interactive)
+  (let* ((root (valsi-terminal-agent-project-root))
+         (name (valsi-terminal-agent--read-name root))
+         (instance (valsi-terminal-agent-get root name))
+         (status (completing-read "Task status: " '("working" "blocked" "done" "idle" "unknown") nil t)))
+    (unless instance (user-error "Agent %s is not running" name))
+    (valsi-terminal-agent-report-status
+     instance (unless (equal status "unknown") (intern status)))))
+
+(defun valsi-terminal-agent--changed (&rest _)
+  "Notify views after a terminal process or buffer changes."
+  (run-hooks 'valsi-terminal-agent-change-hook))
+
 (defun valsi-terminal-agent-project-root (&optional directory)
   "Return canonical project root for DIRECTORY or `default-directory'."
-  (let* ((default-directory (file-name-as-directory
+  (or (and (null directory) valsi-project-root)
+      (let* ((default-directory (file-name-as-directory
                              (expand-file-name
                               (or directory default-directory))))
          (project (project-current nil default-directory))
          (root (if project (project-root project) default-directory)))
-    (file-name-as-directory (file-truename root))))
+    (file-name-as-directory (file-truename root)))))
 
 (defun valsi-terminal-agent--project-name (root)
   "Return display name for project ROOT."
@@ -170,6 +223,8 @@ artifact reference.  No transcript, session, or credential data belongs here."
     ;; Only complete Valsi prefix sequences are captured.  All ordinary
     ;; terminal and CLI keys remain owned by Eat and the agent.
     (define-key map (kbd "C-c n c") #'valsi)
+    (define-key map (kbd "C-c n P") #'valsi-projects)
+    (define-key map (kbd "C-c n w") #'valsi-project-switch)
     (define-key map (kbd "C-c n a") #'valsi-app-focus-artifacts)
     (define-key map (kbd "C-c n f") #'valsi-app-focus-agent)
     (define-key map (kbd "C-c n 1") #'valsi-terminal-agent-focus)
@@ -211,6 +266,9 @@ artifact reference.  No transcript, session, or credential data belongs here."
   "Valsi terminal workspace menu.
 Deliberately small: the CLI owns every printable key."
   [["Workspace"
+    ("P" "projects" valsi-projects)
+    ("w" "switch project" valsi-project-switch)
+    ("s" "record task status" valsi-terminal-agent-set-status)
     ("c" "project hub" valsi)
     ("a" "artifact index" valsi-app-focus-artifacts)
     ("f" "focus agent" valsi-app-focus-agent)
@@ -221,6 +279,7 @@ Deliberately small: the CLI owns every printable key."
 
 (defun valsi-terminal-agent--start (root name backend)
   "Start and return agent NAME using BACKEND at ROOT."
+  (setq root (valsi-project-canonical-root root))
   (valsi-terminal-agent--eat)
   (let* ((decl (cdr (valsi-terminal-agent--backend backend)))
          (decl (if (eq backend 'custom)
@@ -233,8 +292,8 @@ Deliberately small: the CLI owns every printable key."
          (arguments
           (valsi-terminal-agent--command-arguments
            backend (copy-sequence (plist-get decl :arguments))))
-         (project-name (valsi-terminal-agent--project-name root))
-         (terminal-name (format "Valsi Agent: %s/%s" project-name name))
+         (project-name (valsi-project-label root))
+         (terminal-name (format "Valsi Agent: %s · %s" (valsi-project-label root) name))
          (default-directory root)
          (buffer
           (apply (symbol-function 'eat-make)
@@ -252,15 +311,21 @@ Deliberately small: the CLI owns every printable key."
            :buffer buffer)))
     (with-current-buffer buffer
       (setq-local default-directory root)
+      (setq-local valsi-project-root root)
       (setq-local header-line-format
                   `(" Valsi AGENT · "
                     ,(symbol-name backend)
                     " · "
                     ,project-name
                     " · M-n menu "))
-      (valsi-terminal-agent-mode 1))
+      (valsi-terminal-agent-mode 1)
+      (add-hook 'kill-buffer-hook #'valsi-terminal-agent--changed nil t))
     (puthash (valsi-terminal-agent--key root name)
              instance valsi-terminal-agent--instances)
+    (valsi-project-register root)
+    (when-let* ((process (get-buffer-process buffer)))
+      (add-function :after (process-sentinel process) #'valsi-terminal-agent--changed))
+    (run-hooks 'valsi-terminal-agent-change-hook)
     instance))
 
 (defun valsi-terminal-agent-get (&optional root name)
@@ -274,14 +339,13 @@ Deliberately small: the CLI owns every printable key."
 
 (defun valsi-terminal-agent-list (&optional root)
   "Return registered agent instances, optionally limited to ROOT."
-  (let ((root (and root (file-truename root)))
+  (let ((root (and root (if (file-remote-p root) root
+                          (valsi-project-canonical-root root))))
         result)
     (maphash
      (lambda (_key instance)
        (when (or (null root)
-                 (equal root
-                        (file-truename
-                         (valsi-terminal-agent-instance-root instance))))
+                 (equal root (valsi-terminal-agent-instance-root instance)))
          (push instance result)))
      valsi-terminal-agent--instances)
     (nreverse result)))
@@ -406,7 +470,8 @@ NAME defaults to \"primary\" and BACKEND to
         (when-let* ((process (get-buffer-process buffer)))
           (delete-process process))
         (when (buffer-live-p buffer) (kill-buffer buffer)))
-      (remhash key valsi-terminal-agent--instances))))
+      (remhash key valsi-terminal-agent--instances)
+      (run-hooks 'valsi-terminal-agent-change-hook))))
 
 (provide 'valsi-terminal-agent)
 ;;; valsi-terminal-agent.el ends here

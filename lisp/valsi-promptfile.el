@@ -247,7 +247,7 @@ and the description-as-trigger heuristics."
         (type (valsi-promptfile-type)))
     (if (null issues)
         (message "valsi-promptfile: valid %s" type)
-      (with-current-buffer (get-buffer-create "*valsi-promptfile-lint*")
+      (valsi-view-with-result-buffer "*valsi-promptfile-lint*"
         (let ((inhibit-read-only t))
           (erase-buffer)
           (insert (format "Prompt-file validation (%s):\n\n" type))
