@@ -488,6 +488,7 @@
           (delete-other-windows)
           (with-temp-file file (insert "# Plan\n- [ ] T001 First\n"))
           (cl-letf (((symbol-function 'valsi-app--root) (lambda () root))
+                    ((symbol-function 'valsi-project-current-root) (lambda () root))
                     ((symbol-function 'valsi-app--project-candidates) (lambda (_) (list file)))
                     ((symbol-function 'valsi-terminal-agent-insert)
                      (lambda (text &optional _) (setq reference text))))

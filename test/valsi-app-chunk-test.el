@@ -18,6 +18,9 @@
   `(let* ((root (file-name-as-directory (make-temp-file "valsi-chunks-" t)))
           (valsi-global-mode nil)
           (valsi-app-auto-sidebar nil)
+          ;; Hubs register their roots; keep these temporary ones out of the
+          ;; session working set seen by later tests.
+          (valsi-project--roots nil)
           (valsi-app-live-refresh-step-limit 2)
           (valsi-app-live-refresh-time-budget 10)
           (discoveries 0)
