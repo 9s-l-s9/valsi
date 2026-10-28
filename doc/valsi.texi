@@ -231,7 +231,8 @@ Commands are gated on at least one release being present: next and previous
 release, an @code{info} readout of the release at point (version, date,
 category and entry counts), a releases dashboard listing version, date, and
 entry count per release, and a lint that reports releases out of
-newest-first SemVer order, non-ISO dates, and empty or unknown categories.
+newest-first SemVer order (pre-releases included), duplicate versions,
+non-ISO dates, and empty or unknown categories.
 The lint only reports; it never rewrites the file.
 
 @node Decision family

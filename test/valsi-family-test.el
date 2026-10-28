@@ -45,7 +45,11 @@
   (dolist (heading '("## [1.2.0] - 2024-01-01"
                      "## 1.2.0 - 2024-01-01"
                      "## v1.2.0 (2024-01-01)"
-                     "## [1.2.0](https://x/y) - 2024-01-01"))
+                     "## [1.2.0](https://x/y) - 2024-01-01"
+                     ;; En and em dash separators (issue #70).
+                     "## [1.2.0] – 2024-01-01"
+                     "## [1.2.0] — 2024-01-01"
+                     "## 1.2.0 — 2024-01-01"))
     (let ((rel (car (valsi-node-of-type
                      (valsi-changelog-parse (concat heading "\n"))
                      'release))))
@@ -96,6 +100,51 @@
             (should (search-forward "out of order" nil t))
             (should (search-forward "empty category Fixed" nil t))))
       (when (buffer-live-p result) (kill-buffer result)))))
+
+;; Return the lint report for CONTENT, or nil when lint finds it clean.
+(defun valsi-family-test--changelog-lint (content)
+  "Run `valsi-changelog-lint' over CONTENT; return the report text or nil."
+  (let ((root (valsi-changelog-parse content))
+        result)
+    (unwind-protect
+        (cl-letf (((symbol-function 'valsi-tree) (lambda () root))
+                  ((symbol-function 'switch-to-buffer)
+                   (lambda (buffer &rest _) (setq result buffer))))
+          (valsi-changelog-lint)
+          (and result (with-current-buffer result (buffer-string))))
+      (when (buffer-live-p result) (kill-buffer result)))))
+
+(ert-deftest valsi-test-changelog-lint-unknown-category ()
+  "Lint reports a category heading outside the six names (issue #68)."
+  (let ((report (valsi-family-test--changelog-lint
+                 "# C\n## [1.0.0] - 2020-01-01\n### Misc\n- a\n### Added\n- b\n")))
+    (should report)
+    (should (string-match-p "1\\.0\\.0: unknown category \"Misc\"" report))
+    (should-not (string-match-p "unknown category \"Added\"" report))))
+
+(ert-deftest valsi-test-changelog-lint-semver-prerelease-and-duplicates ()
+  "Lint orders pre-releases per SemVer and flags duplicates (issue #69)."
+  (should (string-match-p
+           "1\\.0\\.0 out of order"
+           (valsi-family-test--changelog-lint
+            "## [1.0.0-rc.1] - 2020-01-01\n- a\n## [1.0.0] - 2020-02-01\n- b\n")))
+  (should (string-match-p
+           "1\\.0\\.0-rc\\.2 out of order"
+           (valsi-family-test--changelog-lint
+            "## [1.0.0-rc.1] - 2020-01-01\n- a\n## [1.0.0-rc.2] - 2020-02-01\n- b\n")))
+  (should (string-match-p
+           "1\\.0\\.0: duplicate version"
+           (valsi-family-test--changelog-lint
+            "## [1.0.0] - 2020-02-01\n- a\n## [1.0.0] - 2020-01-01\n- b\n")))
+  (should-not (valsi-family-test--changelog-lint
+               (concat "## [1.0.0] - 2020-03-01\n- a\n"
+                       "## [1.0.0-rc.10] - 2020-02-01\n- b\n"
+                       "## [1.0.0-rc.2] - 2020-01-15\n- c\n"
+                       "## [1.0.0-beta] - 2020-01-10\n- d\n"
+                       "## [1.0.0-alpha.beta] - 2020-01-05\n- e\n"
+                       "## [1.0.0-alpha.1] - 2020-01-02\n- f\n"
+                       "## [1.0.0-alpha] - 2020-01-01\n- g\n"
+                       "## [0.9.0] - 2019-01-01\n- h\n"))))
 
 ;;;; Decision (ADR)
 
