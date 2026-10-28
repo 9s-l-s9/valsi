@@ -94,5 +94,36 @@
         (should (equal f (car (car entries))))
         (should (equal "bar" (aref (cadr (car entries)) 2)))))))
 
+;; Regression for issue #6: "**/*.md" was not recursive, nested artifacts
+;; were missed, and basename sources made same-named files ambiguous.
+(ert-deftest valsi-test-graph-discovery-recursive ()
+  "Discovery reaches nested and hidden dirs, skips VCS dirs and worktrees.
+Edge sources are root-relative paths, so same-named files stay distinct."
+  (let ((root (file-name-as-directory (make-temp-file "valsi-graph-root" t))))
+    (unwind-protect
+        (progn
+          (dolist (rel '("c.md" "docs/b.md" "docs/adr/a.md"
+                         ".claude/memory/m.md" "docs/README.md" "README.md"
+                         ".git/x.md" "node_modules/pkg/n.md"
+                         "wt/w.md"))
+            (let ((f (expand-file-name rel root)))
+              (make-directory (file-name-directory f) t)
+              (with-temp-file f (insert "See [[x]].\n"))))
+          ;; A nested worktree carries a `.git' file.
+          (with-temp-file (expand-file-name "wt/.git" root)
+            (insert "gitdir: elsewhere\n"))
+          (cl-letf (((symbol-function 'valsi-graph--project-root)
+                     (lambda () root))
+                    (valsi-graph-edge-sources
+                     (list #'valsi-graph--edges-memory)))
+            (let ((srcs (sort (mapcar #'cadr (valsi-graph--collect))
+                              #'string<)))
+              (should (equal srcs
+                             (sort (list "c.md" "docs/b.md" "docs/adr/a.md"
+                                         ".claude/memory/m.md"
+                                         "docs/README.md" "README.md")
+                                   #'string<))))))
+      (delete-directory root t))))
+
 (provide 'valsi-graph-test)
 ;;; valsi-graph-test.el ends here
