@@ -65,27 +65,36 @@
       (run-hooks 'valsi-project-change-hook))
     root))
 
-(defun valsi-project--load ()
-  "Read saved project declarations once, without evaluating their contents."
-  (unless valsi-project--loaded
-    (setq valsi-project--loaded t)
-    (when (and valsi-project-file (file-exists-p valsi-project-file))
+(defun valsi-project--read ()
+  "Return the roots declared in `valsi-project-file', signaling if invalid.
+An empty file declares no roots."
+  (let* ((text (with-temp-buffer
+                 (insert-file-contents valsi-project-file)
+                 (buffer-string)))
+         (data (if (string-blank-p text)
+                   (list :version 1 :roots nil)
+                 (car (read-from-string text)))))
+    (unless (and (listp data) (eq (plist-get data :version) 1)
+                 (proper-list-p (plist-get data :roots))
+                 (seq-every-p
+                  (lambda (root)
+                    (and (stringp root) (file-name-absolute-p root)))
+                  (plist-get data :roots)))
+      (error "Invalid project declarations"))
+    ;; Stored roots are already canonical.  Loading must not connect to
+    ;; remote hosts or require a missing mount to be available.
+    (delete-dups (mapcar #'file-name-as-directory (plist-get data :roots)))))
+
+(defun valsi-project--load (&optional reload)
+  "Read saved project declarations once, without evaluating their contents.
+With RELOAD, read them again so a repaired file is accepted."
+  (when (or reload (not valsi-project--loaded))
+    (setq valsi-project--loaded t
+          valsi-project--load-error nil)
+    (when valsi-project-file
       (condition-case err
-          (with-temp-buffer
-            (insert-file-contents valsi-project-file)
-            (let ((data (read (current-buffer))))
-              (unless (and (listp data) (eq (plist-get data :version) 1)
-                           (proper-list-p (plist-get data :roots))
-                           (seq-every-p
-                            (lambda (root)
-                              (and (stringp root) (file-name-absolute-p root)))
-                            (plist-get data :roots)))
-                (error "Invalid project declarations"))
-              ;; Stored roots are already canonical.  Loading must not connect
-              ;; to remote hosts or require a missing mount to be available.
-              (setq valsi-project--saved-roots
-                    (delete-dups (mapcar #'file-name-as-directory
-                                         (plist-get data :roots))))))
+          (setq valsi-project--saved-roots
+                (and (file-exists-p valsi-project-file) (valsi-project--read)))
         (error
          (setq valsi-project--load-error (error-message-string err))
          (message "Valsi projects: %s" valsi-project--load-error))))))
@@ -95,34 +104,47 @@
   (valsi-project--load)
   (delete-dups (append valsi-project--saved-roots valsi-project--roots)))
 
-(defun valsi-project--save (roots)
-  "Atomically save project ROOTS before changing remembered membership."
-  (when valsi-project-file
+(defun valsi-project--save (function)
+  "Atomically save remembered roots changed by FUNCTION.
+FUNCTION receives the roots currently in the file, so changes another Emacs
+made since they were loaded are kept, and returns the roots to save."
+  (if (not valsi-project-file)
+      (setq valsi-project--saved-roots (funcall function valsi-project--saved-roots))
+    (valsi-project--load t)
     (when valsi-project--load-error
       (user-error "Repair %s before saving projects: %s"
                   valsi-project-file valsi-project--load-error))
-    (let* ((directory (file-name-directory (expand-file-name valsi-project-file)))
+    (let* ((roots (funcall function valsi-project--saved-roots))
+           ;; Write through a symlink, as a managed state file is often one.
+           (target (file-chase-links (expand-file-name valsi-project-file)))
+           (directory (file-name-directory target))
+           (modes (file-modes target))
            temporary)
-      (make-directory directory t)
-      (unwind-protect
-          (progn
-            (setq temporary (make-temp-file (expand-file-name ".valsi-projects-" directory)))
-            (with-temp-file temporary
-              (let ((print-length nil) (print-level nil))
-                (prin1 (list :version 1 :roots roots) (current-buffer))
-                (insert "\n")))
-            (rename-file temporary valsi-project-file t))
-        (when (and temporary (file-exists-p temporary))
-          (delete-file temporary))))))
+      (condition-case err
+          (unwind-protect
+              (progn
+                (make-directory directory t)
+                (setq temporary (make-temp-file (expand-file-name ".valsi-projects-" directory)))
+                (with-temp-file temporary
+                  (let ((print-length nil) (print-level nil))
+                    (prin1 (list :version 1 :roots roots) (current-buffer))
+                    (insert "\n")))
+                (when modes (set-file-modes temporary modes))
+                (rename-file temporary target t))
+            (when (and temporary (file-exists-p temporary))
+              (delete-file temporary)))
+        (file-error
+         (user-error "Cannot save projects to %s: %s"
+                     valsi-project-file (error-message-string err))))
+      (setq valsi-project--saved-roots roots))))
 
 (defun valsi-project-remember (root)
   "Remember ROOT across sessions and include it in the working set."
   (valsi-project--load)
-  (let* ((root (valsi-project-canonical-root root))
-         (roots (delete-dups (append valsi-project--saved-roots (list root)))))
-    (valsi-project--save roots)
-    (setq valsi-project--saved-roots roots)
-    (valsi-project-register root)
+  (let ((root (valsi-project-register root)))
+    ;; The session keeps the root even when it cannot be persisted.
+    (valsi-project--save
+     (lambda (roots) (delete-dups (append roots (list root)))))
     (run-hooks 'valsi-project-change-hook)
     root))
 
@@ -134,11 +156,11 @@
   (setq root (file-name-as-directory root))
   (unless (member root (valsi-project-roots))
     (setq root (valsi-project-canonical-root root)))
-  (let ((roots (delete root (copy-sequence valsi-project--saved-roots))))
-    (valsi-project--save roots)
-    (setq valsi-project--saved-roots roots
-          valsi-project--roots (delete root valsi-project--roots))
-    (run-hooks 'valsi-project-change-hook)))
+  ;; A session-only root never touches the state file.
+  (when (member root valsi-project--saved-roots)
+    (valsi-project--save (lambda (roots) (delete root (copy-sequence roots)))))
+  (setq valsi-project--roots (delete root valsi-project--roots))
+  (run-hooks 'valsi-project-change-hook))
 
 (defun valsi-project-current-root ()
   "Return current buffer's project identity, or nil outside a project."

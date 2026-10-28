@@ -1,0 +1,126 @@
+;;; valsi-project-state-test.el --- Remembered project roots state file -*- lexical-binding: t; -*-
+
+;; SPDX-License-Identifier: GPL-3.0-or-later
+
+;;; Commentary:
+;; Regression tests for the remembered-roots state file: recovery after
+;; repair, concurrent writers, session-only membership and symlinks.
+
+;;; Code:
+
+(require 'ert)
+(require 'valsi-project)
+
+(defmacro valsi-project-state-test--with-state (&rest body)
+  "Run BODY with isolated project state in BASE, state file FILE, roots A, B."
+  (declare (indent 0))
+  `(let* ((base (file-name-as-directory (file-truename (make-temp-file "valsi-state-" t))))
+          (file (expand-file-name "projects.eld" base))
+          (a (file-name-as-directory (expand-file-name "a" base)))
+          (b (file-name-as-directory (expand-file-name "b" base)))
+          (valsi-project-file file)
+          (valsi-project--loaded nil)
+          (valsi-project--load-error nil)
+          (valsi-project--roots nil)
+          (valsi-project--saved-roots nil)
+          (valsi-project-change-hook nil))
+     (make-directory a)
+     (make-directory b)
+     (unwind-protect (progn ,@body)
+       (set-file-modes base #o700)
+       (dolist (child (directory-files base t directory-files-no-dot-files-regexp))
+         (when (file-directory-p child) (set-file-modes child #o700)))
+       (delete-directory base t))))
+
+(defun valsi-project-state-test--contents (file)
+  "Return the contents of FILE."
+  (with-temp-buffer (insert-file-contents file) (buffer-string)))
+
+(defun valsi-project-state-test--saved (file)
+  "Return the roots declared in FILE."
+  (plist-get (car (read-from-string (valsi-project-state-test--contents file))) :roots))
+
+(ert-deftest valsi-project-state-repaired-file-is-accepted ()
+  "A state file repaired after a failed load is saved without a restart (#51)."
+  (valsi-project-state-test--with-state
+    (with-temp-file file (insert "garbage ("))
+    (valsi-project--load)
+    (should valsi-project--load-error)
+    (with-temp-file file (insert "(:version 1 :roots nil)"))
+    (valsi-project-remember a)
+    (should-not valsi-project--load-error)
+    (should (equal (list a) (valsi-project-state-test--saved file)))))
+
+(ert-deftest valsi-project-state-empty-file-declares-no-roots ()
+  "An empty or blank state file is an empty declaration set (#51)."
+  (valsi-project-state-test--with-state
+    (with-temp-file file (insert "  \n"))
+    (should-not (valsi-project-roots))
+    (should-not valsi-project--load-error)
+    (valsi-project-remember a)
+    (should (equal (list a) (valsi-project-state-test--saved file)))))
+
+(ert-deftest valsi-project-state-truncated-file-message-is-readable ()
+  "A truncated state file reports an error without a killed buffer (#51)."
+  (valsi-project-state-test--with-state
+    (with-temp-file file (insert "(:version 1"))
+    (valsi-project--load)
+    (should valsi-project--load-error)
+    (should-not (string-match-p "killed buffer" valsi-project--load-error))))
+
+(ert-deftest valsi-project-state-concurrent-writers-keep-changes ()
+  "Saving merges with roots another Emacs wrote after the load (#49)."
+  (valsi-project-state-test--with-state
+    (let ((c (file-name-as-directory (expand-file-name "c" base))))
+      (should-not (valsi-project-roots))
+      ;; Another instance remembers A while this one has loaded nothing.
+      (with-temp-file file (prin1 (list :version 1 :roots (list a)) (current-buffer)))
+      (valsi-project-remember b)
+      (should (equal (list a b) (valsi-project-state-test--saved file)))
+      (should (equal (list a b) (valsi-project-roots)))
+      ;; Another instance remembers C; forgetting A removes only A.
+      (with-temp-file file (prin1 (list :version 1 :roots (list a b c)) (current-buffer)))
+      (valsi-project-forget a)
+      (should (equal (list b c) (valsi-project-state-test--saved file))))))
+
+(ert-deftest valsi-project-state-session-only-forget-skips-file ()
+  "Forgetting a session-only root never needs or writes the state file (#53)."
+  (valsi-project-state-test--with-state
+    (valsi-project-register a)
+    (valsi-project-forget a)
+    (should-not (valsi-project-roots))
+    (should-not (file-exists-p file))
+    (with-temp-file file (insert "garbage ("))
+    (valsi-project-register a)
+    (valsi-project-forget a)
+    (should-not (valsi-project-roots))
+    (should (equal "garbage (" (valsi-project-state-test--contents file)))))
+
+(ert-deftest valsi-project-state-unwritable-remember-keeps-session ()
+  "An unsaveable root still joins the session, with a user error (#53)."
+  (valsi-project-state-test--with-state
+    (let* ((read-only (expand-file-name "ro" base))
+           (valsi-project-file (expand-file-name "projects.eld" read-only)))
+      (make-directory read-only)
+      (set-file-modes read-only #o500)
+      (skip-unless (not (file-writable-p valsi-project-file)))
+      (should-error (valsi-project-remember a) :type 'user-error)
+      (should (equal (list a) (valsi-project-roots)))
+      (should-not valsi-project--saved-roots))))
+
+(ert-deftest valsi-project-state-saves-through-symlink ()
+  "Saving updates a symlinked state file's target and keeps its modes (#55)."
+  (valsi-project-state-test--with-state
+    (let* ((real (expand-file-name "real/state.eld" base))
+           (valsi-project-file (expand-file-name "link.eld" base)))
+      (make-directory (file-name-directory real))
+      (with-temp-file real (insert "(:version 1 :roots nil)\n"))
+      (set-file-modes real #o644)
+      (make-symbolic-link "real/state.eld" valsi-project-file)
+      (valsi-project-remember a)
+      (should (file-symlink-p valsi-project-file))
+      (should (equal (list a) (valsi-project-state-test--saved real)))
+      (should (= #o644 (file-modes real))))))
+
+(provide 'valsi-project-state-test)
+;;; valsi-project-state-test.el ends here
