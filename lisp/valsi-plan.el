@@ -593,7 +593,8 @@ Like dependency lookup, duplicate ids use their first task's dependencies."
 
 (defun valsi-plan-renumber ()
   "Normalize speckit Tnnn ids to sequential document order.
-Rewrites every id and every `depends on' reference in a single undo group.
+Rewrites each task's leading id and its `depends on' references in a
+single undo group; prose and code fences are left alone.
 Refuses on non-speckit dialects (positional ids are meaningful there)."
   (interactive)
   (let* ((root (valsi-plan--buffer-tree))
@@ -615,18 +616,46 @@ Refuses on non-speckit dialects (positional ids are meaningful there)."
         (puthash (valsi-node-prop tk :id) (format "T%03d" n) map))
       (atomic-change-group
         (save-excursion
-          (goto-char (point-min))
-          ;; Match full dotted ids so a sub-id (T001.1) is never confused with a
-          ;; top-level id (T001); only exact map keys are rewritten.  Reading the
-          ;; original token and writing the new one in one pass is collision-free.
-          (while (re-search-forward "\\bT[0-9]+\\(?:\\.[0-9]+\\)*" nil t)
-            (let* ((old (match-string-no-properties 0))
-                   (new (gethash old map)))
-              (when (and new (not (string= old new)))
-                (replace-match new t t)
-                (cl-incf changed))))))
+          ;; Only task lines are touched (the parse already skips code
+          ;; fences), bottom-up so earlier positions stay valid.
+          (dolist (tk (sort (valsi-node-of-type root 'task)
+                            (lambda (a b) (> (valsi-node-beg a)
+                                             (valsi-node-beg b)))))
+            (goto-char (+ (point-min) (valsi-node-beg tk)))
+            (cl-incf changed (valsi-plan--renumber-line map)))))
       (message "valsi-plan-renumber: %d task(s), %d reference(s) rewritten"
                n changed))))
+
+(defun valsi-plan--renumber-line (map)
+  "Rewrite the ids of the task line at point through MAP; return the count.
+Only the leading id and the `depends on' references change.  Full dotted
+tokens are matched, so a sub-id (T001.1) is never confused with a
+top-level id (T001); only exact MAP keys are rewritten."
+  (let ((spans nil) (changed 0))
+    (when (looking-at valsi-parse-checkbox-re)
+      (let ((rest-beg (match-beginning 3))
+            (rest (match-string-no-properties 3))
+            (eol (line-end-position)))
+        (when (string-match valsi-parse-id-re rest)
+          (push (cons (+ rest-beg (match-beginning 1))
+                      (+ rest-beg (match-end 1)))
+                spans))
+        (goto-char rest-beg)
+        (when (re-search-forward valsi-parse-dep-re eol t)
+          (let ((deps-end (match-end 1)))
+            (goto-char (match-beginning 1))
+            (while (re-search-forward "\\bT[0-9]+\\(?:\\.[0-9]+\\)*" deps-end t)
+              (push (cons (match-beginning 0) (match-end 0)) spans))))))
+    ;; SPANS is in descending order, so each rewrite leaves the rest valid.
+    (dolist (span spans)
+      (let* ((old (buffer-substring-no-properties (car span) (cdr span)))
+             (new (gethash old map)))
+        (when (and new (not (string= old new)))
+          (goto-char (car span))
+          (delete-region (car span) (cdr span))
+          (insert new)
+          (cl-incf changed))))
+    changed))
 
 (defun valsi-plan--dialect-next-id (root)
   "Return the next task id string for ROOT's dialect, or nil if unnumbered."
