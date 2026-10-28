@@ -26,7 +26,14 @@
 
 (defconst valsi-instruction-emphasis-re
   "\\_<\\(IMPORTANT\\|YOU MUST\\|MUST NOT\\|MUST\\|NEVER\\|ALWAYS\\|DO NOT\\|CRITICAL\\)\\_>"
-  "Imperative-emphasis marker recognizer (R2).")
+  "Imperative-emphasis marker recognizer (R2).
+The markers are uppercase only; match it with `case-fold-search' nil, see
+`valsi-instruction--emphasis-p'.")
+
+(defun valsi-instruction--emphasis-p (text)
+  "Return non-nil when TEXT contains an uppercase emphasis marker."
+  (let ((case-fold-search nil))
+    (and (string-match-p valsi-instruction-emphasis-re text) t)))
 
 (defconst valsi-instruction-import-re "^[ \t]*@\\([^ \t\n]+\\)"
   "@import recognizer (R5).")
@@ -167,9 +174,7 @@ fence.  Returns nil when there is no leading frontmatter."
                 :recognizer 'valsi-instruction-item
                 :confidence 'loose
                 :props (list :text rest
-                             :emphasis (and (string-match-p
-                                             valsi-instruction-emphasis-re text)
-                                            t)
+                             :emphasis (valsi-instruction--emphasis-p text)
                              :links (valsi-instruction--links text))))))))))
     root))
 
@@ -465,7 +470,7 @@ mirroring it, preserving the target's own content outside the region."
            "\\.cursor/rules/.*\\.mdc\\'\\|\\.github/instructions/\\|\\.instructions\\.md\\'"
            name)
       (cl-incf score 4))
-    (when (string-match-p valsi-instruction-emphasis-re text)
+    (when (valsi-instruction--emphasis-p text)
       (cl-incf score 1))
     score))
 
