@@ -165,5 +165,18 @@
                        "  - [x] T002.1 sub\n"
                        "  - [ ] T002.2 sub (depends on T001)\n"))))
 
+(ert-deftest valsi-plan-commands-test-add-dep-no-duplicates ()
+  "add-dep skips an existing dep and fills an empty group cleanly (#37)."
+  (dolist (case '(("- [ ] T001 a (depends on T002)\n- [ ] T002 b\n"
+                   . "- [ ] T001 a (depends on T002)\n- [ ] T002 b\n")
+                  ("- [ ] T001 a (depends on )\n- [ ] T002 b\n"
+                   . "- [ ] T001 a (depends on T002)\n- [ ] T002 b\n")))
+    (with-temp-buffer
+      (insert (car case))
+      (goto-char (point-min))
+      (cl-letf (((symbol-function 'completing-read) (lambda (&rest _) "T002")))
+        (valsi-plan-add-dep))
+      (should (equal (cdr case) (buffer-string))))))
+
 (provide 'valsi-plan-commands-test)
 ;;; valsi-plan-commands-test.el ends here

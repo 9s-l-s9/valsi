@@ -607,8 +607,10 @@ Like dependency lookup, duplicate ids use their first task's dependencies."
       (when (equal dep cur-id) (user-error "A task cannot depend on itself"))
       (when (and cur-id (valsi-plan--reaches-p dep cur-id tasks))
         (user-error "Refusing: %s already depends on %s (cycle)" dep cur-id))
-      (valsi-plan--insert-dep-on-line dep)
-      (message "%s now depends on %s" (or cur-id "task") dep))))
+      (if (member dep (valsi-node-prop cur :deps))
+          (message "%s already depends on %s" (or cur-id "task") dep)
+        (valsi-plan--insert-dep-on-line dep)
+        (message "%s now depends on %s" (or cur-id "task") dep)))))
 
 (defun valsi-plan--insert-dep-on-line (dep)
   "Add DEP to the task line at point, merging into an existing deps group."
@@ -616,8 +618,11 @@ Like dependency lookup, duplicate ids use their first task's dependencies."
     (beginning-of-line)
     (let ((eol (line-end-position)))
       (if (re-search-forward valsi-parse-dep-re eol t)
-          (progn (goto-char (1- (match-end 0))) ; just before the closing paren
-                 (insert ", " dep))
+          (if (string-match-p "\\`[ \t]*\\'" (match-string 1))
+              (replace-match dep t t nil 1)       ; fill an empty group
+            (goto-char (1- (match-end 0)))        ; just before the closing paren
+            (skip-chars-backward " \t")
+            (insert ", " dep))
         (goto-char eol)
         (insert (format " (depends on %s)" dep))))))
 
