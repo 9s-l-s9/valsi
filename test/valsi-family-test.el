@@ -182,6 +182,36 @@
                   "# T\n\n## Status\n\nProposed\n\n## Context\n"
                   "Rejected"))))
 
+;; Regression tests for issue #65.
+
+(defun valsi-family-test--lint (text)
+  "Return the message `valsi-decision-lint' reports for TEXT."
+  (let ((root (valsi-decision-parse text)) (reported nil))
+    (cl-letf (((symbol-function 'valsi-tree) (lambda () root))
+              ((symbol-function 'message)
+               (lambda (fmt &rest args)
+                 (setq reported (apply #'format fmt args)))))
+      (valsi-decision-lint))
+    reported))
+
+(ert-deftest valsi-test-decision-status-variants ()
+  "Clauses, lowercase words, and bullets are standard; prefixes are not."
+  (dolist (case '(("Superseded by ADR-0005" . "Superseded by ADR-0005")
+                  ("accepted" . "Accepted")
+                  ("- Accepted" . "Accepted")
+                  ("* **proposed**" . "Proposed")
+                  ("Acceptedish thing" . "Acceptedish thing")))
+    (let* ((text (format (concat "# 1. X\n\n## Status\n\n%s\n\n"
+                                 "## Context\nc\n## Decision\nd\n"
+                                 "## Consequences\ne\n")
+                         (car case)))
+           (reported (valsi-family-test--lint text)))
+      (should (equal (cdr case)
+                     (valsi-node-prop (valsi-decision-parse text) :status)))
+      (if (equal (car case) "Acceptedish thing")
+          (should (string-match-p "non-standard status" reported))
+        (should (equal "Valsi ADR: complete" reported))))))
+
 ;;;; Overview
 
 (defconst valsi-family-test--readme

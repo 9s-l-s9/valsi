@@ -72,19 +72,39 @@
           (setq in-status nil)))))
     root))
 
+(defconst valsi-decision--status-word-re
+  (concat "\\(" (mapconcat #'identity valsi-decision-statuses "\\|") "\\)\\>")
+  "A lifecycle word, matched case-insensitively and ending at a word boundary.")
+
 (defun valsi-decision--status-of (text)
   "Extract the ADR status from value-line TEXT.
-Prefer a leading lifecycle word (optionally with a `superseded by' clause);
-otherwise fall back to the whole cleaned line (kept descriptive)."
-  (let ((clean (string-trim (replace-regexp-in-string "[*_`]" "" text))))
+Prefer a leading lifecycle word, matched case-insensitively and
+reported in its canonical spelling, optionally with a `superseded by'
+clause; a leading list marker is ignored.  Otherwise fall back to the
+whole cleaned line (kept descriptive)."
+  (let ((clean (string-trim
+                (replace-regexp-in-string
+                 "[*_`]" ""
+                 (replace-regexp-in-string
+                  "\\`[ \t]*\\(?:[-+*]\\|[0-9]+[.)]\\)[ \t]+" "" text))))
+        (case-fold-search t))
     (if (string-match
-         (concat "\\`\\(" (mapconcat #'identity valsi-decision-statuses "\\|")
-                 "\\)\\(?:[ \t]+by[ \t]+\\(ADR-?[0-9]+\\|[0-9]+\\)\\)?")
+         (concat "\\`" valsi-decision--status-word-re
+                 "\\(?:[ \t]+by[ \t]+\\(ADR-?[0-9]+\\|[0-9]+\\)\\)?")
          clean)
-        (concat (match-string 1 clean)
+        (concat (car (member-ignore-case (match-string 1 clean)
+                                         valsi-decision-statuses))
                 (if (match-string 2 clean)
                     (format " by %s" (match-string 2 clean)) ""))
       clean)))
+
+(defun valsi-decision--standard-status-p (status)
+  "Return non-nil when STATUS is a lifecycle word, optionally with a clause.
+The base word is the text before a `by' clause, compared case-insensitively."
+  (let ((case-fold-search t))
+    (string-match-p (concat "\\`" valsi-decision--status-word-re
+                            "\\(?:[ \t]+by[ \t]+.+\\)?\\'")
+                    status)))
 
 ;;;; Capabilities
 
@@ -153,8 +173,8 @@ otherwise fall back to the whole cleaned line (kept descriptive)."
     (unless (valsi-node-prop root :status)
       (push "missing Status value" issues))
     (when (and (valsi-node-prop root :status)
-               (not (member (valsi-node-prop root :status)
-                            valsi-decision-statuses)))
+               (not (valsi-decision--standard-status-p
+                     (valsi-node-prop root :status))))
       (push (format "non-standard status %S" (valsi-node-prop root :status))
             issues))
     (dolist (s valsi-decision-sections)

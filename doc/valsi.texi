@@ -244,7 +244,10 @@ heading as the title, records every other heading as a section, and reads the
 status from the first non-blank line after @code{## Status}, recognizing the
 lifecycle values @code{Proposed}, @code{Accepted}, @code{Rejected},
 @code{Deprecated}, and @code{Superseded} with an optional @samp{by ADR-NNNN}
-clause.  Any other status line is kept verbatim.  @code{Context},
+clause.  The lifecycle word is matched case-insensitively as a whole word
+(MADR's @samp{accepted} reads as @code{Accepted}) and a leading list marker
+is ignored.  Any other status line is kept verbatim and linted as
+non-standard.  @code{Context},
 @code{Decision}, and @code{Consequences} are the canonical sections;
 @code{Supersedes}/@code{Superseded by}/@code{Amends} references are
 highlighted but not resolved.
