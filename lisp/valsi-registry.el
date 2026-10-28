@@ -39,13 +39,78 @@
 (defvar valsi-registry-generation 0
   "Revision of grammar definitions, for invalidating derived caches.")
 
-(defconst valsi-registry-declarative-match-limit 4000
-  "Longest string a client-declared regexp is matched against.
-`textRegexp' sees only this many leading characters of a document (compare
-`magic-mode-regexp-match-limit'); a longer URI never matches `uriRegexp';
-and declarative recognizers skip longer lines, which then resolve less
-detail.  Together with `valsi-registry--regexp-risk' this bounds the time a
-wire-registered grammar can spend in the regexp matcher.")
+;;;; Bounding client-declared regexps
+;;
+;; Emacs cannot interrupt a running regexp match (timers do not run inside
+;; the matcher in batch), so wire-registered grammars are bounded by cost
+;; analysis instead of a timeout.  For a regexp R of length |R| matched
+;; against N characters by the backtracking matcher:
+;;
+;; - Registration rejects back references and any repeated group that
+;;   contains a quantifier or an alternative (the exponential class), so
+;;   every unbounded repetition (`*', `+', `\{M,\}') applies to one
+;;   fixed-width atom and has at most N+1 ways to stop.
+;; - Such a repetition before the rest R' of the pattern costs at most
+;;   (N+1)(1 + cost(R')); `?', an alternative of B branches and a bounded
+;;   interval multiply the cost by their number of choices; any other
+;;   atom adds one step.  By induction one match attempt costs at most
+;;   (|R|+1) * F * (N+1)^Q steps, where Q counts the unbounded repetitions
+;;   (those of all branches of an alternative added up) and F is the
+;;   product of the finite choice counts.
+;; - An unanchored search makes up to N+1 attempts, so the degree is
+;;   D = Q + 1.  It is D = Q when R starts with \\=\\`, or with ^ for a
+;;   recognizer, whose subject is one line: the other attempts then fail
+;;   on their first step, adding only N.
+;;
+;; Each regexp thus gets its own input limit, the largest N up to
+;; `valsi-registry-declarative-match-limit' with (|R|+1) F (N+1)^D within
+;; `valsi-registry-declarative-step-budget'.  A regexp whose limit would
+;; fall below `valsi-registry-declarative-min-limit' is rejected at
+;; registration, which admits at most two unbounded repetitions counting
+;; the search loop (worst case O(N^2)).  So a*a*a*a*a*b (D = 6) is
+;; rejected while .*x and ^\\(#+\\) \\(.*\\)$ keep the full limit.  Longer
+;; input is not matched: `textRegexp' sees a prefix, a longer URI does not
+;; match, and a longer line resolves less detail.
+;;
+;; One request may run many bounded matches (lines times recognizers, and
+;; one `textRegexp' per declared grammar), so declarative matching also
+;; stops after `valsi-registry-declarative-time-budget' seconds of the
+;; request.  A match only starts before that deadline, so a request spends
+;; at most the budget plus one bounded match in declared regexps.
+
+(defconst valsi-registry-declarative-match-limit 2000
+  "Longest string any client-declared regexp is matched against.
+A complex regexp gets a smaller limit from `valsi-registry--regexp-limit'.")
+
+(defconst valsi-registry-declarative-min-limit 256
+  "Shortest input limit a client-declared regexp may be left with.
+Registration rejects a regexp whose step budget allows less.")
+
+(defconst valsi-registry-declarative-step-budget 1e8
+  "Worst-case backtracking steps for one client-declared regexp match.
+Far below a second on current hardware.")
+
+(defconst valsi-registry-declarative-time-budget 1.0
+  "Seconds of client-declared regexp matching allowed per request.
+After the deadline declared grammars stop matching: detection scores them
+0 and their parsers resolve no further lines.")
+
+(defvar valsi-registry--declarative-deadline nil
+  "The `float-time' after which declarative matching stops, or nil.")
+
+(defmacro valsi-registry-with-declarative-deadline (&rest body)
+  "Run BODY under a deadline for client-declared regexp matching.
+An enclosing deadline is kept, so a whole request shares one budget."
+  (declare (indent 0) (debug t))
+  `(let ((valsi-registry--declarative-deadline
+          (or valsi-registry--declarative-deadline
+              (+ (float-time) valsi-registry-declarative-time-budget))))
+     ,@body))
+
+(defun valsi-registry--declarative-time-left-p ()
+  "Return non-nil unless the declarative matching deadline has passed."
+  (or (null valsi-registry--declarative-deadline)
+      (< (float-time) valsi-registry--declarative-deadline)))
 
 ;;;; Registration (grammar/register, grammar/reload)
 
@@ -101,8 +166,9 @@ optional `:confidence', and optional capture-index `:properties'."
         ((and (stringp value) (not (string-empty-p value))) (intern value))
         (t (error "Grammar declaration has invalid %s: %S" field value))))
 
-(defun valsi-registry--validate-regexp (regexp field)
-  "Validate REGEXP from FIELD, signaling a useful registration error."
+(defun valsi-registry--validate-regexp (regexp field &optional line)
+  "Validate REGEXP from FIELD, signaling a useful registration error.
+LINE non-nil means REGEXP is only matched against single lines."
   (when regexp
     (unless (stringp regexp)
       (error "Grammar declaration %s must be a string" field))
@@ -111,29 +177,32 @@ optional `:confidence', and optional capture-index `:properties'."
       (invalid-regexp
        (error "Grammar declaration has invalid %s: %s"
               field (error-message-string err))))
-    (let ((risk (valsi-registry--regexp-risk regexp)))
+    (let ((risk (valsi-registry--regexp-risk regexp line)))
       (when risk
         (error "Grammar declaration %s is rejected (%s): %s"
                field risk regexp)))))
 
-(defun valsi-registry--regexp-risk (regexp)
-  "Return why client-supplied REGEXP may backtrack catastrophically, or nil.
-Emacs cannot interrupt a running regexp match in batch, so one exponential
-match would wedge the single-threaded server for good.  Declarations are
-therefore restricted: a repeated group (`*', `+' or an interval) may not
-itself contain a quantifier or an alternative, as in \\(a*\\)*b or
-\\(a\\|aa\\)*b, and back references are not allowed.  The remaining
-polynomial cases are bounded by `valsi-registry-declarative-match-limit'."
+(defun valsi-registry--regexp-analysis (regexp &optional line)
+  "Return (RISK DEGREE FACTOR) for client-supplied REGEXP.
+RISK names an exponential construct in REGEXP, or is nil.  DEGREE counts
+the unbounded repetitions, plus one for the search loop unless REGEXP
+starts with \\=\\` or, when LINE is non-nil, with ^.  FACTOR is the
+product of the choice counts of `?', alternatives and bounded intervals.
+The cost argument is in the commentary before
+`valsi-registry-declarative-match-limit'."
   (let ((i 0) (len (length regexp))
-        ;; One frame per open group: (HAS-QUANTIFIER . HAS-ALTERNATIVE).
-        (frames (list (cons nil nil)))
+        ;; One frame per open group: [HAS-QUANTIFIER BRANCHES].
+        (frames (list (vector nil 1)))
+        (degree (if (or (string-prefix-p "\\`" regexp)
+                        (and line (string-prefix-p "^" regexp)))
+                    0 1))
+        (factor 1)
         risk)
-    (cl-flet ((repeat-at (pos)
-                (and (< pos len)
-                     (or (memq (aref regexp pos) '(?* ?+))
-                         (and (< (1+ pos) len)
-                              (eq (aref regexp pos) ?\\)
-                              (eq (aref regexp (1+ pos)) ?{))))))
+    (cl-flet ((mark () (aset (car frames) 0 t))
+              (interval-at (pos)
+                (and (< (1+ pos) len)
+                     (eq (aref regexp pos) ?\\)
+                     (eq (aref regexp (1+ pos)) ?{))))
       (while (and (< i len) (not risk))
         (let ((c (aref regexp i)))
           (cond
@@ -153,26 +222,97 @@ polynomial cases are bounded by `valsi-registry-declarative-match-limit'."
             (let ((d (aref regexp (1+ i))))
               (setq i (+ i 2))
               (cond
-               ((eq d ?\() (push (cons nil nil) frames))
-               ((eq d ?|) (setcdr (car frames) t))
+               ((eq d ?\()
+                (push (vector nil 1) frames)
+                ;; Shy and explicitly numbered groups: \(?: and \(?N:.
+                (when (and (< i len) (eq (aref regexp i) ??))
+                  (setq i (1+ i))
+                  (while (and (< i len) (<= ?0 (aref regexp i) ?9))
+                    (setq i (1+ i)))
+                  (when (and (< i len) (eq (aref regexp i) ?:))
+                    (setq i (1+ i)))))
+               ((eq d ?|)
+                (aset (car frames) 1 (1+ (aref (car frames) 1))))
                ((eq d ?{)
-                (setcar (car frames) t)
-                (setq i (+ 2 (or (string-search "\\}" regexp i) len))))
+                (let* ((close (or (string-search "\\}" regexp i) len))
+                       (body (substring regexp i close))
+                       (comma (string-search "," body))
+                       (lo (string-to-number (substring body 0 comma)))
+                       (hi (and comma
+                                (< (1+ comma) (length body))
+                                (string-to-number
+                                 (substring body (1+ comma))))))
+                  (setq i (+ 2 close))
+                  (mark)
+                  (cond ((not comma))   ; \{M\} has a single choice.
+                        ;; A wide interval is as costly as an unbounded one.
+                        ((or (null hi) (> (- hi lo) 15))
+                         (setq degree (1+ degree)))
+                        ((> hi lo)
+                         (setq factor (* factor (1+ (- hi lo))))))))
                ((and (>= d ?1) (<= d ?9))
                 (setq risk "back reference"))
+               ((memq d '(?s ?S ?c ?C ?_))
+                ;; Syntax and category classes and symbol boundaries take
+                ;; an argument character.
+                (setq i (1+ i)))
                ((eq d ?\))
                 (let ((inner (pop frames)))
-                  (unless frames (setq frames (list (cons nil nil))))
-                  (when (or (car inner) (cdr inner))
-                    (when (repeat-at i)
+                  (unless frames (setq frames (list (vector nil 1))))
+                  (setq factor (* factor (aref inner 1)))
+                  (when (or (aref inner 0) (> (aref inner 1) 1))
+                    (when (or (and (< i len) (memq (aref regexp i) '(?* ?+)))
+                              (interval-at i))
                       (setq risk (concat "repeated group with a quantifier"
                                          " or alternative")))
-                    (setcar (car frames) t)))))))
-           ((memq c '(?* ?+ ?\?))
-            (setcar (car frames) t)
-            (setq i (1+ i)))
+                    (mark)))))))
+           ((memq c '(?* ?+))
+            (mark)
+            (setq degree (1+ degree)
+                  i (1+ i))
+            ;; The non-greedy modifier is not another `?'.
+            (when (and (< i len) (eq (aref regexp i) ??)) (setq i (1+ i))))
+           ((eq c ??)
+            (mark)
+            (setq factor (* 2 factor)
+                  i (1+ i))
+            (when (and (< i len) (eq (aref regexp i) ??)) (setq i (1+ i))))
            (t (setq i (1+ i)))))))
-    risk))
+    (list risk degree factor)))
+
+(defun valsi-registry--regexp-limit (regexp &optional line)
+  "Return the longest input client REGEXP may be matched against.
+This is the largest N up to `valsi-registry-declarative-match-limit' for
+which the worst-case cost (|R|+1) F (N+1)^D stays within
+`valsi-registry-declarative-step-budget', with D and F from
+`valsi-registry--regexp-analysis' (which see for LINE).  It is negative
+when even the empty string exceeds the budget."
+  (pcase-let* ((`(,_risk ,degree ,factor)
+                (valsi-registry--regexp-analysis regexp line))
+               (per-path (* (float (1+ (length regexp))) factor))
+               (cap valsi-registry-declarative-match-limit))
+    (cond ((> per-path valsi-registry-declarative-step-budget) -1)
+          ((zerop degree) cap)
+          (t (min cap
+                  (1- (floor (expt (/ valsi-registry-declarative-step-budget
+                                      per-path)
+                                   (/ 1.0 degree)))))))))
+
+(defun valsi-registry--regexp-risk (regexp &optional line)
+  "Return why client-supplied REGEXP is too costly to run, or nil.
+Back references and repeated groups containing a quantifier or an
+alternative, as in \\(a*\\)*b or \\(a\\|aa\\)*b, backtrack exponentially.
+Polynomial patterns such as a*a*a*a*a*b are rejected when
+`valsi-registry--regexp-limit' leaves them less input than
+`valsi-registry-declarative-min-limit'.  LINE is as for
+`valsi-registry--regexp-analysis'."
+  (or (car (valsi-registry--regexp-analysis regexp line))
+      (let ((limit (valsi-registry--regexp-limit regexp line)))
+        (when (< limit valsi-registry-declarative-min-limit)
+          (format (concat "too many unbounded or optional repetitions;"
+                          " its worst-case cost allows only %d characters"
+                          " of input; anchor it with \\` or ^ or simplify it")
+                  (max limit 0))))))
 
 (defun valsi-registry--validate-declaration (match-decl recognizers)
   "Validate declarative MATCH-DECL and line RECOGNIZERS."
@@ -196,7 +336,7 @@ polynomial cases are bounded by `valsi-registry-declarative-match-limit'."
     (unless (stringp (plist-get recognizer :regexp))
       (error "Grammar declaration recognizers need a regexp string"))
     (valsi-registry--validate-regexp (plist-get recognizer :regexp)
-                                    ":recognizers[].regexp")
+                                    ":recognizers[].regexp" t)
     (let ((confidence
            (valsi-registry--declaration-symbol
             (or (plist-get recognizer :confidence) "exact")
@@ -213,59 +353,76 @@ polynomial cases are bounded by `valsi-registry-declarative-match-limit'."
   t)
 
 (defun valsi-registry--declarative-matcher (declaration)
-  "Return a pure matcher function compiled from match DECLARATION."
-  (let ((suffix (plist-get declaration :uriSuffix))
-        (uri-re (plist-get declaration :uriRegexp))
-        (text-re (plist-get declaration :textRegexp))
-        (score (or (plist-get declaration :score) 1)))
+  "Return a pure matcher function compiled from match DECLARATION.
+Declared regexps see bounded input and stop matching after the request's
+declarative deadline; see `valsi-registry-declarative-match-limit'."
+  (let* ((suffix (plist-get declaration :uriSuffix))
+         (uri-re (plist-get declaration :uriRegexp))
+         (uri-limit (and uri-re (valsi-registry--regexp-limit uri-re)))
+         (text-re (plist-get declaration :textRegexp))
+         (text-limit (and text-re (valsi-registry--regexp-limit text-re)))
+         (score (or (plist-get declaration :score) 1)))
     (lambda (uri text)
-      (if (or (and suffix (string-suffix-p suffix (or uri "")))
-              (and uri-re
-                   (<= (length uri) valsi-registry-declarative-match-limit)
-                   (string-match-p uri-re (or uri "")))
-              (and text-re
-                   (string-match-p
-                    text-re
-                    (let ((text (or text "")))
-                      (if (> (length text)
-                             valsi-registry-declarative-match-limit)
-                          (substring text 0
-                                     valsi-registry-declarative-match-limit)
-                        text)))))
-          score
-        0))))
+      (valsi-registry-with-declarative-deadline
+        (if (or (and suffix (string-suffix-p suffix (or uri "")))
+                (and uri-re
+                     (<= (length uri) uri-limit)
+                     (valsi-registry--declarative-time-left-p)
+                     (string-match-p uri-re (or uri "")))
+                (and text-re
+                     (valsi-registry--declarative-time-left-p)
+                     (string-match-p
+                      text-re
+                      (let ((text (or text "")))
+                        (if (> (length text) text-limit)
+                            (substring text 0 text-limit)
+                          text)))))
+            score
+          0)))))
 
 (defun valsi-registry--declarative-parser (grammar-id root-type recognizers)
-  "Return a parser for GRAMMAR-ID, ROOT-TYPE, and line RECOGNIZERS."
-  (lambda (content)
-    (valsi-parse-in-content
-     content
-     (lambda ()
-       (let ((root (valsi-node-create :type root-type
-                                     :beg (point-min) :end (point-max)
-                                     :recognizer grammar-id)))
-         (dolist (line (valsi-parse-lines (current-buffer)))
-           (dolist (recognizer recognizers)
-             (let ((regexp (plist-get recognizer :regexp))
-                   (text (valsi-line-text line)))
-               (when (and regexp
-                          (<= (length text)
-                              valsi-registry-declarative-match-limit)
-                          (string-match regexp text))
-                 (valsi-node-add-child
-                  root
-                  (valsi-node-create
-                   :type (valsi-registry--declaration-symbol
-                          (plist-get recognizer :type) "recognizer type")
-                   :beg (valsi-line-beg line) :end (valsi-line-end line)
-                   :confidence
-                   (valsi-registry--declaration-symbol
-                    (or (plist-get recognizer :confidence) "exact")
-                    "recognizer confidence")
-                   :recognizer grammar-id
-                   :props (valsi-registry--declarative-props
-                           (plist-get recognizer :properties) text)))))))
-         root)))))
+  "Return a parser for GRAMMAR-ID, ROOT-TYPE, and line RECOGNIZERS.
+A recognizer skips lines longer than its `valsi-registry--regexp-limit',
+and no recognizer runs after the request's declarative deadline; those
+lines resolve less detail."
+  (let ((limits (mapcar (lambda (recognizer)
+                          (let ((regexp (plist-get recognizer :regexp)))
+                            (if regexp (valsi-registry--regexp-limit regexp t)
+                              -1)))
+                        recognizers)))
+    (lambda (content)
+      (valsi-registry-with-declarative-deadline
+        (valsi-parse-in-content
+         content
+         (lambda ()
+           (let ((root (valsi-node-create :type root-type
+                                         :beg (point-min) :end (point-max)
+                                         :recognizer grammar-id)))
+             (dolist (line (valsi-parse-lines (current-buffer)))
+               (cl-loop
+                for recognizer in recognizers
+                for limit in limits
+                do
+                (let ((regexp (plist-get recognizer :regexp))
+                      (text (valsi-line-text line)))
+                  (when (and regexp
+                             (<= (length text) limit)
+                             (valsi-registry--declarative-time-left-p)
+                             (string-match regexp text))
+                    (valsi-node-add-child
+                     root
+                     (valsi-node-create
+                      :type (valsi-registry--declaration-symbol
+                             (plist-get recognizer :type) "recognizer type")
+                      :beg (valsi-line-beg line) :end (valsi-line-end line)
+                      :confidence
+                      (valsi-registry--declaration-symbol
+                       (or (plist-get recognizer :confidence) "exact")
+                       "recognizer confidence")
+                      :recognizer grammar-id
+                      :props (valsi-registry--declarative-props
+                              (plist-get recognizer :properties) text)))))))
+             root)))))))
 
 (defun valsi-registry--declarative-props (properties text)
   "Extract capture-index PROPERTIES from the current match against TEXT."
@@ -306,20 +463,22 @@ polynomial cases are bounded by `valsi-registry-declarative-match-limit'."
 (defun valsi-registry-detect (uri text)
   "Return the id of the best-matching grammar for URI + TEXT.
 URI is a document identifier (path/name) and TEXT is its content.  Detection
-is a pure function of these two -- no live buffer.  Falls back to `generic'
-when nothing scores above zero."
-  (let ((best 'generic) (best-score 0))
-    (dolist (id (valsi-registry-all))
-      (let* ((spec (valsi-registry-get id))
-             (match (plist-get spec :match))
-             (score (if match
-                        (condition-case nil
-                            (or (funcall match uri text) 0)
-                          (error 0))
-                      0)))
-        (when (> score best-score)
-          (setq best id best-score score))))
-    best))
+is a pure function of these two -- no live buffer -- except that declared
+grammars score 0 once `valsi-registry-declarative-time-budget' is spent.
+Falls back to `generic' when nothing scores above zero."
+  (valsi-registry-with-declarative-deadline
+    (let ((best 'generic) (best-score 0))
+      (dolist (id (valsi-registry-all))
+        (let* ((spec (valsi-registry-get id))
+               (match (plist-get spec :match))
+               (score (if match
+                          (condition-case nil
+                              (or (funcall match uri text) 0)
+                            (error 0))
+                        0)))
+          (when (> score best-score)
+            (setq best id best-score score))))
+      best)))
 
 ;;;; Parse + capability advertisement
 

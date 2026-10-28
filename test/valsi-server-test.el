@@ -334,8 +334,163 @@
     ;; Ordinary regexps are still accepted.
     (dolist (re '("^\\(#+\\) \\(.*\\)$" "\\(foo\\)?bar" "[(*]+"
                   "^- \\[\\([ x]\\)\\] \\(T[0-9]+\\) \\(.*\\)$"
-                  "[]*]+\\(x\\)*" "[[:alpha:]*]+\\(y\\)+"))
-      (should-not (valsi-registry--regexp-risk re)))))
+                  "\\`[]*]+\\(x\\)*" "\\`[[:alpha:]*]+\\(y\\)+"))
+      (should-not (valsi-registry--regexp-risk re t)))))
+
+(defconst valsi-server-test--polynomial-regexps
+  '("a*a*a*a*a*b" ".*.*.*.*x" "[a-z]*[a-z]*[a-z]*[a-z]*[a-z]*!x")
+  "Polynomially backtracking regexps from the review of issue #80.")
+
+(defun valsi-server-test--register (id match &optional recognizers)
+  "Return a grammar/register request for ID with MATCH and RECOGNIZERS."
+  (list :jsonrpc "2.0" :id id :method "grammar/register"
+        :params (list :spec (list :id id :match match
+                                  :recognizers (vconcat recognizers)))))
+
+(ert-deftest valsi-test-server-rejects-polynomial-regexps ()
+  "Issue #80: polynomial backtracking beyond O(N^2) is rejected."
+  (valsi-server-init)
+  (valsi-proto-reset)
+  (let* ((grammars (valsi-registry-all))
+         (line (concat (make-string 3900 ?a) "\n"))
+         (start (float-time))
+         (responses
+          (apply
+           #'valsi-server-test--exchange
+           (append
+            (cl-loop
+             for re in valsi-server-test--polynomial-regexps
+             append
+             (list (valsi-server-test--register
+                    "poly" (list :textRegexp re :score 1000))
+                   (valsi-server-test--register
+                    "poly" (list :uriRegexp re :score 1000))
+                   (valsi-server-test--register
+                    "poly" (list :uriSuffix ".poly")
+                    (list (list :type "x" :regexp re)))
+                   ;; Anchoring removes only the search loop's degree.
+                   (valsi-server-test--register
+                    "poly" (list :uriSuffix ".poly")
+                    (list (list :type "x" :regexp (concat "^" re))))))
+            (list (list :jsonrpc "2.0" :id "open" :method "artifact/didOpen"
+                        :params (list :uri "f.poly" :text line))
+                  (list :jsonrpc "2.0" :id "after" :method "initialize"))))))
+    (should (equal (append (make-list (* 4 3) -32602) '(nil nil))
+                   (valsi-server-test--codes responses)))
+    (should (string-match-p "rejected (too many unbounded"
+                            (plist-get (plist-get (car responses) :error)
+                                       :data)))
+    (should (< (- (float-time) start) 5))
+    (should (equal grammars (valsi-registry-all)))
+    (valsi-proto-reset)))
+
+(ert-deftest valsi-test-server-accepted-regexps-stay-fast ()
+  "Issue #80: legitimate regexps register and run quickly on long input."
+  (valsi-server-init)
+  (valsi-proto-reset)
+  (let ((legit
+         ;; The AAP spec example and the regexps of the declarative tests,
+         ;; plus accepted patterns at the O(N^2) worst case.
+         '(("^ITEM: +\\(.*\\)$" . t) ("^MARK: +\\(.*\\)$" . t)
+           ("^# +\\(.*\\)$" . t) ("^\\(#+\\) \\(.*\\)$" . t)
+           ("^- \\[\\([ x]\\)\\] \\(T[0-9]+\\) \\(.*\\)$" . t)
+           ("^ITEM" . t) ("^hi" . t) ("^x" . t) ("^[a-z]*[a-z]*!x" . t)
+           ("MAGIC" . nil) ("\\.bnd\\'" . nil) ("\\(foo\\)?bar" . nil)
+           (".*x" . nil) ("[a-z]*!x" . nil) ("\\`.*.*x" . nil)
+           ("\\`a*a*b" . nil) ("\\(?:foo\\|bar\\).*baz" . nil)))
+        (long (make-string 3900 ?a)))
+    (unwind-protect
+        (dolist (entry legit)
+          (let* ((re (car entry))
+                 (spec (if (cdr entry)
+                           (list (list :uriSuffix ".legit")
+                                 (list (list :type "x" :regexp re)))
+                         (list (list :textRegexp re :uriRegexp re))))
+                 (start (float-time))
+                 (responses
+                  (valsi-server-test--exchange
+                   (apply #'valsi-server-test--register "legit" spec)
+                   (list :jsonrpc "2.0" :id 2 :method "grammar/detect"
+                         :params (list :uri long :text long))
+                   (list :jsonrpc "2.0" :id 3 :method "artifact/didOpen"
+                         :params (list :uri "a.legit"
+                                       :text (concat long "\n"
+                                                     (substring long 0 1999)
+                                                     "\n"))))))
+            (should (equal (list re nil nil nil)
+                           (cons re (valsi-server-test--codes responses))))
+            (should (< (- (float-time) start) 2))))
+      (valsi-registry-unregister 'legit)
+      (valsi-proto-reset))))
+
+(ert-deftest valsi-test-server-declarative-deadline-bounds-request ()
+  "Issue #80: declared regexps stop matching after the request deadline."
+  (let* ((parse (valsi-registry--declarative-parser
+                 'dl 'document (list (list :type "x" :regexp "^x"))))
+         (match (valsi-registry--declarative-matcher
+                 (list :textRegexp "x" :score 7)))
+         (text "x\nx\n"))
+    (should (= 2 (length (valsi-node-children (funcall parse text)))))
+    (should (= 7 (funcall match "u" text)))
+    (let ((valsi-registry--declarative-deadline (1- (float-time))))
+      (should-not (valsi-node-children (funcall parse text)))
+      (should (= 0 (funcall match "u" text))))))
+
+(ert-deftest valsi-test-server-real-stdio-survives-hostile-register ()
+  "Issue #80: requests after a hostile grammar/register are still answered."
+  (skip-unless (file-exists-p "/proc/self/fd/0"))
+  (skip-unless (valsi-server-test--emacs-program))
+  (let* ((line (concat (make-string 3900 ?a) "\n"))
+         (records
+          (append
+           (cl-loop for re in valsi-server-test--polynomial-regexps
+                    for n from 1
+                    append
+                    (list (valsi-server-test--register
+                           (format "evil%d" n)
+                           (list :textRegexp re :score 1000))
+                          (valsi-server-test--register
+                           (format "evil%d" n) (list :uriSuffix ".evil")
+                           (list (list :type "x" :regexp re)))))
+           ;; The costliest shape that is accepted.
+           (list (valsi-server-test--register
+                  "quad" (list :uriSuffix ".evil" :score 2000)
+                  (list (list :type "x" :regexp "^[a-z]*[a-z]*!x")))
+                 (list :jsonrpc "2.0" :id "open" :method "artifact/didOpen"
+                       :params (list :uri "f.evil"
+                                     :text (concat line
+                                                   (substring line 0 1999)
+                                                   "\n")))
+                 (list :jsonrpc "2.0" :id "list" :method "grammar/list")
+                 (list :jsonrpc "2.0" :id "init" :method "initialize"))))
+         (output "")
+         (process
+          (make-process
+           :name "valsi-hostile" :connection-type 'pipe :noquery t
+           :command (list (valsi-server-test--emacs-program)
+                          "-Q" "--batch"
+                          "--eval" "(setq load-prefer-newer t)"
+                          "-L" (expand-file-name "lisp" default-directory)
+                          "-l" "valsi-server" "-f" "valsi-server-stdio")
+           :filter (lambda (_proc string)
+                     (setq output (concat output string)))
+           :stderr (get-buffer-create " *valsi-hostile-stderr*")))
+         (deadline (+ (float-time) 15)))
+    (unwind-protect
+        (progn
+          (dolist (record records)
+            (process-send-string process
+                                 (concat (json-serialize record) "\n")))
+          (process-send-eof process)
+          (while (and (process-live-p process) (< (float-time) deadline))
+            (accept-process-output process 0.1))
+          (should-not (process-live-p process))
+          (let ((responses (valsi-server-test--records output)))
+            (should (equal (append (make-list 6 -32602) '(nil nil nil nil))
+                           (valsi-server-test--codes responses)))
+            (should (equal "init" (plist-get (car (last responses)) :id)))))
+      (when (process-live-p process) (kill-process process))
+      (kill-buffer " *valsi-hostile-stderr*"))))
 
 (ert-deftest valsi-test-server-declarative-match-input-is-bounded ()
   "Issue #80: declared regexps only see bounded input."

@@ -229,17 +229,45 @@ records the honesty of the mapping so clients can calibrate trust. The
 `generic` grammar remains the universal fallback.
 
 Declared regexps run inside the single-threaded server, and Emacs cannot
-interrupt a running regexp match, so the reference server bounds them instead
-of timing them out. Registration answers `-32602` for a regexp with a back
-reference or a repeated group (`*`, `+`, or an interval) that itself contains
-a quantifier or an alternative, such as `\(a*\)*b` or `\(a\|aa\)*b`: the
-exponential backtracking class. Matching input is capped at 4000 characters
-(`valsi-registry-declarative-match-limit`): `textRegexp` sees only that prefix
-of the text, a longer URI never matches `uriRegexp`, and recognizers skip
-longer lines, which then resolve less detail. Polynomial patterns therefore
-stay bounded. Clients should still treat a request timeout as a wedged server
-and kill it; the Pi `AAPClient` does so, and `close()` kills a server that has
-not exited shortly after stdin closes.
+interrupt a running regexp match, so the reference server bounds their cost
+instead of timing them out:
+
+- **Exponential patterns are rejected.** Registration answers `-32602` for a
+  back reference or a repeated group (`*`, `+`, or an interval) that itself
+  contains a quantifier or an alternative, such as `\(a*\)*b` or
+  `\(a\|aa\)*b`. Every remaining unbounded repetition (`*`, `+`, `\{m,\}`)
+  applies to one fixed-width atom and can stop in at most N+1 places on N
+  characters of input.
+- **Polynomial cost is computed.** By induction over the pattern, one match
+  attempt of a regexp R costs at most (|R|+1) · F · (N+1)^Q backtracking
+  steps, where Q counts the unbounded repetitions (an interval wider than 16
+  counts as one) and F is the product of the choice counts of `?`,
+  alternatives and narrower intervals. An unanchored search adds up to N+1
+  attempts, so the degree is D = Q+1; it is D = Q for a regexp starting with
+  `` \` ``, or with `^` for a recognizer, whose subject is a single line.
+- **Each regexp gets its own input limit** N, the largest value up to 2000
+  characters (`valsi-registry-declarative-match-limit`) with
+  (|R|+1) · F · (N+1)^D ≤ 10^8 (`valsi-registry-declarative-step-budget`,
+  well under a second). Registration answers `-32602` when that limit would
+  be below 256 characters. In practice this admits at most two unbounded
+  repetitions counting the search loop, a worst case of O(N²): `.*x`,
+  `` \`a*a*b `` and `^\(#+\) \(.*\)$` are accepted with the full limit,
+  while `a*a*b`, `a*a*a*a*a*b`, `.*.*.*.*x` and
+  `[a-z]*[a-z]*[a-z]*[a-z]*[a-z]*!x` are rejected. Longer input is not
+  matched: `textRegexp` sees only that prefix of the text, a longer URI never
+  matches `uriRegexp`, and a recognizer skips longer lines, which then
+  resolve less detail.
+- **Each request has a total budget.** A request may run many bounded matches
+  (every line times every recognizer, one `textRegexp` per declared grammar,
+  every document a registration re-parses), so declarative matching stops
+  after one second of the request (`valsi-registry-declarative-time-budget`):
+  declared grammars then score 0 in detection and resolve no further lines.
+  A match only starts before that deadline, so a request spends at most the
+  budget plus one bounded match in declared regexps.
+
+Clients should still treat a request timeout as a wedged server and kill it;
+the Pi `AAPClient` does so, and `close()` kills a server that has not exited
+shortly after stdin closes.
 
 ## 7. Capabilities (the ladder)
 

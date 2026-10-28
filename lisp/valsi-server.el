@@ -87,7 +87,10 @@ The record is a unibyte UTF-8 string."
       (and has-id (valsi-server--error id -32601 "Method not found" method)))
      (t
       (condition-case err
-          (let ((result (valsi-proto-json-request method params)))
+          ;; One budget for all declared-regexp matching in the request
+          ;; (issue #80), across detection and every document it parses.
+          (let ((result (valsi-registry-with-declarative-deadline
+                          (valsi-proto-json-request method params))))
             (and has-id
                  (list :jsonrpc valsi-server-jsonrpc-version
                        :id id :result result)))
