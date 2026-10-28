@@ -15,6 +15,14 @@
 (require 'json)
 (require 'valsi-harness)
 
+(defun valsi-pi--require-json ()
+  "Signal a `user-error' unless Emacs has native JSON support.
+Emacs 29 has `json-serialize' and `json-parse-string' only when built with
+libjansson; Emacs 30 always has them."
+  (unless (json-available-p)
+    (user-error (concat "The Pi RPC client needs native JSON: "
+                        "Emacs 30, or Emacs 29 built with libjansson"))))
+
 (defcustom valsi-pi-program "pi"
   "Pi executable used by `valsi-pi-create'."
   :type 'file
@@ -143,6 +151,7 @@ explicitly disable it."
 
 (defun valsi-pi--atomic-write-json (path object)
   "Atomically replace PATH with JSON serialization of OBJECT at mode 0600."
+  (valsi-pi--require-json)
   (let ((temporary (make-temp-file
                     (expand-file-name ".valsi-pi-policy-" (file-name-directory path))
                     nil ".json")))
@@ -211,6 +220,7 @@ Only one live prompt or plan dispatch may replace the policy at a time."
 
 (cl-defmethod valsi-harness-start ((client valsi-pi))
   "Start CLIENT's Pi subprocess unless it is already live."
+  (valsi-pi--require-json)
   (unless (valsi-harness-live-p client)
     (let* ((default-directory (file-name-as-directory
                                (expand-file-name (valsi-pi-directory client))))
@@ -264,6 +274,7 @@ sentinel from the old process cannot affect requests sent to the replacement."
 
 (cl-defmethod valsi-harness-request ((client valsi-pi) command callback)
   "Send COMMAND through CLIENT and arrange CALLBACK correlation."
+  (valsi-pi--require-json)
   (unless (valsi-harness-live-p client)
     (valsi-harness-start client))
   (let* ((id (format "valsi-%d" (cl-incf (valsi-pi-sequence client))))
@@ -405,6 +416,7 @@ user rather than inspecting or mirroring Pi's private session store."
 
 (cl-defmethod valsi-harness-notify ((client valsi-pi) message)
   "Send uncorrelated protocol MESSAGE through CLIENT unchanged."
+  (valsi-pi--require-json)
   (unless (valsi-harness-live-p client)
     (valsi-harness-start client))
   (process-send-string
@@ -443,6 +455,7 @@ status arrives as a `valsi-auth-status' extension UI event."
 
 (defun valsi-pi--consume (client chunk)
   "Consume a possibly partial JSONL CHUNK for CLIENT."
+  (valsi-pi--require-json)
   (let* ((text (concat (valsi-pi-receive-buffer client) chunk))
          (start 0)
          newline)

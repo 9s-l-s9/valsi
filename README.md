@@ -48,6 +48,8 @@ Emacs 29.1 or later, as declared in the `Package-Requires` header of
 dependencies).  markdown-mode and Eat are optional; the terminal-agent
 integration uses Eat plus an agent CLI (Pi is the tested default; Codex
 CLI and Claude Code also work).  Guix is convenient but not required.
+The headless AAP server used by the Pi extension needs native JSON, which
+Emacs 29 has only when built with libjansson (`json-available-p`).
 
 ## Installation
 

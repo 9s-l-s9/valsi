@@ -29,6 +29,7 @@
 ;;;; Pi harness
 
 (ert-deftest valsi-test-pi-jsonl-partial-and-correlated ()
+  (skip-unless (json-available-p))
   (let* ((events nil)
          (result nil)
          (client (valsi-pi-create
@@ -54,6 +55,7 @@
     (should (= 0 (hash-table-count (valsi-pi-pending client))))))
 
 (ert-deftest valsi-test-pi-concurrent-responses-may-arrive-out-of-order ()
+  (skip-unless (json-available-p))
   (let ((client (valsi-pi-create))
         results)
     (puthash "valsi-1" (lambda (response error)
@@ -78,6 +80,7 @@
     (should (= 0 (hash-table-count (valsi-pi-pending client))))))
 
 (ert-deftest valsi-test-pi-jsonl-unicode-separators-are-not-frames ()
+  (skip-unless (json-available-p))
   (let* ((events nil)
         (client (valsi-pi-create
                  :event-functions
@@ -91,6 +94,7 @@
                    (plist-get (car events) :delta)))))
 
 (ert-deftest valsi-test-pi-malformed-record-becomes-event ()
+  (skip-unless (json-available-p))
   (let* ((events nil)
         (client (valsi-pi-create
                  :event-functions
@@ -99,6 +103,7 @@
     (should (eq 'protocol-error (plist-get (car events) :type)))))
 
 (ert-deftest valsi-test-pi-real-process-roundtrip-and-exit ()
+  (skip-unless (json-available-p))
   (let* ((events nil)
          (result nil)
          (script
@@ -146,6 +151,7 @@
       (valsi-harness-stop client))))
 
 (ert-deftest valsi-test-pi-notify-preserves-extension-request-id ()
+  (skip-unless (json-available-p))
   (let* ((script
           (concat "IFS= read -r request\n"
                   "printf '%s\\n' \"$request\" >&2\n"))
@@ -167,6 +173,7 @@
       (valsi-harness-stop client))))
 
 (ert-deftest valsi-test-pi-abort-command-roundtrip ()
+  (skip-unless (json-available-p))
   (let* ((received nil)
          (script
           (concat
@@ -198,6 +205,7 @@
       (valsi-harness-stop client))))
 
 (ert-deftest valsi-test-pi-exit-fails-all-pending-and-reports-stderr ()
+  (skip-unless (json-available-p))
   (let* ((events nil)
          (callbacks nil)
          (script
@@ -232,6 +240,7 @@
                               (plist-get exit :stderr))))))
 
 (ert-deftest valsi-test-pi-old-process-failure-does-not-touch-new-requests ()
+  (skip-unless (json-available-p))
   (let* ((client (valsi-pi-create))
          (old-process 'old)
          (new-process 'new)
@@ -741,6 +750,7 @@ interior-state contradictions."
 
 (ert-deftest valsi-test-proto-json-registration ()
   "A grammar declaration and its response survive a real JSON round-trip."
+  (skip-unless (json-available-p))
   (valsi-init)
   (valsi-proto-reset)
   (let* ((spec (list :id "wire-demo" :name "Wire demo" :evidence "emergent"

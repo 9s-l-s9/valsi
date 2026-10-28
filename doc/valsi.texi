@@ -110,7 +110,9 @@ The hard dependencies are declared in the @code{Package-Requires} header of
 version, URL, and dependencies, and @code{make verify-meta} checks the Guix
 package, MELPA recipe, and changelog against it.  At the time of writing the
 only hard requirement is Emacs 29.1 or later.  CI runs the full check gate on
-Emacs 29.1 and 30.1.
+Emacs 29.1 and 30.1.  The headless AAP server used by the Pi extension needs
+native JSON, which Emacs 29 has only when built with libjansson
+(@code{json-available-p}).
 
 @code{markdown-mode} and Eat are optional and loaded only when present:
 @code{markdown-mode} improves highlighting of artifact buffers, and Eat

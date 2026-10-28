@@ -34,6 +34,18 @@
 (declare-function valsi-decision-register "valsi-decision" ())
 (declare-function valsi-overview-register "valsi-overview" ())
 
+(defconst valsi-server--json-unavailable
+  (concat "The AAP stdio server needs native JSON: "
+          "Emacs 30, or Emacs 29 built with libjansson")
+  "Message reported when `json-serialize' and `json-parse-string' are missing.")
+
+(defun valsi-server--require-json ()
+  "Signal a `user-error' unless Emacs has native JSON support.
+Emacs 29 has `json-serialize' and `json-parse-string' only when built with
+libjansson; Emacs 30 always has them."
+  (unless (json-available-p)
+    (user-error "%s" valsi-server--json-unavailable)))
+
 (defun valsi-server--error (id code message &optional data)
   "Construct a JSON-RPC error for ID with CODE, MESSAGE, and optional DATA."
   (let ((error (list :code code :message message)))
@@ -137,6 +149,7 @@ The record is a unibyte UTF-8 string."
   "Consume possibly partial strict-LF JSONL CHUNK for SERVER."
   (when (valsi-server-closed server)
     (error "AAP server is closed"))
+  (valsi-server--require-json)
   (setf (valsi-server-buffer server)
         (concat (valsi-server-buffer server) chunk))
   (let ((start 0)
@@ -154,6 +167,7 @@ The record is a unibyte UTF-8 string."
   "Close SERVER, reporting an unterminated final record as a parse error."
   (unless (valsi-server-closed server)
     (unless (string-empty-p (valsi-server-buffer server))
+      (valsi-server--require-json)
       (valsi-server--send
        server (valsi-server--error nil -32700
                                   "Parse error: record not terminated by LF")))
@@ -253,7 +267,12 @@ When stdin is a pipe or file, an unbuffered shell reader inherits it through
 strict-LF EOF contract that batch minibuffer input otherwise loses.  A socket
 \(as created by Node's `child_process.spawn') cannot be reopened that way, so
 it is read line by line instead.  Output is flushed after every response, so
-callers never wait for process exit."
+callers never wait for process exit.
+Without native JSON support, exit with status 3 and a message on stderr
+instead of failing on the first request."
+  (unless (json-available-p)
+    (message "valsi-server-stdio: %s" valsi-server--json-unavailable)
+    (kill-emacs 3))
   (valsi-server-init)
   (let ((server (valsi-server-create
                  :send-function #'valsi-server--write-stdout))

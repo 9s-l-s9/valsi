@@ -68,6 +68,17 @@
      (valsi-pi-auth-status client "openai-codex\n/quit")
      :type 'user-error)))
 
+(ert-deftest valsi-pi-test-without-native-json-is-a-clear-error ()
+  "Issue #82: missing native JSON is a `user-error', not `void-function'."
+  (cl-letf (((symbol-function 'json-available-p) #'ignore))
+    (let ((client (valsi-pi-create)))
+      (should (string-match-p
+               "native JSON"
+               (cadr (should-error (valsi-pi--consume client "{}\n")
+                                   :type 'user-error))))
+      (should-error (valsi-harness-request client '(:type "get_state") #'ignore)
+                    :type 'user-error))))
+
 (ert-deftest valsi-pi-test-session-contract-uses-pinned-rpc-commands ()
   "Session helpers preserve Pi ownership and exact 0.80.6 field names."
   (let ((client (valsi-pi-create))
@@ -97,6 +108,7 @@
 
 (ert-deftest valsi-pi-test-session-contract-matches-golden-trace ()
   "Session command serialization stays pinned to Pi 0.80.6."
+  (skip-unless (json-available-p))
   (let ((requests
          '((:id "valsi-1" :type "get_tree")
            (:id "valsi-2" :type "get_entries" :since "entry-1")
@@ -127,6 +139,7 @@
 
 (ert-deftest valsi-pi-test-pinned-request-golden-trace ()
   "Valsi emits the command names and field casing pinned by Pi 0.80.6."
+  (skip-unless (json-available-p))
   (let ((actual
          (mapcar
           (lambda (request)
@@ -140,6 +153,7 @@
 
 (ert-deftest valsi-pi-test-pinned-response-golden-trace ()
   "The checked-in Pi 0.80.6 trace survives arbitrary process chunking."
+  (skip-unless (json-available-p))
   (let ((client (valsi-pi-create))
         callbacks events)
     (setf (valsi-harness-event-functions client)
@@ -179,6 +193,7 @@
 
 (ert-deftest valsi-pi-test-command-drift-fails-correlated-request ()
   "A response id cannot disguise a changed Pi command contract."
+  (skip-unless (json-available-p))
   (let ((client (valsi-pi-create))
         result events)
     (setf (valsi-harness-event-functions client)
@@ -199,6 +214,7 @@
 
 (ert-deftest valsi-pi-test-crlf-framing-fails-pending-request ()
   "The pinned strict-LF transport rejects CRLF without stranding callbacks."
+  (skip-unless (json-available-p))
   (let ((client (valsi-pi-create))
         result events)
     (setf (valsi-harness-event-functions client)
@@ -220,6 +236,7 @@
 
 (ert-deftest valsi-pi-test-state-capability-drift-fails-probe ()
   "Missing state capabilities fail closed and retain a diagnostic."
+  (skip-unless (json-available-p))
   (let ((client (valsi-pi-create))
         result events)
     (setf (valsi-harness-event-functions client)
@@ -245,6 +262,7 @@
 
 (ert-deftest valsi-pi-test-state-probe-does-not-require-callback ()
   "A fire-and-forget state response is correlated and validates the contract."
+  (skip-unless (json-available-p))
   (let ((client (valsi-pi-create))
         events)
     (setf (valsi-harness-event-functions client)
@@ -260,6 +278,7 @@
               :key (lambda (event) (plist-get event :type))))))
 
 (ert-deftest valsi-pi-test-deliberate-restart-accepts-new-requests ()
+  (skip-unless (json-available-p))
   (let* ((events nil)
          first-result second-result)
     ;; Each generation accepts one record.  The response id is selected by the
@@ -319,6 +338,7 @@
 
 (ert-deftest valsi-pi-test-unexpected-exit-recovers-on-next-request ()
   "A crash fails its request exactly once; the next request starts fresh Pi."
+  (skip-unless (json-available-p))
   (let* ((marker (make-temp-file "valsi-pi-crash-generation-"))
          (events nil)
          crashed recovered)
@@ -378,6 +398,7 @@
 
 (ert-deftest valsi-pi-test-policy-json-fails-closed-and-is-private ()
   "Empty allow-lists serialize as empty arrays, never missing authority."
+  (skip-unless (json-available-p))
   (let* ((directory (make-temp-file "valsi-pi-project-" t))
          (client (valsi-pi-create :directory directory))
          (path (valsi-pi-set-policy client "T1307:test" nil nil t))
@@ -459,6 +480,7 @@ Pi runs with a temporary HOME and agent directory, so neither the
 user's Pi state nor a sandboxing wrapper that exposes only HOME can
 affect the result; the extension, policy file, and working directory
 are placed inside that HOME and removed afterwards."
+  (skip-unless (json-available-p))
   (let ((pi (executable-find valsi-pi-program)))
     (skip-unless pi)
     (skip-unless (equal (valsi-pi-test--installed-version pi)

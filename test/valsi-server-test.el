@@ -28,6 +28,7 @@
    (split-string output "\n" t)))
 
 (ert-deftest valsi-test-server-partial-concurrent-and-ids ()
+  (skip-unless (json-available-p))
   (valsi-proto-reset)
   (pcase-let* ((`(,server . ,output) (valsi-server-test--server))
                (request-1
@@ -47,6 +48,7 @@
                               nil))))))
 
 (ert-deftest valsi-test-server-notification-has-no-response ()
+  (skip-unless (json-available-p))
   (pcase-let ((`(,server . ,output) (valsi-server-test--server)))
     (valsi-server-consume
      server
@@ -54,6 +56,7 @@
     (should (string-empty-p (car output)))))
 
 (ert-deftest valsi-test-server-malformed-invalid-and-unknown-errors ()
+  (skip-unless (json-available-p))
   (pcase-let ((`(,server . ,output) (valsi-server-test--server)))
     (valsi-server-consume
      server
@@ -72,6 +75,7 @@
       (should (equal "x" (plist-get (nth 2 records) :id))))))
 
 (ert-deftest valsi-test-server-strict-lf-and-unicode-separators ()
+  (skip-unless (json-available-p))
   (pcase-let ((`(,server . ,output) (valsi-server-test--server)))
     (let ((uri (concat "a" (string #x2028) "b" (string #x2029) ".md")))
       (valsi-server-consume
@@ -96,6 +100,7 @@
                 :code)))))
 
 (ert-deftest valsi-test-server-eof-reports-partial-and-closes ()
+  (skip-unless (json-available-p))
   (pcase-let ((`(,server . ,output) (valsi-server-test--server)))
     (valsi-server-consume
      server "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}")
@@ -105,6 +110,7 @@
     (should-error (valsi-server-consume server "\n"))))
 
 (ert-deftest valsi-test-server-artifact-methods-and-plan-context ()
+  (skip-unless (json-available-p))
   (valsi-server-init)
   (valsi-proto-reset)
   (pcase-let ((`(,server . ,output) (valsi-server-test--server)))
@@ -136,6 +142,7 @@
 
 (ert-deftest valsi-test-server-real-stdio-roundtrip-and-eof ()
   "A headless Emacs serves one request and exits cleanly when stdin closes."
+  (skip-unless (json-available-p))
   ;; valsi-server-stdio reads the process's own stdin via /proc/PID/fd/0, so the
   ;; test only applies where that interface exists.
   (skip-unless (file-exists-p "/proc/self/fd/0"))
@@ -178,6 +185,7 @@
 
 (ert-deftest valsi-test-server-empty-results-are-arrays-or-null ()
   "Issue #5: nil never reaches the wire as {} for an array or absent result."
+  (skip-unless (json-available-p))
   (valsi-server-init)
   (valsi-proto-reset)
   (unwind-protect
@@ -207,6 +215,7 @@
 
 (ert-deftest valsi-test-server-non-string-uri-text-is-invalid-params ()
   "Issue #27: non-string or missing uri/text answers -32602."
+  (skip-unless (json-available-p))
   (valsi-server-init)
   (valsi-proto-reset)
   (unwind-protect
@@ -238,6 +247,7 @@
 
 (ert-deftest valsi-test-server-lone-surrogate-is-parse-error ()
   "Issue #28: an undecodable surrogate escape answers -32700, not -32600."
+  (skip-unless (json-available-p))
   (valsi-proto-reset)
   (let ((responses
          (valsi-server-test--exchange
@@ -253,6 +263,7 @@
 
 (ert-deftest valsi-test-server-invalid-grammar-spec-is-invalid-params ()
   "Issue #29: a bad grammar/register spec or describe id answers -32602."
+  (skip-unless (json-available-p))
   (valsi-server-init)
   (valsi-proto-reset)
   (let* ((grammars (valsi-registry-all))
@@ -287,6 +298,7 @@
 
 (ert-deftest valsi-test-server-rejects-catastrophic-regexps ()
   "Issue #80: wire grammars cannot register exponential regexps."
+  (skip-unless (json-available-p))
   (valsi-server-init)
   (valsi-proto-reset)
   (let* ((grammars (valsi-registry-all))
@@ -344,6 +356,7 @@
 
 (ert-deftest valsi-test-server-rejects-polynomial-regexps ()
   "Issue #80: polynomial backtracking beyond O(N^2) is rejected."
+  (skip-unless (json-available-p))
   (valsi-server-init)
   (valsi-proto-reset)
   (let* ((grammars (valsi-registry-all))
@@ -381,6 +394,7 @@
 
 (ert-deftest valsi-test-server-accepted-regexps-stay-fast ()
   "Issue #80: legitimate regexps register and run quickly on long input."
+  (skip-unless (json-available-p))
   (valsi-server-init)
   (valsi-proto-reset)
   (let ((legit
@@ -433,6 +447,7 @@
 
 (ert-deftest valsi-test-server-real-stdio-survives-hostile-register ()
   "Issue #80: requests after a hostile grammar/register are still answered."
+  (skip-unless (json-available-p))
   (skip-unless (file-exists-p "/proc/self/fd/0"))
   (skip-unless (valsi-test-emacs-program))
   (let* ((line (concat (make-string 3900 ?a) "\n"))
@@ -489,6 +504,7 @@
 
 (ert-deftest valsi-test-server-declarative-match-input-is-bounded ()
   "Issue #80: declared regexps only see bounded input."
+  (skip-unless (json-available-p))
   (valsi-server-init)
   (valsi-proto-reset)
   (unwind-protect
@@ -533,6 +549,7 @@
 
 (ert-deftest valsi-test-server-register-resyncs-each-document ()
   "Issue #81: one failing document neither aborts nor blocks registration."
+  (skip-unless (json-available-p))
   (valsi-server-init)
   (valsi-proto-reset)
   (unwind-protect
@@ -606,6 +623,7 @@ ENVIRONMENT entries are prepended to `process-environment'."
 
 (ert-deftest valsi-test-server-real-stdio-writes-utf-8 ()
   "Issue #79: non-ASCII output is valid UTF-8 on stdout, in any locale."
+  (skip-unless (json-available-p))
   (skip-unless (file-exists-p "/proc/self/fd/0"))
   (skip-unless (valsi-test-emacs-program))
   (let* ((uri "café-\U0001F600- .md")
@@ -640,6 +658,52 @@ ENVIRONMENT entries are prepended to `process-environment'."
                                       (car records) :object-type 'plist)
                                      :result)
                           :uri))))))))
+
+;;;; Emacs 29 without libjansson (issue #82)
+
+(ert-deftest valsi-test-server-without-native-json-is-a-clear-error ()
+  "Issue #82: missing native JSON is a `user-error', not `void-function'."
+  (cl-letf (((symbol-function 'json-available-p) #'ignore))
+    (pcase-let ((`(,server . ,_output) (valsi-server-test--server)))
+      (let ((err (should-error
+                  (valsi-server-consume
+                   server
+                   "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}\n")
+                  :type 'user-error)))
+        (should (string-match-p "native JSON" (cadr err)))))
+    (let (messages)
+      (should (equal 3 (catch 'killed
+                         (cl-letf (((symbol-function 'kill-emacs)
+                                    (lambda (&optional status)
+                                      (throw 'killed status)))
+                                   ((symbol-function 'message)
+                                    (lambda (format &rest args)
+                                      (push (apply #'format format args)
+                                            messages))))
+                           (valsi-server-stdio)))))
+      (should (string-match-p "\\`valsi-server-stdio: .*native JSON"
+                              (car messages))))))
+
+(ert-deftest valsi-test-server-real-stdio-without-native-json-exits ()
+  "Issue #82: the headless server exits non-zero with a message on stderr."
+  (skip-unless (valsi-test-emacs-program))
+  (let ((stderr (make-temp-file "valsi-server-stderr-")))
+    (unwind-protect
+        (with-temp-buffer
+          (insert "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\"}\n")
+          (should (equal 3 (call-process-region
+                            (point-min) (point-max) (valsi-test-emacs-program)
+                            t (list t stderr) nil
+                            "-Q" "--batch"
+                            "-L" (expand-file-name "lisp" default-directory)
+                            "-l" "valsi-server"
+                            "--eval" "(fset 'json-available-p #'ignore)"
+                            "-f" "valsi-server-stdio")))
+          (should (equal "" (buffer-string)))
+          (with-temp-buffer
+            (insert-file-contents stderr)
+            (should (string-match-p "native JSON" (buffer-string)))))
+      (delete-file stderr))))
 
 (provide 'valsi-server-test)
 ;;; valsi-server-test.el ends here
