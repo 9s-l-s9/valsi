@@ -90,5 +90,18 @@
                       :type 'user-error)
         (should-not default)))))
 
+(ert-deftest valsi-terminal-agent-test-header-escapes-percent ()
+  "A % in the project path is shown literally in the header line (#42)."
+  (valsi-terminal-agent-test--with-root
+    (let* ((dir (file-name-as-directory (expand-file-name "p%b" root)))
+           (default-directory (progn (make-directory dir) dir))
+           (label (valsi-project-label (valsi-project-canonical-root dir)))
+           (instance (save-window-excursion (valsi-agent "primary" 'pi))))
+      (with-current-buffer (valsi-terminal-agent-instance-buffer instance)
+        ;; `format-mode-line' renders nothing in batch mode, so check the
+        ;; construct: the label appears only with its % doubled.
+        (should (member (string-replace "%" "%%" label) header-line-format))
+        (should-not (member label header-line-format))))))
+
 (provide 'valsi-terminal-agent-test)
 ;;; valsi-terminal-agent-test.el ends here

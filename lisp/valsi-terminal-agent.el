@@ -318,7 +318,8 @@ Deliberately small: the CLI owns every printable key."
                   `(" Valsi AGENT · "
                     ,(symbol-name backend)
                     " · "
-                    ,project-name
+                    ;; Strings in mode-line constructs expand %-sequences.
+                    ,(string-replace "%" "%%" project-name)
                     " · M-n menu "))
       (valsi-terminal-agent-mode 1)
       (add-hook 'kill-buffer-hook #'valsi-terminal-agent--changed nil t))
