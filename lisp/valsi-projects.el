@@ -35,6 +35,67 @@
                               (current-buffer) (point)))
              (assoc-delete-all root (frame-parameter nil 'valsi-project-layouts)))))))
 
+(defun valsi-projects--replace-killed-buffers (state placeholder)
+  "Return a copy of window STATE with killed buffers shown in PLACEHOLDER.
+Saved previous and next buffers that were killed are dropped."
+  (cond
+   ((and (consp state) (eq (car state) 'leaf))
+    (cons 'leaf
+          (mapcar
+           (lambda (entry)
+             (pcase entry
+               (`(buffer ,(and (pred bufferp) (pred (not buffer-live-p))) . ,props)
+                ;; Like Emacs 30, never select or dedicate such a window.
+                `(buffer ,placeholder (point . 1) (start . 1)
+                         ,@(seq-remove (lambda (prop)
+                                         (memq (car-safe prop)
+                                               '(selected dedicated point start)))
+                                       props)))
+               (`(prev-buffers . ,entries)
+                (cons 'prev-buffers
+                      (seq-filter (lambda (prev) (buffer-live-p (get-buffer (car prev))))
+                                  entries)))
+               (`(next-buffers . ,buffers)
+                (cons 'next-buffers
+                      (seq-filter (lambda (next) (buffer-live-p (get-buffer next)))
+                                  buffers)))
+               (_ entry)))
+           (cdr state))))
+   ((consp state)
+    (cons (valsi-projects--replace-killed-buffers (car state) placeholder)
+          (valsi-projects--replace-killed-buffers (cdr state) placeholder)))
+   (t state)))
+
+(defun valsi-projects--state-put (state)
+  "Restore window STATE in the selected frame's root window.
+Windows whose buffers were killed since STATE was recorded are deleted,
+or show another buffer when they cannot be deleted, as Emacs 30 does by
+default, including on Emacs 29."
+  (if (boundp 'window-restore-killed-buffer-windows)
+      (window-state-put state (frame-root-window) 'safe)
+    (valsi-projects--state-put-without-killed state)))
+
+(defun valsi-projects--state-put-without-killed (state)
+  "Restore window STATE without signaling for buffers killed since.
+Emacs 29 has no `window-restore-killed-buffer-windows' and signals
+\"Selecting deleted buffer\" for them.  Show a placeholder there instead,
+then delete those windows as Emacs 30 does.  A window that cannot be
+deleted keeps the buffer the selected window showed before."
+  (let ((placeholder (generate-new-buffer " *valsi-killed-window*"))
+        (fallback (window-buffer (selected-window))))
+    (unwind-protect
+        (progn
+          (window-state-put
+           (valsi-projects--replace-killed-buffers state placeholder)
+           (frame-root-window) 'safe)
+          (dolist (window (get-buffer-window-list placeholder 'nomini))
+            (cond
+             ((eq (window-deletable-p window) t) (delete-window window))
+             ;; Emacs 30 keeps showing the replaced layout's buffer here.
+             ((buffer-live-p fallback) (set-window-buffer window fallback))
+             (t (switch-to-prev-buffer window)))))
+      (kill-buffer placeholder))))
+
 (defun valsi-projects--main-window ()
   "Select a regular window before replacing the frame's project layout."
   (when (window-parameter (selected-window) 'window-side)
@@ -64,7 +125,7 @@
     (if (and saved (buffer-live-p source))
         (condition-case nil
             (progn
-              (window-state-put (car saved) (frame-root-window) 'safe)
+              (valsi-projects--state-put (car saved))
               (when-let* ((window (get-buffer-window source)))
                 (select-window window)
                 (goto-char (min (nth 2 saved) (point-max)))))
@@ -352,7 +413,7 @@ A project with a running agent must be stopped explicitly before removal."
   (if-let* ((origin (frame-parameter nil 'valsi-projects-origin)))
       (let ((projects (current-buffer))
             (root (cdr origin)))
-        (window-state-put (car origin) (frame-root-window) 'safe)
+        (valsi-projects--state-put (car origin))
         ;; Emacs 29 restores the selected window without making its
         ;; buffer current.
         (select-window (frame-selected-window))

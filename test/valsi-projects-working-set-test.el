@@ -25,6 +25,100 @@
         (should (derived-mode-p 'valsi-app-mode))
         (should (equal a valsi-app--root))))))
 
+;; Emacs 29 has no `window-restore-killed-buffer-windows' and its
+;; `window-state-put' signals for killed buffers (#86).  These tests force
+;; the Emacs 29 restore path, so it is exercised on every version.
+
+(defmacro valsi-projects-test--with-emacs-29-restore (&rest body)
+  "Run BODY restoring layouts the way Valsi does on Emacs 29."
+  (declare (indent 0))
+  `(cl-letf (((symbol-function 'valsi-projects--state-put)
+              #'valsi-projects--state-put-without-killed))
+     ,@body))
+
+(ert-deftest valsi-projects-state-put-drops-killed-buffer-windows ()
+  "A killed buffer's window is deleted; the rest of the layout survives (#86)."
+  (save-window-excursion
+    (let ((kept (generate-new-buffer "valsi-kept"))
+          (killed (generate-new-buffer "valsi-killed"))
+          (other (generate-new-buffer "valsi-other")))
+      (unwind-protect
+          (progn
+            (delete-other-windows)
+            (switch-to-buffer kept)
+            (set-window-buffer (split-window-right) killed)
+            (let ((state (window-state-get (frame-root-window))))
+              (delete-other-windows)
+              (switch-to-buffer other)
+              (kill-buffer killed)
+              (valsi-projects--state-put-without-killed state)
+              (should (equal (list kept)
+                             (mapcar #'window-buffer (window-list nil 'nomini))))
+              (should-not (seq-find (lambda (buffer)
+                                      (string-prefix-p " *valsi-killed-window"
+                                                       (buffer-name buffer)))
+                                    (buffer-list)))))
+        (mapc (lambda (buffer) (when (buffer-live-p buffer) (kill-buffer buffer)))
+              (list kept killed other))))))
+
+(ert-deftest valsi-projects-state-put-keeps-sole-killed-buffer-window ()
+  "The frame's only window survives with another buffer when its buffer died (#86)."
+  (save-window-excursion
+    (let ((killed (generate-new-buffer "valsi-killed"))
+          (other (generate-new-buffer "valsi-other")))
+      (unwind-protect
+          (progn
+            (delete-other-windows)
+            (switch-to-buffer killed)
+            (let ((state (window-state-get (frame-root-window))))
+              (switch-to-buffer other)
+              (kill-buffer killed)
+              (valsi-projects--state-put-without-killed state)
+              (should (one-window-p))
+              (should (buffer-live-p (window-buffer (selected-window))))
+              (should-not (string-prefix-p
+                           " " (buffer-name (window-buffer (selected-window)))))))
+        (mapc (lambda (buffer) (when (buffer-live-p buffer) (kill-buffer buffer)))
+              (list killed other))))))
+
+(ert-deftest valsi-projects-quit-with-killed-origin-on-emacs-29-path ()
+  "Quitting after the origin was killed falls back to the hub on Emacs 29 (#86)."
+  (valsi-projects-test--with-emacs-29-restore
+    (valsi-projects-test--with-projects
+      (let ((source (find-file-noselect fa)))
+        (switch-to-buffer source)
+        (delete-other-windows)
+        (valsi-projects)
+        (kill-buffer source)
+        (with-current-buffer "*Valsi Projects*" (valsi-projects-quit))
+        (should-not (get-buffer-window "*Valsi Projects*"))
+        (with-current-buffer (window-buffer (selected-window))
+          (should (derived-mode-p 'valsi-app-mode))
+          (should (equal a valsi-app--root)))))))
+
+(defun valsi-projects-test--switch-back-after-killing-secondary ()
+  "Return window buffer names after resuming a layout with a killed window."
+  (valsi-projects-test--with-projects
+    (let ((extra (expand-file-name "NOTES.md" a))
+          (source (find-file-noselect fa)))
+      (with-temp-file extra (insert "# Notes\n"))
+      (valsi-project-switch a)
+      (switch-to-buffer source)
+      (delete-other-windows)
+      (set-window-buffer (split-window-right) (find-file-noselect extra))
+      (valsi-project-switch b)
+      (kill-buffer (get-file-buffer extra))
+      (valsi-project-switch a)
+      (mapcar (lambda (window) (buffer-name (window-buffer window)))
+              (window-list nil 'nomini)))))
+
+(ert-deftest valsi-project-switch-keeps-layout-without-killed-window ()
+  "Resuming drops only the killed buffer's window (#86)."
+  (should (equal '("PLAN.md") (valsi-projects-test--switch-back-after-killing-secondary)))
+  (valsi-projects-test--with-emacs-29-restore
+    (should (equal '("PLAN.md")
+                   (valsi-projects-test--switch-back-after-killing-secondary)))))
+
 (ert-deftest valsi-projects-removed-current-project-stays-removed ()
   "Reopening Projects from a removed project does not re-add it (#56)."
   (valsi-projects-test--with-projects
