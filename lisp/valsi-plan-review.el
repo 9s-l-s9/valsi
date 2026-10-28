@@ -12,7 +12,10 @@
 ;;
 ;; The diff is keyed by task id, so it is stable under reordering and robust to
 ;; the agent rewriting whole regions.  Reject-all restores the file
-;; byte-identically (the core invariant); accept-all yields the agent's version.
+;; byte-identically (the core invariant).  Accept-all applies every id-bearing
+;; task line from the agent's version; it is not a full-file replacement.
+;; Headings, prose, step lines, and un-ided tasks are not compared and keep
+;; their current text, and added tasks are appended at the end of the file.
 
 ;;; Code:
 
@@ -79,8 +82,9 @@ ignored (their dialects are positional and handled by `renumber')."
 
 (defun valsi-plan-apply-changes (old-content changes)
   "Apply accepted line-level edits to OLD-CONTENT and return the result.
-Each entry in CHANGES is keyed by id.  Return OLD-CONTENT byte-identically
-when CHANGES is empty (reject-all)."
+Each entry in CHANGES is keyed by id.  Modified and removed changes
+touch only the task line itself; added tasks are appended at the end.
+Return OLD-CONTENT byte-identically when CHANGES is empty (reject-all)."
   (with-temp-buffer
     (insert old-content)
     (dolist (ch changes)

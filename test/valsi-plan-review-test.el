@@ -65,7 +65,7 @@
                     (with-current-buffer target (buffer-string)))))))
 
 (ert-deftest valsi-test-plan-review-accept-all-yields-agent-version ()
-  "Accept-all applies every change: edit, removal, and addition."
+  "Accept-all applies every task-level change: edit, removal, and addition."
   (valsi-plan-review-test--with-review
    (valsi-plan-review-reject-all)
    (valsi-plan-review-accept-all)
@@ -123,6 +123,16 @@
      (valsi-plan-review-reject-all)
      (valsi-plan-review-apply)
      (should-not (buffer-modified-p target)))))
+
+(ert-deftest valsi-test-plan-review-diff-is-task-level ()
+  "Only id-bearing task lines are diffed; added tasks append at the end."
+  (should-not (valsi-plan-diff "- [ ] 1 a\n- [ ] foo\n  - step\n"
+                               "- [ ] 1 a\n- [ ] foo\n  - step2\n"))
+  (let* ((old "- [ ] 1 a\n- [ ] 3 c\n")
+         (new "- [ ] 1 a\n- [ ] 2 b\n- [ ] 3 c\n")
+         (changes (valsi-plan-diff old new)))
+    (should (equal "- [ ] 1 a\n- [ ] 3 c\n- [ ] 2 b\n"
+                   (valsi-plan-apply-changes old changes)))))
 
 (ert-deftest valsi-test-plan-review-no-changes-no-buffer ()
   "An identical proposal opens no review buffer."
