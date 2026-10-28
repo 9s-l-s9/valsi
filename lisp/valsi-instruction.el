@@ -31,7 +31,7 @@ The markers are uppercase only; match it with `case-fold-search' nil, see
 `valsi-instruction--emphasis-p'.")
 
 (defun valsi-instruction--emphasis-p (text)
-  "Return non-nil when TEXT contains an uppercase emphasis marker."
+  "Return non-nil when TEXT has an uppercase emphasis marker."
   (let ((case-fold-search nil))
     (and (string-match-p valsi-instruction-emphasis-re text) t)))
 

@@ -130,7 +130,7 @@ This client-side reporting boundary is outside AAP."
      instance (unless (equal status "unknown") (intern status)))))
 
 (defun valsi-terminal-agent--changed (&rest _)
-  "Notify views after a terminal process or buffer changes."
+  "Notify views after a change to a terminal process or buffer."
   (run-hooks 'valsi-terminal-agent-change-hook))
 
 (defun valsi-terminal-agent-project-root (&optional directory)

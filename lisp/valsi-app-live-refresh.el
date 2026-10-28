@@ -200,7 +200,7 @@ symbolic link or another name."
   (put hook-function 'permanent-local-hook t))
 
 (defun valsi-app-live-refresh--observe-buffer (file root)
-  "Observe edits and saves in FILE's existing buffer for ROOT."
+  "Observe each edit and save in FILE's existing buffer for ROOT."
   (when-let* ((buffer (valsi-app-live-refresh--file-buffer file)))
     (with-current-buffer buffer
       (setq-local valsi-app-live-refresh--buffer-roots

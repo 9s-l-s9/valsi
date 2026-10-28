@@ -282,7 +282,7 @@ row ids already used, so repeated labels still get unique row ids."
       (point))))
 
 (defun valsi-view-preserving-render (render)
-  "Call RENDER while preserving semantic point, window starts, and column.
+  "Call RENDER while preserving semantic point, column, and window start.
 Every window showing the buffer keeps its own window point."
   (let* ((anchor (valsi-view--row-anchor (point)))
          (windows (mapcar (lambda (window)

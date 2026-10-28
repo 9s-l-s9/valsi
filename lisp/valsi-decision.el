@@ -307,7 +307,7 @@ file's directory."
                           (list own))))))
 
 (defun valsi-decision--adr-p (file root)
-  "Return non-nil when FILE, parsed as ROOT, looks like an ADR.
+  "Return non-nil when FILE, parsed as ROOT, is likely an ADR.
 README, index, and template files are not; a numbered file name, a
 status, or a canonical section is enough."
   (let ((name (file-name-nondirectory file)))

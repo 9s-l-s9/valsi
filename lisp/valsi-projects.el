@@ -196,7 +196,7 @@ A project with a running agent must be stopped explicitly before removal."
     (push root valsi-projects--removed)))
 
 (defun valsi-projects-filter (query)
-  "Filter project names and paths by QUERY; empty QUERY shows all."
+  "Filter project names and paths by QUERY; an empty QUERY lists all."
   (interactive (list (read-string "Project filter (empty clears): " valsi-projects--filter)))
   (setq valsi-projects--filter (unless (string-empty-p query) (downcase query)))
   (valsi-projects--render))
@@ -242,7 +242,7 @@ A project with a running agent must be stopped explicitly before removal."
   (valsi-projects--sync t))
 
 (defun valsi-projects--changed ()
-  "Update an existing overview after project membership changes."
+  "Update an existing overview after a project membership change."
   ;; Explicitly adding or opening a removed project makes it eligible again.
   (setq valsi-projects--removed
         (seq-difference valsi-projects--removed (valsi-project-roots)))

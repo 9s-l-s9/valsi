@@ -1649,7 +1649,7 @@ This compatibility command no longer creates the former composition layout."
   (valsi-agent))
 
 (defun valsi-app--agents-changed ()
-  "Redraw live project views after terminal lifecycle changes."
+  "Redraw live project views after a terminal lifecycle change."
   (dolist (buffer (buffer-list))
     (with-current-buffer buffer
       (when (and (derived-mode-p 'valsi-app-mode) valsi-app--root)
