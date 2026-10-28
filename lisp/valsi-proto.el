@@ -77,6 +77,9 @@ This is the native in-process seam.  A wire transport wraps
      (list :id (valsi-proto--register (plist-get params :spec))))
     ('grammar/describe
      (let ((id (plist-get params :id)))
+       (unless (and id (or (stringp id) (symbolp id)))
+         (signal 'valsi-proto-invalid-params
+                 (list ":id must be a grammar id" id)))
        ;; Wire ids arrive as strings; the registry is keyed by symbols.
        (valsi-registry-describe (if (stringp id) (intern id) id))))
     ('grammar/list
@@ -185,8 +188,14 @@ array; elsewhere nil stays nil, which `json-serialize' writes as {}."
     (list :uri uri :grammar grammar :capabilities caps :version version)))
 
 (defun valsi-proto--register (spec)
-  "Register JSON-safe grammar declaration SPEC and hot-reload open documents."
-  (let ((id (valsi-registry-register-declaration spec)))
+  "Register JSON-safe grammar declaration SPEC and hot-reload open documents.
+A malformed SPEC is the client's error: signal `valsi-proto-invalid-params'."
+  (let ((id (condition-case err
+                (if (and spec (listp spec))
+                    (valsi-registry-register-declaration spec)
+                  (error ":spec must be a grammar declaration object"))
+              (error (signal 'valsi-proto-invalid-params
+                             (list (error-message-string err)))))))
     (maphash
      (lambda (uri doc) (valsi-proto--sync uri (valsi-proto-doc-text doc)))
      valsi-proto--docs)

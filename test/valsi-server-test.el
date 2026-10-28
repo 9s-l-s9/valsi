@@ -256,5 +256,39 @@
     (should (eq :null (plist-get (car responses) :id)))
     (should-not (valsi-proto-open-uris))))
 
+(ert-deftest valsi-test-server-invalid-grammar-spec-is-invalid-params ()
+  "Issue #29: a bad grammar/register spec or describe id answers -32602."
+  (valsi-server-init)
+  (valsi-proto-reset)
+  (let* ((grammars (valsi-registry-all))
+         (responses
+          (valsi-server-test--exchange
+           (list :jsonrpc "2.0" :id 7 :method "grammar/register"
+                 :params (list :name "x"))
+           (list :jsonrpc "2.0" :id 8 :method "grammar/register"
+                 :params (list :spec (list :id "bad" :match (list :score 1))))
+           (list :jsonrpc "2.0" :id 9 :method "grammar/register"
+                 :params (list :spec (list :id "bad"
+                                           :match (list :uriSuffix ".b")
+                                           :recognizers
+                                           (vector (list :type "t"
+                                                         :regexp "\\(")))))
+           (list :jsonrpc "2.0" :id 10 :method "grammar/register"
+                 :params (list :spec "plan"))
+           (list :jsonrpc "2.0" :id 11 :method "grammar/describe"
+                 :params (list :name 5))
+           (list :jsonrpc "2.0" :id 12 :method "grammar/describe"
+                 :params (list :id 5))
+           (list :jsonrpc "2.0" :id 13 :method "grammar/describe"
+                 :params (list :id "plan")))))
+    (should (equal '(-32602 -32602 -32602 -32602 -32602 -32602 nil)
+                   (valsi-server-test--codes responses)))
+    (should (string-match-p ":spec must be"
+                            (plist-get (plist-get (car responses) :error)
+                                       :data)))
+    (should (equal "plan" (plist-get (plist-get (nth 6 responses) :result)
+                                     :id)))
+    (should (equal grammars (valsi-registry-all)))))
+
 (provide 'valsi-server-test)
 ;;; valsi-server-test.el ends here
