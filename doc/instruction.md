@@ -88,7 +88,9 @@ touching the filesystem.
 
 `M-x valsi-instruction-scaffold` writes a starter instruction file (default
 `AGENTS.md`) with the conventional `Setup` / `Build & test` / `Conventions`
-scaffold and an emphasis marker, ready to fill in.
+scaffold and an emphasis marker, ready to fill in. Missing parent directories
+(`.cursor/rules/`, `.github/instructions/`) are created, and the title drops the
+`.instructions.md`/`.mdc`/`.md` suffix (`api.instructions.md` → `# api`).
 
 ## Capability ladder (this genre)
 

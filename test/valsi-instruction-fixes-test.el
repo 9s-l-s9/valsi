@@ -73,5 +73,26 @@
         (push (match-string-no-properties 1) found))
       (should (equal '("a.md" "b/c") (nreverse found))))))
 
+;;;; #61 -- scaffold creates parent directories and strips suffixes
+
+(ert-deftest valsi-test-instruction-scaffold-missing-parent-and-title ()
+  "Scaffolding into a missing directory works and titles drop suffixes."
+  (let ((dir (make-temp-file "valsi-instr" t))
+        (buffers nil))
+    (unwind-protect
+        (dolist (case '((".cursor/rules/api.mdc" . "# api\n")
+                        (".github/instructions/x.instructions.md" . "# x\n")
+                        ("AGENTS.md" . "# AGENTS\n")))
+          (let ((file (expand-file-name (car case) dir)))
+            (save-window-excursion
+              (valsi-instruction-scaffold file)
+              (push (current-buffer) buffers)
+              (should (equal file buffer-file-name))
+              (should (string-prefix-p (cdr case) (buffer-string))))))
+      (dolist (b buffers)
+        (with-current-buffer b (set-buffer-modified-p nil))
+        (kill-buffer b))
+      (delete-directory dir t))))
+
 (provide 'valsi-instruction-fixes-test)
 ;;; valsi-instruction-fixes-test.el ends here

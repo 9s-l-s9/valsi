@@ -487,12 +487,24 @@ mirroring it, preserving the target's own content outside the region."
   (interactive
    (list (read-file-name "Scaffold instruction file: "
                          nil "AGENTS.md" nil "AGENTS.md")))
+  (setq file (expand-file-name file))
   (when (or (not (file-exists-p file))
             (y-or-n-p (format "%s exists -- overwrite? " file)))
+    (make-directory (file-name-directory file) t)
     (find-file file)
     (when (> (buffer-size) 0) (erase-buffer))
-    (insert (valsi-instruction--scaffold-template (file-name-base file)))
+    (insert (valsi-instruction--scaffold-template
+             (valsi-instruction--scaffold-title file)))
     (goto-char (point-min))))
+
+(defun valsi-instruction--scaffold-title (file)
+  "Return the scaffold title for FILE: its name without instruction suffixes.
+Strips `.instructions.md', `.mdc' and `.md', so `api.instructions.md' and
+`api.mdc' both give `api'."
+  (let ((name (file-name-nondirectory file)))
+    (if (string-match "\\(?:\\.instructions\\)?\\.mdc?\\'" name)
+        (substring name 0 (match-beginning 0))
+      (file-name-base file))))
 
 ;;;; Dashboard
 
