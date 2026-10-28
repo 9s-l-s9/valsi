@@ -178,5 +178,35 @@
         (valsi-plan-add-dep))
       (should (equal (cdr case) (buffer-string))))))
 
+(ert-deftest valsi-plan-commands-test-prompt-verify-label ()
+  "Dispatch prompts carry verification text without its label (#77).
+Instruction files are left to the agent CLI, which loads them itself."
+  (let* ((dir (make-temp-file "valsi-77-" t))
+         (plan (expand-file-name "PLAN.md" dir)))
+    (unwind-protect
+        (progn
+          (with-temp-file (expand-file-name "AGENTS.md" dir)
+            (insert "- NEVER do x\n"))
+          (with-temp-buffer
+            (insert "- [ ] T001 first\n  **Verify:** run `make test`\n"
+                    "- [ ] T002 second\n  **Verify**: `make two`\n")
+            (setq buffer-file-name plan)
+            (let* ((root (valsi-plan-parse (buffer-string)))
+                   (tasks (valsi-node-of-type root 'task))
+                   (prompt (valsi-plan--terminal-prompt root (car tasks))))
+              (set-buffer-modified-p nil)
+              (setq buffer-file-name nil)
+              (should (string-match-p "^Verification: run `make test`$"
+                                      prompt))
+              (should-not (string-match-p "\\*\\*Verify" prompt))
+              (should-not (string-match-p "NEVER do x" prompt))
+              (should (equal "make test"
+                             (valsi-plan--verify-command (car tasks))))
+              (should (equal "`make two`"
+                             (plist-get (valsi-plan-context-bundle
+                                         root (cadr tasks))
+                                        :verify))))))
+      (delete-directory dir t))))
+
 (provide 'valsi-plan-commands-test)
 ;;; valsi-plan-commands-test.el ends here

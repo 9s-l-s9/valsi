@@ -52,14 +52,22 @@ A child task's steps and metadata belong to that child's own context."
                     (valsi-parse-pathrefs (valsi-node-prop meta :text "")))))
     (delete-dups (delq nil (mapcar #'valsi-plan--pathref-file refs)))))
 
+(defun valsi-plan--meta-body (text)
+  "Return meta line TEXT without its bold label, trimmed."
+  (string-trim
+   (if (string-match valsi-parse-meta-re text)
+       (substring text (match-end 0))
+     text)))
+
 (defun valsi-plan--task-verify (task)
-  "Return the concatenated text of TASK's Verify metadata."
+  "Return the concatenated text of TASK's Verify metadata.
+The `**Verify:**' label itself is dropped; only its body is kept."
   (string-join
    (delq nil
          (mapcar
           (lambda (meta)
             (and (eq (valsi-node-prop meta :label) 'verify)
-                 (valsi-node-prop meta :text)))
+                 (valsi-plan--meta-body (valsi-node-prop meta :text ""))))
           (valsi-plan--own-nodes task 'meta)))
    "\n"))
 

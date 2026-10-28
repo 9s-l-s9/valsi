@@ -14,9 +14,13 @@ never a silent overwrite. The bridge is client-side and is *not* part of AAP.
    task and in its `**Files:**` meta), dependencies, requirement traces, step
    sub-bullets, and the `**Verify:**` block.
 2. **Renders a dispatch prompt** (`valsi-plan-bundle->prompt`) from the bundle.
-3. **Adds effective nearest-wins instructions and manifest file hints** to the
-   prompt. The manifest is context, not a filesystem allow-list; a normal
-   coding agent may inspect other project files when needed.
+3. **Adds the task source and a manifest note** to the prompt. The manifest is
+   context, not a filesystem allow-list; a normal coding agent may inspect
+   other project files when needed. Instruction files (`AGENTS.md`,
+   `CLAUDE.md`, …) are **not** copied into the prompt: the agent CLI owns its
+   context and loads them itself (ADR 0006), so pasting them would duplicate
+   that context. In an instruction file, `valsi-instruction-effective-at-point`
+   shows the nearest-wins scope that applies.
 4. **Hands the prompt to the project agent terminal**. Review-before-submit is
    the default: Valsi inserts the prompt into stock Pi, Codex CLI, Claude Code,
    or a configured custom CLI without pretending to own that CLI's transcript
