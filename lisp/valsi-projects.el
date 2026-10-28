@@ -20,12 +20,15 @@
 (defvar-local valsi-projects--unavailable nil "Roots not eligible for background scans.")
 (defvar-local valsi-projects--layout nil "Last rendered responsive layout.")
 (defvar-local valsi-projects--filter nil "Case-insensitive project path filter.")
+(defvar valsi-projects--removed nil
+  "Roots removed from Projects that saving a layout must not add again.")
 
 (defun valsi-projects--save-layout ()
   "Remember the current project's windows in this frame."
   (unless (derived-mode-p 'valsi-projects-mode)
     (when-let* ((root (valsi-project-current-root)))
-      (valsi-project-register root)
+      (unless (member root valsi-projects--removed)
+        (valsi-project-register root))
       (set-frame-parameter
        nil 'valsi-project-layouts
        (cons (cons root (list (window-state-get (frame-root-window))
@@ -166,7 +169,8 @@ A project with a running agent must be stopped explicitly before removal."
   (let ((root (valsi-projects--selected-root)))
     (when (seq-some #'valsi-terminal-agent--live-p (valsi-terminal-agent-list root))
       (user-error "Project has running agents; stop them explicitly before removal"))
-    (valsi-project-forget root)))
+    (valsi-project-forget root)
+    (push root valsi-projects--removed)))
 
 (defun valsi-projects-filter (query)
   "Filter project names and paths by QUERY; empty QUERY shows all."
@@ -216,6 +220,9 @@ A project with a running agent must be stopped explicitly before removal."
 
 (defun valsi-projects--changed ()
   "Update an existing overview after project membership changes."
+  ;; Explicitly adding or opening a removed project makes it eligible again.
+  (setq valsi-projects--removed
+        (seq-difference valsi-projects--removed (valsi-project-roots)))
   (when-let* ((buffer (get-buffer "*Valsi Projects*")))
     (with-current-buffer buffer (valsi-projects--sync))))
 

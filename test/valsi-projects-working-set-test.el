@@ -25,5 +25,27 @@
         (should (derived-mode-p 'valsi-app-mode))
         (should (equal a valsi-app--root))))))
 
+(ert-deftest valsi-projects-removed-current-project-stays-removed ()
+  "Reopening Projects from a removed project does not re-add it (#56)."
+  (valsi-projects-test--with-projects
+    (let ((valsi-projects--removed nil))
+      (switch-to-buffer (find-file-noselect fa))
+      (delete-other-windows)
+      (valsi-projects)
+      (should (equal (list a) (valsi-project-roots)))
+      (with-current-buffer "*Valsi Projects*"
+        (valsi-projects-test--row a)
+        (valsi-projects-remove))
+      (should-not (valsi-project-roots))
+      (with-current-buffer "*Valsi Projects*" (valsi-projects-quit))
+      (set-buffer (window-buffer (selected-window)))
+      (valsi-projects)
+      (should-not (valsi-project-roots))
+      ;; Opening it explicitly makes it a working project again.
+      (valsi-project-switch a)
+      (should (equal (list a) (valsi-project-roots)))
+      (valsi-projects)
+      (should (equal (list a) (valsi-project-roots))))))
+
 (provide 'valsi-projects-working-set-test)
 ;;; valsi-projects-working-set-test.el ends here
