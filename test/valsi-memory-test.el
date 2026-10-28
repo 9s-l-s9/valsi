@@ -115,6 +115,25 @@
                                              (valsi-node-prop n :target)))
                            (valsi-node-children root))))))
 
+;;;; Stale-check (issue #64)
+
+(ert-deftest valsi-test-memory-stale-check-skips-urls-and-fragments ()
+  "URL pointers are skipped and fragments are stripped before the file test."
+  (let ((dir (make-temp-file "valsi-memory" t)))
+    (unwind-protect
+        (progn
+          (with-temp-file (expand-file-name "feedback.md" dir) (insert "x"))
+          (should (null (valsi-memory--pointer-file "https://example.com/docs")))
+          (should (null (valsi-memory--pointer-file "#top")))
+          (should (equal "feedback.md"
+                         (valsi-memory--pointer-file "feedback.md#sec")))
+          (should (equal '("gone.md#x")
+                         (valsi-memory--missing-targets
+                          '("https://example.com/docs" "feedback.md#sec"
+                            "feedback.md?v=1" "#top" "gone.md#x")
+                          dir))))
+      (delete-directory dir t))))
+
 ;;;; Capabilities
 
 (ert-deftest valsi-test-memory-capabilities-index ()

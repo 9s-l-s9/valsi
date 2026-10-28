@@ -131,6 +131,42 @@
          (root (valsi-promptfile-test--tree content "skills/pdf/SKILL.md")))
     (should (null (valsi-promptfile--validate-collect root)))))
 
+;;;; YAML scalar forms (issue #63)
+
+(ert-deftest valsi-test-promptfile-block-and-quoted-scalars ()
+  "Folded, literal and quoted scalars resolve to their text; empty is missing."
+  (let* ((folded (valsi-promptfile-test--tree
+                  "---\nname: pdf\ndescription: >\n  Extract text from PDFs when the user\n  asks about PDF files and forms.\n---\nbody\n"
+                  "skills/pdf/SKILL.md"))
+         (fields (valsi-node-of-type folded 'field)))
+    (should (null (valsi-promptfile--validate-collect folded)))
+    (should (equal "Extract text from PDFs when the user asks about PDF files and forms."
+                   (valsi-promptfile--field folded "description")))
+    ;; The block field's region covers its continuation lines, disjoint
+    ;; from the next sibling.
+    (should (= 2 (length fields)))
+    (should (<= (valsi-node-end (nth 0 fields)) (valsi-node-beg (nth 1 fields))))
+    (should (< (valsi-node-end (nth 1 fields))
+               (valsi-node-end (car (valsi-node-of-type folded 'frontmatter)))))
+    (should (> (- (valsi-node-end (nth 1 fields)) (valsi-node-beg (nth 1 fields)))
+               50))
+    (should (equal "Extract text from PDFs when the user\nasks about PDF files and forms."
+                   (valsi-promptfile--field
+                    (valsi-promptfile-test--tree
+                     "---\nname: pdf\ndescription: |-\n  Extract text from PDFs when the user\n  asks about PDF files and forms.\n---\n"
+                     "skills/pdf/SKILL.md")
+                    "description")))
+    (should (cl-some (lambda (i) (string-match-p "restates name" i))
+                     (valsi-promptfile--validate-collect
+                      (valsi-promptfile-test--tree
+                       "---\nname: pdf\ndescription: \"pdf\"\n---\n"
+                       "skills/pdf/SKILL.md"))))
+    (should (member "missing required key: name"
+                    (valsi-promptfile--validate-collect
+                     (valsi-promptfile-test--tree
+                      "---\nname:\ndescription: Extract text from PDFs when the user asks about PDFs.\n---\nbody\n"
+                      "skills/pdf/SKILL.md"))))))
+
 ;;;; Description-as-trigger test-fire (rung 4)
 
 (ert-deftest valsi-test-promptfile-match-score ()

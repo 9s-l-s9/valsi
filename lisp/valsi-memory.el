@@ -27,6 +27,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'subr-x)
 (require 'valsi-node)
 (require 'valsi-parse)
 (require 'valsi-registry)
@@ -333,6 +334,22 @@ EXISTING is a list of record base names (without .md)."
           (cl-remove-if (lambda (f) (string-match-p "MEMORY\\.md\\'" f))
                         (directory-files dir t "\\.md\\'"))))
 
+(defun valsi-memory--pointer-file (target)
+  "Return the local file named by pointer TARGET, or nil.
+A URL (any `scheme:' target) names no local file; a `#fragment' or
+`?query' suffix is stripped, and a bare fragment names no file."
+  (unless (string-match-p "\\`[A-Za-z][A-Za-z0-9+.-]*:" target)
+    (let ((file (replace-regexp-in-string "[#?].*\\'" "" target)))
+      (unless (string-empty-p file) file))))
+
+(defun valsi-memory--missing-targets (targets dir)
+  "Return the pointer TARGETS whose local file does not exist under DIR."
+  (cl-remove-if
+   (lambda (tgt)
+     (let ((file (valsi-memory--pointer-file tgt)))
+       (or (null file) (file-exists-p (expand-file-name file dir)))))
+   targets))
+
 (defun valsi-memory-stale-check ()
   "Flag store drift: missing pointer targets and dangling [[links]].
 Reports index pointers whose record file is gone and record [[links]] that
@@ -343,10 +360,10 @@ record not yet written."
          (dir (if buffer-file-name (file-name-directory buffer-file-name)
                 default-directory))
          (missing
-          (cl-remove-if
-           (lambda (tgt) (file-exists-p (expand-file-name tgt dir)))
+          (valsi-memory--missing-targets
            (mapcar (lambda (p) (valsi-node-prop p :target))
-                   (valsi-memory-pointers root))))
+                   (valsi-memory-pointers root))
+           dir))
          (dangling
           (valsi-memory--dangling-links
            (valsi-memory-links root)
@@ -394,10 +411,14 @@ record not yet written."
   (local-set-key (kbd "RET") #'valsi-memory--dashboard-visit))
 
 (defun valsi-memory--dashboard-visit ()
-  "Open the memory file on the current index row."
+  "Open the memory file (or URL) on the current index row."
   (interactive)
-  (let ((file (tabulated-list-get-id)))
-    (when file (find-file-other-window file))))
+  (let ((target (tabulated-list-get-id)))
+    (when target
+      (let ((file (valsi-memory--pointer-file target)))
+        (cond (file (find-file-other-window file))
+              ((string-match-p "\\`[A-Za-z][A-Za-z0-9+.-]*:" target)
+               (browse-url target)))))))
 
 ;;;; Registration
 

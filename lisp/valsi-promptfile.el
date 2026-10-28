@@ -22,6 +22,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'subr-x)
 (require 'valsi-node)
 (require 'valsi-parse)
 (require 'valsi-registry)
@@ -81,9 +82,26 @@ Lets the pure parser see the filename for type discrimination.")
         (when (re-search-forward "^---[ \t]*$" nil t)
           (cons beg (line-end-position)))))))
 
+(defun valsi-promptfile--scalar (raw continuation)
+  "Return the YAML scalar value for header RAW and CONTINUATION lines.
+A block indicator (`>' or `|') takes its value from CONTINUATION, folded
+to one line for `>'; a quoted RAW is unquoted; a plain RAW folds in its
+CONTINUATION lines.  An empty plain RAW (a nested node) stays empty."
+  (cond
+   ((string-match "\\`\\([>|]\\)[-+0-9]*\\'" raw)
+    (let ((sep (if (string= (match-string 1 raw) ">") " " "\n")))
+      (string-trim
+       (mapconcat #'string-trim continuation sep))))
+   ((string-match "\\`\"\\(.*\\)\"\\'" raw) (match-string 1 raw))
+   ((string-match "\\`'\\(.*\\)'\\'" raw) (match-string 1 raw))
+   ((string-empty-p raw) raw)
+   (t (string-join (cons raw (delete "" (mapcar #'string-trim continuation)))
+                   " "))))
+
 (defun valsi-promptfile--frontmatter-fields (beg end)
   "Return (KEY VALUE LINE-BEG LINE-END) per field between BEG and END.
-Each field carries its own line region, so sibling `field' nodes are disjoint."
+Each field carries its own line region, so sibling `field' nodes are disjoint.
+Indented continuation lines of a block scalar belong to their field's region."
   (save-excursion
     (goto-char beg)
     (forward-line 1)
@@ -91,12 +109,28 @@ Each field carries its own line region, so sibling `field' nodes are disjoint."
       (while (< (point) end)
         (let ((line (buffer-substring-no-properties
                      (line-beginning-position) (line-end-position))))
-          (when (string-match "^\\([A-Za-z0-9_-]+\\):[ \t]*\\(.*\\)$" line)
-            (push (list (match-string 1 line)
-                        (string-trim (match-string 2 line))
-                        (line-beginning-position) (line-end-position))
-                  fields)))
-        (forward-line 1))
+          (if (not (string-match "^\\([A-Za-z0-9_-]+\\):[ \t]*\\(.*\\)$" line))
+              (forward-line 1)
+            (let ((key (match-string 1 line))
+                  (raw (string-trim (match-string 2 line)))
+                  (fbeg (line-beginning-position))
+                  (fend (line-end-position))
+                  continuation)
+              (forward-line 1)
+              (while (and (< (point) end)
+                          (looking-at "^\\([ \t]+.*\\|[ \t]*\\)$")
+                          (not (looking-at "^---[ \t]*$")))
+                (let ((text (buffer-substring-no-properties
+                             (line-beginning-position) (line-end-position))))
+                  (push text continuation)
+                  (unless (string-blank-p text)
+                    (setq fend (line-end-position))))
+                (forward-line 1))
+              (push (list key
+                          (valsi-promptfile--scalar
+                           raw (nreverse continuation))
+                          fbeg fend)
+                    fields)))))
       (nreverse fields))))
 
 (defun valsi-promptfile--parse-frontmatter (beg end)
@@ -228,7 +262,7 @@ and the description-as-trigger heuristics."
       (push (format "%s file has no YAML frontmatter" type) issues))
      (pairs
       (dolist (k (valsi-promptfile--vocab type :required))
-        (unless (assoc k pairs)
+        (when (string-blank-p (or (cdr (assoc k pairs)) ""))
           (push (format "missing required key: %s" k) issues)))
       (dolist (p pairs)
         (unless (member (car p) (valsi-promptfile--vocab type :known))
@@ -236,7 +270,7 @@ and the description-as-trigger heuristics."
                 issues)))
       (let ((desc (cdr (assoc "description" pairs)))
             (name (cdr (assoc "name" pairs))))
-        (when desc
+        (when (and desc (not (string-blank-p desc)))
           (when (< (length desc) valsi-promptfile-description-min)
             (push "description-as-trigger is very short (weak match signal)"
                   issues))
