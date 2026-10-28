@@ -25,6 +25,26 @@
         (should (derived-mode-p 'valsi-app-mode))
         (should (equal a valsi-app--root))))))
 
+(ert-deftest valsi-projects-quit-keeps-projects-buffer-across-frame-switch ()
+  "Quit acts on Projects even when selecting the working frame changes buffers (#88)."
+  (valsi-projects-test--with-projects
+    (let ((source (find-file-noselect fa))
+          (other (get-buffer-create " *valsi-other*")))
+      (switch-to-buffer source)
+      (delete-other-windows)
+      (valsi-projects)
+      (kill-buffer source)
+      (unwind-protect
+          ;; Stand in for a minibuffer-only frame: switching to the
+          ;; working frame leaves another buffer current.
+          (cl-letf (((symbol-function 'valsi-projects--select-working-frame)
+                     (lambda () (set-buffer other))))
+            (with-current-buffer "*Valsi Projects*" (valsi-projects-quit))
+            (should-not (get-buffer-window "*Valsi Projects*"))
+            (with-current-buffer (window-buffer (selected-window))
+              (should (derived-mode-p 'valsi-app-mode))))
+        (kill-buffer other)))))
+
 ;; Emacs 29 has no `window-restore-killed-buffer-windows' and its
 ;; `window-state-put' signals for killed buffers (#86).  These tests force
 ;; the Emacs 29 restore path, so it is exercised on every version.

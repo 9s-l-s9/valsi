@@ -450,10 +450,18 @@ A project with a running agent must be stopped explicitly before removal."
 (defun valsi-projects-quit ()
   "Return to the window layout from which Projects was opened."
   (interactive)
-  (valsi-projects--select-working-frame)
+  ;; Selecting the working frame makes its buffer current, so capture
+  ;; the Projects buffer first.
+  (let ((projects (if (derived-mode-p 'valsi-projects-mode)
+                      (current-buffer)
+                    (get-buffer "*Valsi Projects*"))))
+    (valsi-projects--select-working-frame)
+    (valsi-projects--quit-to-origin projects)))
+
+(defun valsi-projects--quit-to-origin (projects)
+  "Restore the selected frame's Projects origin, replacing PROJECTS windows."
   (if-let* ((origin (frame-parameter nil 'valsi-projects-origin)))
-      (let ((projects (current-buffer))
-            (root (cdr origin)))
+      (let ((root (cdr origin)))
         (valsi-projects--state-put (car origin))
         ;; Emacs 29 restores the selected window without making its
         ;; buffer current.
