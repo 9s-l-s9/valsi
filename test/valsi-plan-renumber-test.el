@@ -12,7 +12,8 @@
 (require 'valsi-plan)
 
 (ert-deftest valsi-plan-renumber-test-skips-fences-and-prose ()
-  "Ids inside code fences and free prose are left untouched."
+  "Ids inside code fences and free prose are left untouched.
+A dotted sub-id on a task line still follows its parent (#31)."
   (with-temp-buffer
     (insert "# Plan\n"
             "See T005 and T009 for context.\n"
@@ -26,7 +27,7 @@
                            "See T005 and T009 for context.\n"
                            "- [ ] T001 a\n"
                            "- [ ] T002 b, follows T005 (depends on T001)\n"
-                           "- [ ] T009.1 sub (depends on T002)\n"
+                           "- [ ] T002.1 sub (depends on T002)\n"
                            "```\nT009 stays?\n- [ ] T005 fenced\n```\n")))))
 
 (ert-deftest valsi-plan-renumber-test-reference-count ()

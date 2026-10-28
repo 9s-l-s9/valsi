@@ -628,27 +628,38 @@ Like dependency lookup, duplicate ids use their first task's dependencies."
 
 (defun valsi-plan-renumber ()
   "Normalize speckit Tnnn ids to sequential document order.
-Rewrites each task's leading id and its `depends on' references in a
-single undo group; prose and code fences are left alone.
-Refuses on non-speckit dialects (positional ids are meaningful there)."
+Rewrites each task's leading id and the ids in its `depends on' group
+in a single undo group; prose and code fences are left alone.  A dotted
+sub-task id (T002.1) follows its parent: only the Tnnn prefix is
+renumbered.  Refuses on non-speckit dialects (positional ids are
+meaningful there), on duplicate ids, and on sub-task ids without a
+parent task, since neither has a single consistent rewrite."
   (interactive)
   (let* ((root (valsi-plan--buffer-tree))
          (dialect (valsi-node-prop root :dialect)))
     (unless (eq dialect 'speckit)
       (user-error "Valsi plan renumber supports the speckit Tnnn dialect only (this is %s)"
                   dialect))
-    (let* ((ordered (sort (cl-remove-if-not
-                           (lambda (tk)
-                             (let ((id (valsi-node-prop tk :id)))
-                               (and id (string-match-p "\\`T[0-9]+\\'" id))))
-                           (valsi-node-of-type root 'task))
-                          (lambda (a b) (< (or (valsi-node-prop a :line) 0)
-                                           (or (valsi-node-prop b :line) 0)))))
+    (let* ((ids (delq nil (mapcar (lambda (tk)
+                                    (let ((id (valsi-node-prop tk :id)))
+                                      (and id (string-match-p
+                                               "\\`T[0-9]+\\(?:\\.[0-9]+\\)*\\'" id)
+                                           (cons (valsi-node-prop tk :line) id))))
+                                  (valsi-node-of-type root 'task))))
+           (ordered (mapcar #'cdr (sort ids (lambda (a b) (< (or (car a) 0)
+                                                               (or (car b) 0))))))
            (map (make-hash-table :test 'equal))
-           (n 0) (changed 0))
-      (dolist (tk ordered)
-        (cl-incf n)
-        (puthash (valsi-node-prop tk :id) (format "T%03d" n) map))
+           (n 0) (changed 0) (seen nil))
+      (dolist (id ordered)
+        (when (member id seen)
+          (user-error "Duplicate task id %s; make ids unique before renumbering" id))
+        (push id seen)
+        (unless (string-search "." id)
+          (puthash id (format "T%03d" (cl-incf n)) map)))
+      (dolist (id ordered)
+        (let ((parent (car (split-string id "\\."))))
+          (unless (gethash parent map)
+            (user-error "Sub-task %s has no parent task %s" id parent))))
       (atomic-change-group
         (save-excursion
           ;; Only task lines are touched (the parse already skips code
@@ -659,13 +670,14 @@ Refuses on non-speckit dialects (positional ids are meaningful there)."
             (goto-char (+ (point-min) (valsi-node-beg tk)))
             (cl-incf changed (valsi-plan--renumber-line map)))))
       (message "valsi-plan-renumber: %d task(s), %d reference(s) rewritten"
-               n changed))))
+               (length ordered) changed))))
 
 (defun valsi-plan--renumber-line (map)
   "Rewrite the ids of the task line at point through MAP; return the count.
-Only the leading id and the `depends on' references change.  Full dotted
-tokens are matched, so a sub-id (T001.1) is never confused with a
-top-level id (T001); only exact MAP keys are rewritten."
+Only the leading id and the `depends on' references change.  MAP holds
+top-level ids; a dotted sub-id (T009.1) is rewritten through its Tnnn
+prefix, so it follows its parent.  Full dotted tokens are matched, so a
+sub-id is never confused with a top-level id of the same prefix."
   (let ((spans nil) (changed 0))
     (when (looking-at valsi-parse-checkbox-re)
       (let ((rest-beg (match-beginning 3))
@@ -684,7 +696,9 @@ top-level id (T001); only exact MAP keys are rewritten."
     ;; SPANS is in descending order, so each rewrite leaves the rest valid.
     (dolist (span spans)
       (let* ((old (buffer-substring-no-properties (car span) (cdr span)))
-             (new (gethash old map)))
+             (dot (string-search "." old))
+             (head (gethash (substring old 0 dot) map))
+             (new (and head (concat head (if dot (substring old dot) "")))))
         (when (and new (not (string= old new)))
           (goto-char (car span))
           (delete-region (car span) (cdr span))

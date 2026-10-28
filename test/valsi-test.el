@@ -381,6 +381,25 @@
     (should (string-match-p "T005 first" (buffer-string)))
     (should (string-match-p "T009 second (depends on T005)" (buffer-string)))))
 
+(ert-deftest valsi-test-plan-renumber-dotted-subtasks ()
+  "renumber carries dotted sub-task ids and their refs with the parent (#31)."
+  (with-temp-buffer
+    (insert "- [ ] T002 a\n  - [ ] T002.1 b (depends on T002)\n"
+            "- [ ] T007 c\n  - [ ] T007.1 d (depends on T002.1)\n")
+    (valsi-plan-renumber)
+    (should (equal (buffer-string)
+                   (concat "- [ ] T001 a\n  - [ ] T001.1 b (depends on T001)\n"
+                           "- [ ] T002 c\n  - [ ] T002.1 d (depends on T001.1)\n")))))
+
+(ert-deftest valsi-test-plan-renumber-refuses-ambiguous-ids ()
+  "renumber refuses duplicate ids and orphan sub-ids, leaving text intact (#31)."
+  (dolist (text '("- [ ] T005 a\n- [ ] T005 b\n"
+                  "- [ ] T005 a\n- [ ] T009.1 b\n"))
+    (with-temp-buffer
+      (insert text)
+      (should-error (valsi-plan-renumber) :type 'user-error)
+      (should (equal (buffer-string) text)))))
+
 (ert-deftest valsi-test-plan-renumber-refuses-kiro ()
   "renumber refuses on a non-speckit dialect rather than mangling ids."
   (with-temp-buffer
@@ -1077,6 +1096,17 @@ interior-state contradictions."
                 :type 'user-error)
   (should-error (valsi-terminal-agent--ensure-program nil 'custom)
                 :type 'user-error))
+
+(ert-deftest valsi-test-docs-list-implemented-aap-methods ()
+  "Architecture and spec docs name every method in `valsi-proto-methods'.
+Regression for issue #25: the docs drifted from the implemented surface."
+  (dolist (doc '("doc/architecture.md" "doc/aap-spec.md"))
+    (let ((text (with-temp-buffer
+                  (insert-file-contents
+                   (expand-file-name (concat "../" doc) valsi-test--dir))
+                  (buffer-string))))
+      (dolist (method valsi-proto-methods)
+        (should (string-search (format "`%s`" method) text))))))
 
 (provide 'valsi-test)
 ;;; valsi-test.el ends here

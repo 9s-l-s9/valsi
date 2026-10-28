@@ -1,4 +1,6 @@
 (valsi
  :fetcher github
  :repo "9s-l-s9/valsi"
- :files ("lisp/*.el" ("doc" "doc/valsi.texi")))
+ :files ("lisp/*.el"
+         (:exclude "lisp/valsi-harness.el" "lisp/valsi-pi.el")
+         ("doc" "doc/valsi.texi")))
