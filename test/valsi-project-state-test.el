@@ -108,5 +108,19 @@
       (should (equal (list a) (valsi-project-roots)))
       (should-not valsi-project--saved-roots))))
 
+(ert-deftest valsi-project-state-saves-through-symlink ()
+  "Saving updates a symlinked state file's target and keeps its modes (#55)."
+  (valsi-project-state-test--with-state
+    (let* ((real (expand-file-name "real/state.eld" base))
+           (valsi-project-file (expand-file-name "link.eld" base)))
+      (make-directory (file-name-directory real))
+      (with-temp-file real (insert "(:version 1 :roots nil)\n"))
+      (set-file-modes real #o644)
+      (make-symbolic-link "real/state.eld" valsi-project-file)
+      (valsi-project-remember a)
+      (should (file-symlink-p valsi-project-file))
+      (should (equal (list a) (valsi-project-state-test--saved real)))
+      (should (= #o644 (file-modes real))))))
+
 (provide 'valsi-project-state-test)
 ;;; valsi-project-state-test.el ends here

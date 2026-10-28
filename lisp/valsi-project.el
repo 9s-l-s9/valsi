@@ -115,7 +115,10 @@ made since they were loaded are kept, and returns the roots to save."
       (user-error "Repair %s before saving projects: %s"
                   valsi-project-file valsi-project--load-error))
     (let* ((roots (funcall function valsi-project--saved-roots))
-           (directory (file-name-directory (expand-file-name valsi-project-file)))
+           ;; Write through a symlink, as a managed state file is often one.
+           (target (file-chase-links (expand-file-name valsi-project-file)))
+           (directory (file-name-directory target))
+           (modes (file-modes target))
            temporary)
       (condition-case err
           (unwind-protect
@@ -126,7 +129,8 @@ made since they were loaded are kept, and returns the roots to save."
                   (let ((print-length nil) (print-level nil))
                     (prin1 (list :version 1 :roots roots) (current-buffer))
                     (insert "\n")))
-                (rename-file temporary valsi-project-file t))
+                (when modes (set-file-modes temporary modes))
+                (rename-file temporary target t))
             (when (and temporary (file-exists-p temporary))
               (delete-file temporary)))
         (file-error
