@@ -69,6 +69,37 @@
   (let ((content (valsi-benchmark--plan size)))
     (valsi-benchmark--measure (format "Parse flat plan (%d tasks)" size) 3
                               (lambda () (valsi-plan-parse content)))))
+;; The flat plans above are one regexp-friendly line shape; the fixture mix
+;; adds headings, fences, steps, traces, and every dialect's ids and tags.
+(let* ((fixtures (expand-file-name "test/fixtures" default-directory))
+       (read (lambda (name)
+               (with-temp-buffer
+                 (insert-file-contents (expand-file-name name fixtures))
+                 (buffer-string))))
+       (mix (mapconcat read '("speckit-tasks-template.md"
+                              "wild-speckit-goataka-tasks.md"
+                              "kiro-tasks-example.md" "wild-kiro-awslabs-tasks.md"
+                              "wild-superpowers-caasi-plan.md"
+                              "wild-gsd-triggarr-plan.md" "speckit-real-fragment.md")
+                       "\n"))
+       (big (mapconcat #'identity
+                       (make-list (1+ (/ 1000000 (length mix))) mix) "\n"))
+       (small (mapcar (lambda (name) (cons name (funcall read name)))
+                      '("speckit-tasks-template.md" "AGENTS.md" "MEMORY.md"
+                        "SKILL.md" "CHANGELOG.md"))))
+  (valsi-benchmark--measure (format "Parse fixture-mix plan (%d KB)"
+                                    (/ (length big) 1000))
+                            3 (lambda () (valsi-registry-parse-content 'plan big)))
+  (valsi-benchmark--measure "AAP didOpen, small fixture artifact" 1000
+                            (let ((n 0))
+                              (lambda ()
+                                (let ((doc (nth (% (setq n (1+ n)) (length small))
+                                                small)))
+                                  (valsi-proto-request
+                                   'artifact/didOpen
+                                   (list :uri (format "file:///b%d/%s" n (car doc))
+                                         :text (cdr doc)))))))
+  (clrhash valsi-proto--docs))
 (dolist (size '(100 300 600))
   (let ((tree (valsi-plan-parse (valsi-benchmark--plan size))))
     (valsi-benchmark--measure (format "Lint dependency chain (%d tasks)" size)
