@@ -37,7 +37,11 @@ headline query: *"which instructions are in force right here?"*
 ## Imports and links
 
 - **`@imports`** (`@./AGENTS.md`, `@~/.claude/x.md`, `@docs/architecture.md`)
-  pull other files into context. They form a directed graph.
+  pull other files into context. An import may open a line or sit inline
+  (`- Branching rules @docs/branching.md`); the `@` must follow whitespace or
+  the line start, and the target must look like a path (starts with `~`, or
+  contains a `/` or `.`), so a bare `@someone` mention is not an import.
+  Imports inside inline code are ignored. They form a directed graph.
   `M-x valsi-instruction-import-graph` (`graph`) renders the transitive import
   tree rooted at the current file, marking `[missing]` targets and guarding
   cycles. `M-x valsi-instruction-follow` (`follow`) jumps to the `@import` or
