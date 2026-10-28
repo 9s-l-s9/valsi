@@ -231,6 +231,110 @@
                   "# T\n\n## Status\n\nProposed\n\n## Context\n"
                   "Rejected"))))
 
+;; Regression tests for issue #65.
+
+(defun valsi-family-test--lint (text)
+  "Return the message `valsi-decision-lint' reports for TEXT."
+  (let ((root (valsi-decision-parse text)) (reported nil))
+    (cl-letf (((symbol-function 'valsi-tree) (lambda () root))
+              ((symbol-function 'message)
+               (lambda (fmt &rest args)
+                 (setq reported (apply #'format fmt args)))))
+      (valsi-decision-lint))
+    reported))
+
+(ert-deftest valsi-test-decision-status-variants ()
+  "Clauses, lowercase words, and bullets are standard; prefixes are not."
+  (dolist (case '(("Superseded by ADR-0005" . "Superseded by ADR-0005")
+                  ("accepted" . "Accepted")
+                  ("- Accepted" . "Accepted")
+                  ("* **proposed**" . "Proposed")
+                  ("Acceptedish thing" . "Acceptedish thing")))
+    (let* ((text (format (concat "# 1. X\n\n## Status\n\n%s\n\n"
+                                 "## Context\nc\n## Decision\nd\n"
+                                 "## Consequences\ne\n")
+                         (car case)))
+           (reported (valsi-family-test--lint text)))
+      (should (equal (cdr case)
+                     (valsi-node-prop (valsi-decision-parse text) :status)))
+      (if (equal (car case) "Acceptedish thing")
+          (should (string-match-p "non-standard status" reported))
+        (should (equal "Valsi ADR: complete" reported))))))
+
+;; Regression tests for issue #66.
+
+(defconst valsi-family-test--madr
+  (concat "---\nstatus: accepted\ndate: 2026-01-01\n---\n"
+          "# Use MADR\n\n"
+          "## Context and Problem Statement\nc\n"
+          "## Decision Outcome\nd\n")
+  "A MADR 3 record: frontmatter status, MADR section names.")
+
+(ert-deftest valsi-test-decision-madr-record ()
+  "MADR frontmatter status and section names satisfy the lint."
+  (let ((root (valsi-decision-parse valsi-family-test--madr)))
+    (should (equal "Accepted" (valsi-node-prop root :status)))
+    (should (equal "Use MADR" (valsi-node-prop root :title))))
+  (should (equal "Valsi ADR: complete"
+                 (valsi-family-test--lint valsi-family-test--madr)))
+  (should (string-prefix-p "---\nstatus: rejected\ndate: 2026-01-01\n---\n"
+                           (valsi-family-test--set-status
+                            valsi-family-test--madr "Rejected"))))
+
+(ert-deftest valsi-test-decision-inline-status ()
+  "An inline Status line before the first section is the status."
+  (let ((text (concat "# 1. X\n\nStatus: Superseded by ADR-0002\n\n"
+                      "## Context\nc\n## Decision\nd\n"
+                      "## Consequences\nStatus: not this\n")))
+    (should (equal "Superseded by ADR-0002"
+                   (valsi-node-prop (valsi-decision-parse text) :status)))
+    (should (equal "Valsi ADR: complete" (valsi-family-test--lint text)))
+    (should (string-prefix-p "# 1. X\n\nStatus: Deprecated\n\n"
+                             (valsi-family-test--set-status text "Deprecated"))))
+  (should (equal "Proposed"
+                 (valsi-node-prop
+                  (valsi-decision-parse "# X\n\n* **Status:** proposed\n")
+                  :status))))
+
+;; Regression tests for issue #67.
+
+(defun valsi-family-test--dashboard-files (project visited)
+  "Return the dashboard file names for VISITED inside PROJECT."
+  (with-temp-buffer
+    (setq buffer-file-name visited
+          default-directory (file-name-directory visited))
+    (cl-letf (((symbol-function 'project-current) (lambda (&rest _) 'p))
+              ((symbol-function 'project-root) (lambda (_) project)))
+      (mapcar (lambda (e) (file-relative-name (car e) project))
+              (valsi-decision--dashboard-entries)))))
+
+(ert-deftest valsi-test-decision-dashboard-directory ()
+  "The visited ADR directory wins; decisions/ counts; README is skipped."
+  (let* ((d (file-name-as-directory (make-temp-file "valsi-dec" t)))
+         (adr (expand-file-name "doc/adr" d))
+         (dec (expand-file-name "docs/decisions" d)))
+    (unwind-protect
+        (progn
+          (make-directory adr t)
+          (make-directory dec t)
+          (with-temp-file (expand-file-name "0001-a.md" adr)
+            (insert "# 1. A\n\n## Status\n\nAccepted\n"))
+          (with-temp-file (expand-file-name "README.md" adr)
+            (insert "# ADR index\n"))
+          (with-temp-file (expand-file-name "use-x.md" dec)
+            (insert "# B\n\n## Status\n\nProposed\n"))
+          (should (equal '("docs/decisions/use-x.md")
+                         (valsi-family-test--dashboard-files
+                          d (expand-file-name "use-x.md" dec))))
+          (should (equal '("doc/adr/0001-a.md")
+                         (valsi-family-test--dashboard-files
+                          d (expand-file-name "notes.md" d))))
+          (delete-directory (expand-file-name "doc" d) t)
+          (should (equal '("docs/decisions/use-x.md")
+                         (valsi-family-test--dashboard-files
+                          d (expand-file-name "notes.md" d)))))
+      (delete-directory d t))))
+
 ;;;; Overview
 
 (defconst valsi-family-test--readme
