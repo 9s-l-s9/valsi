@@ -440,18 +440,43 @@
     (when (eq 0 (ignore-errors (call-process pi nil t nil "--version")))
       (string-trim (buffer-string)))))
 
+(defconst valsi-pi-test--extension-directory
+  (expand-file-name "../extensions/valsi-pi/" valsi-pi-test--directory)
+  "Source-checkout extension directory, resolved from the test file.")
+
+(defun valsi-pi-test--hermetic-environment (home)
+  "Return `process-environment' with Pi's state confined to HOME."
+  (append (list (concat "HOME=" home)
+                (concat "PI_CODING_AGENT_DIR="
+                        (expand-file-name ".pi/agent" home)))
+          process-environment))
+
 (ert-deftest valsi-pi-test-live-pinned-extension-smoke ()
   "A discoverable Pi at the pinned version starts in RPC mode.
 Skipped, not failed, when the Pi on PATH is another version: the wire
-contract is pinned, and a dev machine may carry a newer or older Pi."
+contract is pinned, and a dev machine may carry a newer or older Pi.
+Pi runs with a temporary HOME and agent directory, so neither the
+user's Pi state nor a sandboxing wrapper that exposes only HOME can
+affect the result; the extension, policy file, and working directory
+are placed inside that HOME and removed afterwards."
   (let ((pi (executable-find valsi-pi-program)))
     (skip-unless pi)
     (skip-unless (equal (valsi-pi-test--installed-version pi)
                         (valsi-pi-test--pinned-version)))
-    (let* ((client (valsi-pi-create :program pi))
-           result)
+    (let* ((home (file-name-as-directory
+                  (file-truename (make-temp-file "valsi-pi-home-" t))))
+           (extension-directory (expand-file-name "extension/" home))
+           (process-environment
+            (valsi-pi-test--hermetic-environment home))
+           (temporary-file-directory home)
+           (valsi-pi-extension-file
+            (expand-file-name "index.ts" extension-directory))
+           client result)
       (unwind-protect
           (progn
+            (copy-directory valsi-pi-test--extension-directory
+                            extension-directory nil t t)
+            (setq client (valsi-pi-create :program pi :directory home))
             (valsi-harness-state
              client
              (lambda (response error)
@@ -467,11 +492,12 @@ contract is pinned, and a dev machine may carry a newer or older Pi."
             (should (valsi-harness-live-p client))
             (should (member "--no-extensions" (process-command
                                                (valsi-pi-process client))))
+            (should (equal (valsi-pi-extension-file client)
+                           valsi-pi-extension-file))
             (should (file-readable-p (valsi-pi-policy-file client))))
-        (valsi-harness-stop client)
-        (when (and (valsi-pi-policy-file client)
-                   (file-exists-p (valsi-pi-policy-file client)))
-          (delete-file (valsi-pi-policy-file client)))))))
+        (when client
+          (valsi-harness-stop client))
+        (delete-directory home t)))))
 
 (provide 'valsi-pi-test)
 ;;; valsi-pi-test.el ends here
