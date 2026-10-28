@@ -248,30 +248,45 @@ See `valsi-view-insert-outline' for DEPTH and ROW-LIMIT."
                        (- (length nodes) row-limit))
                'face 'valsi-state-face)))))
 
+(defun valsi-view--row-anchor (position)
+  "Return the semantic row, line, and column at POSITION."
+  (save-excursion
+    (goto-char position)
+    (list (get-text-property (line-beginning-position) 'valsi-row-id)
+          (line-number-at-pos)
+          (current-column))))
+
+(defun valsi-view--row-anchor-position (anchor)
+  "Return the position matching ANCHOR from `valsi-view--row-anchor'."
+  (pcase-let ((`(,row ,line ,column) anchor))
+    (save-excursion
+      (goto-char (point-min))
+      (let ((match (and row
+                        (text-property-search-forward
+                         'valsi-row-id row #'equal))))
+        (if match
+            (goto-char (prop-match-beginning match))
+          (forward-line (1- (min line (line-number-at-pos (point-max)))))))
+      (move-to-column column)
+      (point))))
+
 (defun valsi-view-preserving-render (render)
-  "Call RENDER while preserving semantic point, window starts, and column."
-  (let* ((row (get-text-property (line-beginning-position) 'valsi-row-id))
-         (line (line-number-at-pos))
-         (column (current-column))
-         (windows (get-buffer-window-list (current-buffer) nil t))
-         (starts (mapcar (lambda (window)
-                           (cons window (window-start window)))
-                         windows))
+  "Call RENDER while preserving semantic point, window starts, and column.
+Every window showing the buffer keeps its own window point."
+  (let* ((anchor (valsi-view--row-anchor (point)))
+         (windows (mapcar (lambda (window)
+                            (list window (window-start window)
+                                  (valsi-view--row-anchor
+                                   (window-point window))))
+                          (get-buffer-window-list (current-buffer) nil t)))
          (inhibit-read-only t))
     (funcall render)
-    (goto-char (point-min))
-    (let ((match (and row
-                      (text-property-search-forward
-                       'valsi-row-id row #'equal))))
-      (if match
-          (goto-char (prop-match-beginning match))
-        (forward-line (1- (min line (line-number-at-pos (point-max)))))))
-    (move-to-column column)
-    (dolist (item starts)
-      (when (window-live-p (car item))
-        (set-window-start (car item)
-                          (min (cdr item) (point-max))
-                          t)))))
+    (goto-char (valsi-view--row-anchor-position anchor))
+    (pcase-dolist (`(,window ,start ,window-anchor) windows)
+      (when (window-live-p window)
+        (set-window-point window
+                          (valsi-view--row-anchor-position window-anchor))
+        (set-window-start window (min start (point-max)) t)))))
 
 ;;;; Font-lock installation
 
