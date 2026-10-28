@@ -11,8 +11,10 @@
 ;;   :id          symbol, unique
 ;;   :name        human label
 ;;   :evidence    standardized | converging | emergent
-;;   :match       (function BUFFER) -> score (higher wins), for auto-detect
-;;   :parse       (function BUFFER) -> root `valsi-node'
+;;   :match       (function URI TEXT) -> score (higher wins), for auto-detect;
+;;                URI is the document name, TEXT its content string
+;;   :parse       (function CONTENT) -> root `valsi-node' with 0-based
+;;                offsets into the CONTENT string
 ;;   :font-lock   font-lock keyword list (or function BUFFER -> keywords)
 ;;   :capabilities  list of action symbols, OR (function ROOT) -> list
 ;;                  (the degradation ladder, advertised per document)
