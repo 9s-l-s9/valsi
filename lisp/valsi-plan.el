@@ -594,39 +594,53 @@ Like dependency lookup, duplicate ids use their first task's dependencies."
 (defun valsi-plan-renumber ()
   "Normalize speckit Tnnn ids to sequential document order.
 Rewrites every id and every `depends on' reference in a single undo group.
-Refuses on non-speckit dialects (positional ids are meaningful there)."
+A dotted sub-task id (T002.1) follows its parent: only the Tnnn prefix is
+renumbered.  Refuses on non-speckit dialects (positional ids are meaningful
+there), on duplicate ids, and on sub-task ids without a parent task, since
+neither has a single consistent rewrite."
   (interactive)
   (let* ((root (valsi-plan--buffer-tree))
          (dialect (valsi-node-prop root :dialect)))
     (unless (eq dialect 'speckit)
       (user-error "Valsi plan renumber supports the speckit Tnnn dialect only (this is %s)"
                   dialect))
-    (let* ((ordered (sort (cl-remove-if-not
-                           (lambda (tk)
-                             (let ((id (valsi-node-prop tk :id)))
-                               (and id (string-match-p "\\`T[0-9]+\\'" id))))
-                           (valsi-node-of-type root 'task))
-                          (lambda (a b) (< (or (valsi-node-prop a :line) 0)
-                                           (or (valsi-node-prop b :line) 0)))))
+    (let* ((ids (delq nil (mapcar (lambda (tk)
+                                    (let ((id (valsi-node-prop tk :id)))
+                                      (and id (string-match-p
+                                               "\\`T[0-9]+\\(?:\\.[0-9]+\\)*\\'" id)
+                                           (cons (valsi-node-prop tk :line) id))))
+                                  (valsi-node-of-type root 'task))))
+           (ordered (mapcar #'cdr (sort ids (lambda (a b) (< (or (car a) 0)
+                                                               (or (car b) 0))))))
            (map (make-hash-table :test 'equal))
-           (n 0) (changed 0))
-      (dolist (tk ordered)
-        (cl-incf n)
-        (puthash (valsi-node-prop tk :id) (format "T%03d" n) map))
+           (n 0) (changed 0) (seen nil))
+      (dolist (id ordered)
+        (when (member id seen)
+          (user-error "Duplicate task id %s; make ids unique before renumbering" id))
+        (push id seen)
+        (unless (string-search "." id)
+          (puthash id (format "T%03d" (cl-incf n)) map)))
+      (dolist (id ordered)
+        (let ((parent (car (split-string id "\\."))))
+          (unless (gethash parent map)
+            (user-error "Sub-task %s has no parent task %s" id parent))))
       (atomic-change-group
         (save-excursion
           (goto-char (point-min))
           ;; Match full dotted ids so a sub-id (T001.1) is never confused with a
-          ;; top-level id (T001); only exact map keys are rewritten.  Reading the
-          ;; original token and writing the new one in one pass is collision-free.
-          (while (re-search-forward "\\bT[0-9]+\\(?:\\.[0-9]+\\)*" nil t)
+          ;; top-level id (T001); a sub-id is rewritten through its Tnnn prefix.
+          ;; Reading the original token and writing the new one in one pass is
+          ;; collision-free.
+          (while (re-search-forward "\\bT\\([0-9]+\\)\\(\\(?:\\.[0-9]+\\)*\\)" nil t)
             (let* ((old (match-string-no-properties 0))
-                   (new (gethash old map)))
+                   (head (gethash (concat "T" (match-string-no-properties 1))
+                                  map))
+                   (new (and head (concat head (match-string-no-properties 2)))))
               (when (and new (not (string= old new)))
                 (replace-match new t t)
                 (cl-incf changed))))))
       (message "valsi-plan-renumber: %d task(s), %d reference(s) rewritten"
-               n changed))))
+               (length ordered) changed))))
 
 (defun valsi-plan--dialect-next-id (root)
   "Return the next task id string for ROOT's dialect, or nil if unnumbered."
