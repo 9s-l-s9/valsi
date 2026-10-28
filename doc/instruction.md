@@ -29,6 +29,11 @@ alwaysApply: false
 ---
 ```
 
+Globs may also be written inline as a flow array (`globs: ["a", "b"]`) or as
+Cursor's comma-separated string (`globs: "*.ts,*.tsx"`); commas inside
+`{ts,tsx}` brace patterns do not split. Trailing `# comments` are ignored and
+a quoted `alwaysApply: "true"` counts as true.
+
 `M-x valsi-instruction-effective-at-point` (also `info`/`effective` on the `C-c n`
 menu) reports the nearest-wins **heading path** at point, and — when the file is
 glob-scoped — the glob predicate the whole file applies to. This is the genre's
@@ -37,7 +42,11 @@ headline query: *"which instructions are in force right here?"*
 ## Imports and links
 
 - **`@imports`** (`@./AGENTS.md`, `@~/.claude/x.md`, `@docs/architecture.md`)
-  pull other files into context. They form a directed graph.
+  pull other files into context. An import may open a line or sit inline
+  (`- Branching rules @docs/branching.md`); the `@` must follow whitespace or
+  the line start, and the target must look like a path (starts with `~`, or
+  contains a `/` or `.`), so a bare `@someone` mention is not an import.
+  Imports inside inline code are ignored. They form a directed graph.
   `M-x valsi-instruction-import-graph` (`graph`) renders the transitive import
   tree rooted at the current file, marking `[missing]` targets and guarding
   cycles. `M-x valsi-instruction-follow` (`follow`) jumps to the `@import` or
@@ -84,7 +93,9 @@ touching the filesystem.
 
 `M-x valsi-instruction-scaffold` writes a starter instruction file (default
 `AGENTS.md`) with the conventional `Setup` / `Build & test` / `Conventions`
-scaffold and an emphasis marker, ready to fill in.
+scaffold and an emphasis marker, ready to fill in. Missing parent directories
+(`.cursor/rules/`, `.github/instructions/`) are created, and the title drops the
+`.instructions.md`/`.mdc`/`.md` suffix (`api.instructions.md` → `# api`).
 
 ## Capability ladder (this genre)
 

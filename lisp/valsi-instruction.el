@@ -26,10 +26,20 @@
 
 (defconst valsi-instruction-emphasis-re
   "\\_<\\(IMPORTANT\\|YOU MUST\\|MUST NOT\\|MUST\\|NEVER\\|ALWAYS\\|DO NOT\\|CRITICAL\\)\\_>"
-  "Imperative-emphasis marker recognizer (R2).")
+  "Imperative-emphasis marker recognizer (R2).
+The markers are uppercase only; match it with `case-fold-search' nil, see
+`valsi-instruction--emphasis-p'.")
 
-(defconst valsi-instruction-import-re "^[ \t]*@\\([^ \t\n]+\\)"
-  "@import recognizer (R5).")
+(defun valsi-instruction--emphasis-p (text)
+  "Return non-nil when TEXT contains an uppercase emphasis marker."
+  (let ((case-fold-search nil))
+    (and (string-match-p valsi-instruction-emphasis-re text) t)))
+
+(defconst valsi-instruction-import-re
+  "\\(?:^\\|[ \t]\\)@\\([^@ \t\n`][^ \t\n`]*\\)"
+  "@import candidate recognizer (R5): an @ at line start or after whitespace.
+`valsi-instruction--import-spans' keeps only path-like candidates outside
+inline code.")
 
 (defconst valsi-instruction-link-re "\\[\\[\\([^]]+\\)\\]\\]"
   "Wiki [[link]] recognizer (R6).")
@@ -51,33 +61,75 @@
         (substring s 1 -1)
       s)))
 
+(defun valsi-instruction--split-top (s sep)
+  "Split S at each SEP char outside quotes and brackets/braces.
+With SEP `?#', only a `#' at the start or after whitespace splits, as a
+YAML comment does."
+  (let ((parts nil) (quote-char nil) (depth 0) (start 0) (i 0) (n (length s)))
+    (while (< i n)
+      (let ((c (aref s i)))
+        (cond
+         (quote-char (when (eq c quote-char) (setq quote-char nil)))
+         ((and (memq c '(?\" ?'))
+               (or (= i 0) (memq (aref s (1- i)) '(?\s ?\t ?, ?\[ ?{))))
+          ;; Only a quote that opens a token; an apostrophe is text.
+          (setq quote-char c))
+         ((memq c '(?\[ ?{)) (cl-incf depth))
+         ((memq c '(?\] ?})) (setq depth (max 0 (1- depth))))
+         ((and (eq c sep) (= depth 0)
+               (or (not (eq sep ?#)) (= i 0)
+                   (memq (aref s (1- i)) '(?\s ?\t))))
+          (push (substring s start i) parts)
+          (setq start (1+ i)))))
+      (cl-incf i))
+    (nreverse (cons (substring s start) parts))))
+
+(defun valsi-instruction--yaml-value (v)
+  "Return frontmatter value V without a trailing `# comment', trimmed."
+  (string-trim (car (valsi-instruction--split-top v ?#))))
+
+(defun valsi-instruction--glob-values (v)
+  "Return the globs in inline value V (comment already stripped).
+Accepts a flow array `[\"a\", \"b\"]', a quoted or bare scalar, and a
+comma-separated glob string `\"*.ts,*.tsx\"'.  Commas inside `{...}'
+brace patterns do not split."
+  (let ((inner (if (string-match "\\`\\[\\(.*\\)\\]\\'" v)
+                   (match-string 1 v)
+                 (valsi-instruction--unquote v))))
+    (delete "" (mapcar #'valsi-instruction--unquote
+                       (valsi-instruction--split-top inner ?,)))))
+
 (defun valsi-instruction--frontmatter-props (raw-lines)
   "Parse RAW-LINES (frontmatter body strings) into a props plist.
-Recognizes `description', `globs'/`applyTo' (inline string or block list),
-and `alwaysApply'."
+Recognizes `description', `globs'/`applyTo' (inline string, comma list,
+flow array or block list), and `alwaysApply'.  Trailing `# comments' are
+ignored and quoted values are unquoted."
   (let ((desc nil) (globs nil) (apply-to nil) (always nil) (key nil))
     (dolist (line raw-lines)
       (cond
        ((string-match "\\`[ \t]*-[ \t]+\\(.*\\)\\'" line)
-        (let ((val (valsi-instruction--unquote (match-string 1 line))))
+        (let ((val (valsi-instruction--unquote
+                    (valsi-instruction--yaml-value (match-string 1 line)))))
           (pcase key
             ('globs (push val globs))
             ('apply-to (push val apply-to)))))
        ((string-match "\\`\\([A-Za-z_]+\\)[ \t]*:[ \t]*\\(.*\\)\\'" line)
         (let ((k (downcase (match-string 1 line)))
-              (v (string-trim (match-string 2 line))))
+              (v (valsi-instruction--yaml-value (match-string 2 line))))
           (pcase k
             ("description" (setq desc (valsi-instruction--unquote v) key nil))
             ("globs"
              (setq key 'globs)
-             (unless (string-empty-p v)
-               (push (valsi-instruction--unquote v) globs)))
+             (setq globs (append (reverse (valsi-instruction--glob-values v))
+                                 globs)))
             ("applyto"
              (setq key 'apply-to)
-             (unless (string-empty-p v)
-               (push (valsi-instruction--unquote v) apply-to)))
+             (setq apply-to (append (reverse (valsi-instruction--glob-values v))
+                                    apply-to)))
             ("alwaysapply"
-             (setq always (string= (downcase v) "true") key nil))
+             (setq always (string= (downcase (valsi-instruction--unquote v))
+                                   "true")
+                   key nil))
             (_ (setq key nil)))))))
     (list :description desc
           :globs (nreverse globs)
@@ -106,6 +158,49 @@ fence.  Returns nil when there is no leading frontmatter."
                :recognizer 'valsi-instruction-frontmatter
                :props (valsi-instruction--frontmatter-props (nreverse raw)))
               (1+ (valsi-line-n closed)))))))
+
+;;;; Imports (R5)
+
+(defun valsi-instruction--import-target (candidate)
+  "Return CANDIDATE as an import path, or nil when it is not path-like.
+Trailing sentence punctuation is dropped.  A path-like target starts with
+`~', contains a `/', or contains a `.' (a file name), so a bare @mention is
+not an import."
+  (let ((target (replace-regexp-in-string "[].,;:!?)]+\\'" "" candidate)))
+    (when (string-match-p "\\`~\\|[/.]" target)
+      target)))
+
+(defun valsi-instruction--import-spans (text)
+  "Return the @imports in TEXT as (TARGET BEG . END) lists.
+BEG and END delimit the `@target' text.  Candidates inside inline code
+spans and non-path-like @mentions are skipped."
+  (let (spans (start 0))
+    (while (string-match valsi-instruction-import-re text start)
+      (let* ((at (1- (match-beginning 1)))
+             (target (valsi-instruction--import-target (match-string 1 text))))
+        (setq start (match-end 0))
+        (when (and target
+                   (cl-evenp (cl-count ?` (substring text 0 at))))
+          (push (cons target (cons at (+ at 1 (length target)))) spans))))
+    (nreverse spans)))
+
+(defun valsi-instruction--import-matcher (limit)
+  "Font-lock matcher: find the next @import before LIMIT.
+Sets match group 1 to the import target."
+  (let (found)
+    (while (and (not found) (< (point) limit))
+      (let* ((bol (line-beginning-position))
+             (eol (min limit (line-end-position)))
+             (span (cl-find-if (lambda (s) (>= (+ bol (cadr s)) (point)))
+                               (valsi-instruction--import-spans
+                                (buffer-substring-no-properties bol eol)))))
+        (if span
+            (let ((beg (+ bol (cadr span))) (end (+ bol (cddr span))))
+              (set-match-data (list beg end (1+ beg) end))
+              (goto-char end)
+              (setq found t))
+          (goto-char (min limit (1+ eol))))))
+    found))
 
 ;;;; Inline links (R6)
 
@@ -150,28 +245,41 @@ fence.  Returns nil when there is no leading frontmatter."
                   (valsi-node-add-child (cdar scope-stack) s)
                 (valsi-node-add-child root s))
               (push (cons (car heading) s) scope-stack)))
-           ((string-match valsi-instruction-import-re text)
-            (valsi-node-add-child
-             (if scope-stack (cdar scope-stack) root)
-             (valsi-node-create :type 'import
-                               :beg (valsi-line-beg line) :end (valsi-line-end line)
-                               :recognizer 'valsi-instruction-import
-                               :props (list :target (match-string 1 text)))))
            ((valsi-parse-bullet text)
-            (let ((rest (cdr (valsi-parse-bullet text))))
-              (valsi-node-add-child
-               (if scope-stack (cdar scope-stack) root)
-               (valsi-node-create
-                :type 'item
-                :beg (valsi-line-beg line) :end (valsi-line-end line)
-                :recognizer 'valsi-instruction-item
-                :confidence 'loose
-                :props (list :text rest
-                             :emphasis (and (string-match-p
-                                             valsi-instruction-emphasis-re text)
-                                            t)
-                             :links (valsi-instruction--links text))))))))))
+            (let* ((rest (cdr (valsi-parse-bullet text)))
+                   (item (valsi-node-create
+                          :type 'item
+                          :beg (valsi-line-beg line) :end (valsi-line-end line)
+                          :recognizer 'valsi-instruction-item
+                          :confidence 'loose
+                          :props (list :text rest
+                                       :emphasis (valsi-instruction--emphasis-p text)
+                                       :links (valsi-instruction--links text)))))
+              (valsi-node-add-child (if scope-stack (cdar scope-stack) root) item)
+              (valsi-instruction--add-imports item line nil)))
+           (t
+            (valsi-instruction--add-imports
+             (if scope-stack (cdar scope-stack) root) line t))))))
     root))
+
+(defun valsi-instruction--add-imports (parent line whole-line)
+  "Add an `import' node under PARENT for each @import on LINE.
+When WHOLE-LINE is non-nil, an import that opens the line spans the whole
+line; any other import spans just its `@target' text."
+  (let* ((text (valsi-line-text line))
+         (indent (progn (string-match "\\`[ \t]*" text) (match-end 0))))
+    (dolist (span (valsi-instruction--import-spans text))
+      (let ((line-p (and whole-line (= (cadr span) indent))))
+        (valsi-node-add-child
+         parent
+         (valsi-node-create
+          :type 'import
+          :beg (if line-p (valsi-line-beg line)
+                 (+ (valsi-line-beg line) (cadr span)))
+          :end (if line-p (valsi-line-end line)
+                 (+ (valsi-line-beg line) (cddr span)))
+          :recognizer 'valsi-instruction-import
+          :props (list :target (car span))))))))
 
 ;;;; Capabilities
 
@@ -190,7 +298,7 @@ fence.  Returns nil when there is no leading frontmatter."
 
 (defvar valsi-instruction-font-lock-keywords
   `((,valsi-instruction-emphasis-re . 'valsi-emphasis-face)
-    (,valsi-instruction-import-re 1 'valsi-link-face)
+    (valsi-instruction--import-matcher 1 'valsi-link-face)
     (,valsi-instruction-link-re 1 'valsi-link-face))
   "Font-lock keywords for instruction files.")
 
@@ -249,11 +357,9 @@ Also reports the frontmatter glob predicate when the file is glob-scoped."
   (when (file-readable-p file)
     (with-temp-buffer
       (insert-file-contents file)
-      (let (targets)
-        (goto-char (point-min))
-        (while (re-search-forward valsi-instruction-import-re nil t)
-          (push (match-string-no-properties 1) targets))
-        (nreverse targets)))))
+      (mapcar #'car
+              (valsi-instruction--import-spans
+               (buffer-substring-no-properties (point-min) (point-max)))))))
 
 (defun valsi-instruction--resolve-import (target base-dir)
   "Resolve import TARGET against BASE-DIR (handles ~ and relative paths)."
@@ -291,16 +397,22 @@ Also reports the frontmatter glob predicate when the file is glob-scoped."
 (defun valsi-instruction-follow ()
   "Follow the @import or [[link]] at point to its file."
   (interactive)
-  (save-excursion
-    (beginning-of-line)
-    (cond
-     ((re-search-forward valsi-instruction-import-re (line-end-position) t)
-      (let ((f (match-string-no-properties 1)))
-        (if (file-exists-p (expand-file-name f)) (find-file-other-window f)
-          (message "No such import: %s" f))))
-     ((re-search-forward valsi-instruction-link-re (line-end-position) t)
-      (message "Link: %s" (match-string-no-properties 1)))
-     (t (message "No import/link at point")))))
+  (let* ((col (- (point) (line-beginning-position)))
+         (spans (valsi-instruction--import-spans
+                 (buffer-substring-no-properties
+                  (line-beginning-position) (line-end-position))))
+         (span (or (cl-find-if (lambda (s) (<= (cadr s) col (cddr s))) spans)
+                   (car spans))))
+    (save-excursion
+      (beginning-of-line)
+      (cond
+       (span
+        (let ((f (car span)))
+          (if (file-exists-p (expand-file-name f)) (find-file-other-window f)
+            (message "No such import: %s" f))))
+       ((re-search-forward valsi-instruction-link-re (line-end-position) t)
+        (message "Link: %s" (match-string-no-properties 1)))
+       (t (message "No import/link at point"))))))
 
 ;;;; Lint (R5 danglers + R4 unscoped frontmatter)
 
@@ -417,12 +529,24 @@ mirroring it, preserving the target's own content outside the region."
   (interactive
    (list (read-file-name "Scaffold instruction file: "
                          nil "AGENTS.md" nil "AGENTS.md")))
+  (setq file (expand-file-name file))
   (when (or (not (file-exists-p file))
             (y-or-n-p (format "%s exists -- overwrite? " file)))
+    (make-directory (file-name-directory file) t)
     (find-file file)
     (when (> (buffer-size) 0) (erase-buffer))
-    (insert (valsi-instruction--scaffold-template (file-name-base file)))
+    (insert (valsi-instruction--scaffold-template
+             (valsi-instruction--scaffold-title file)))
     (goto-char (point-min))))
+
+(defun valsi-instruction--scaffold-title (file)
+  "Return the scaffold title for FILE: its name without instruction suffixes.
+Strips `.instructions.md', `.mdc' and `.md', so `api.instructions.md' and
+`api.mdc' both give `api'."
+  (let ((name (file-name-nondirectory file)))
+    (if (string-match "\\(?:\\.instructions\\)?\\.mdc?\\'" name)
+        (substring name 0 (match-beginning 0))
+      (file-name-base file))))
 
 ;;;; Dashboard
 
@@ -465,7 +589,7 @@ mirroring it, preserving the target's own content outside the region."
            "\\.cursor/rules/.*\\.mdc\\'\\|\\.github/instructions/\\|\\.instructions\\.md\\'"
            name)
       (cl-incf score 4))
-    (when (string-match-p valsi-instruction-emphasis-re text)
+    (when (valsi-instruction--emphasis-p text)
       (cl-incf score 1))
     score))
 
