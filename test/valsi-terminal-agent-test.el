@@ -58,5 +58,16 @@
             (should (valsi-terminal-agent-get (file-name-as-directory alias) "primary")))
         (when (file-symlink-p alias) (delete-file alias))))))
 
+(ert-deftest valsi-terminal-agent-test-target-respects-explicit-name ()
+  "An explicitly named target that is not running is an error (#40)."
+  (valsi-terminal-agent-test--with-root
+    (let ((primary (save-window-excursion (valsi-agent "primary" 'pi))))
+      (should-error (valsi-terminal-agent--target "docs") :type 'user-error)
+      (should (eq primary (valsi-terminal-agent--target)))
+      (should (eq primary (valsi-terminal-agent--target "primary")))
+      (let ((docs (save-window-excursion (valsi-agent-new "docs" 'pi))))
+        (should (eq docs (valsi-terminal-agent--target "docs"))))
+      (should (= 2 (length (valsi-terminal-agent-list root)))))))
+
 (provide 'valsi-terminal-agent-test)
 ;;; valsi-terminal-agent-test.el ends here

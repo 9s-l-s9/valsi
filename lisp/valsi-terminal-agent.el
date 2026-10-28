@@ -370,23 +370,27 @@ Deliberately small: the CLI owns every printable key."
                      (if (member "primary" names) "primary" nil))))
 
 (defun valsi-terminal-agent--target (&optional name)
-  "Return the current project's live target agent, optionally named NAME."
+  "Return the current project's live target agent, optionally named NAME.
+An explicit NAME that is not running is a user error; the fallbacks apply
+only when no NAME is requested."
   (let* ((root (valsi-terminal-agent-project-root))
          (instances
           (seq-filter #'valsi-terminal-agent--live-p
                       (valsi-terminal-agent-list root))))
-    (or (and name (valsi-terminal-agent-get root name))
-        (valsi-terminal-agent-get root "primary")
-        (and (= (length instances) 1) (car instances))
-        (and instances
-             (let ((selected
-                    (completing-read
-                     "Insert into agent: "
-                     (mapcar #'valsi-terminal-agent-instance-name instances)
-                     nil t)))
-               (valsi-terminal-agent-get root selected)))
-        (let ((default-directory root))
-          (valsi-agent "primary" valsi-agent-terminal-backend)))))
+    (if name
+        (or (valsi-terminal-agent-get root name)
+            (user-error "Agent %s is not running" name))
+      (or (valsi-terminal-agent-get root "primary")
+          (and (= (length instances) 1) (car instances))
+          (and instances
+               (let ((selected
+                      (completing-read
+                       "Insert into agent: "
+                       (mapcar #'valsi-terminal-agent-instance-name instances)
+                       nil t)))
+                 (valsi-terminal-agent-get root selected)))
+          (let ((default-directory root))
+            (valsi-agent "primary" valsi-agent-terminal-backend))))))
 
 (defun valsi-terminal-agent-insert (text &optional name)
   "Insert TEXT into agent NAME's terminal prompt without submitting it."
