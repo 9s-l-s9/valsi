@@ -100,6 +100,10 @@ Nil means stale; `valsi-tree' refetches it from the server via the proto layer."
 
 (defvar valsi--interaction-state)
 (defvar valsi--original-read-only)
+(defvar valsi-artifact-minor-mode)
+
+(defvar-local valsi--font-lock-key nil
+  "The grammar id and registry generation whose keywords are installed.")
 
 (defcustom valsi-idle-delay 0.15
   "Idle seconds before updating semantic context after an artifact edit."
@@ -123,6 +127,17 @@ Nil means stale; `valsi-tree' refetches it from the server via the proto layer."
     (valsi--request 'artifact/didClose (list :uri valsi--open-uri))
     (setq valsi--open-uri nil)))
 
+(defun valsi--forget-cloned-document ()
+  "Detach a cloned buffer from the document of the buffer it was cloned from.
+`clone-indirect-buffer' and `clone-buffer' copy every buffer-local
+variable, so without this the clone would close its origin's document on
+its first edit or when it is killed.  The clone opens its own on demand."
+  (setq valsi--open-uri nil
+        valsi--synced-version nil
+        valsi--tree nil
+        ;; The copied timer refreshes the origin buffer, which owns it.
+        valsi--refresh-timer nil))
+
 (defun valsi--sync (&optional open)
   "Push the buffer's content to the server (didChange, or didOpen when OPEN).
 Records the resolved grammar + capabilities.  Marks the local tree stale."
@@ -143,6 +158,11 @@ Records the resolved grammar + capabilities.  Marks the local tree stale."
     (setq valsi--capabilities (plist-get resp :capabilities))
     (setq valsi--tree nil)
     (setq valsi--synced-version (valsi--version))
+    ;; Re-detection or a grammar reload changes which keywords apply.
+    (when (and valsi-artifact-minor-mode
+               (not (equal valsi--font-lock-key
+                           (list valsi--grammar valsi-registry-generation))))
+      (valsi--install-font-lock))
     resp))
 
 (defun valsi-tree ()
@@ -194,6 +214,51 @@ offset->buffer-position translation here."
           (call-interactively cmd))
       (message "Valsi: `%s' not supported by the %s grammar"
                action (or valsi--grammar 'generic)))))
+
+(defvar execute-extended-command--last-typed)
+
+(defun valsi--grammar-command-p (command)
+  "Non-nil if COMMAND is advertised by the current buffer's grammar."
+  (and valsi--grammar command (symbolp command)
+       (rassq command (plist-get (valsi-registry-get valsi--grammar)
+                                 :commands))))
+
+(defun valsi--call-browse-editable (fn)
+  "Call FN with Browse's own read-only lifted in the current buffer.
+Browse makes the buffer read-only only to give letters their commands; a
+grammar command run deliberately may still edit, as `valsi-toggle' does.
+A buffer that was read-only before Valsi stays read-only."
+  (let ((buffer (current-buffer)))
+    (if (or (not (eq valsi--interaction-state 'browse))
+            valsi--original-read-only
+            (not buffer-read-only))
+        (funcall fn)
+      (unwind-protect
+          (progn (setq buffer-read-only nil)
+                 (funcall fn))
+        (when (buffer-live-p buffer)
+          (with-current-buffer buffer
+            (when (eq valsi--interaction-state 'browse)
+              (setq buffer-read-only t))))))))
+
+(defun valsi-browse-execute-extended-command (prefixarg &optional
+                                                         command-name typed)
+  "Like `execute-extended-command', but grammar commands may edit in Browse.
+Reading COMMAND-NAME, PREFIXARG and TYPED is unchanged.  When the command
+is one the artifact's grammar advertises (for example
+`valsi-decision-set-status'), the Browse state's read-only is lifted while
+it runs, so it no longer prompts and then fails with `buffer-read-only'."
+  (interactive
+   (let ((execute-extended-command--last-typed nil))
+     (list current-prefix-arg
+           (read-extended-command)
+           execute-extended-command--last-typed)))
+  (let ((run (lambda ()
+               (funcall-interactively #'execute-extended-command
+                                      prefixarg command-name typed))))
+    (if (valsi--grammar-command-p (intern-soft command-name))
+        (valsi--call-browse-editable run)
+      (funcall run))))
 
 (defmacro valsi--defaction (name action doc)
   "Define command NAME dispatching ACTION to the active grammar, with DOC."
@@ -265,8 +330,6 @@ offset->buffer-position translation here."
   "Read-only state before Valsi enabled in this buffer.")
 (put 'valsi--original-read-only 'permanent-local t)
 
-(defvar valsi-artifact-minor-mode)
-
 (defvar valsi-browse-mode-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "n") #'valsi-next)
@@ -295,6 +358,8 @@ offset->buffer-position translation here."
     (define-key map (kbd "s") #'valsi-app-toggle-sidebar)
     (define-key map (kbd "a") #'valsi-agent)
     (define-key map (kbd "@") #'valsi-app-handoff)
+    (define-key map [remap execute-extended-command]
+                #'valsi-browse-execute-extended-command)
     map)
   "Direct, modal bindings active while an artifact is in Browse state.")
 
@@ -367,12 +432,30 @@ See `valsi-enter-browse-hook'.")
 
 ;;;; Minor mode
 
+(defconst valsi--header-line-format '(:eval (valsi--header-line))
+  "The `header-line-format' Valsi installs in artifact buffers.")
+
+(defvar-local valsi--saved-header-line nil
+  "The header line before Valsi enabled, as (LOCALP . VALUE), or nil.")
+
 (defun valsi--install-font-lock ()
   "Install the active grammar's font-lock keywords."
   (let* ((spec (valsi-registry-get valsi--grammar))
          (kw (plist-get spec :font-lock)))
+    (setq valsi--font-lock-key (list valsi--grammar valsi-registry-generation))
     (valsi-view-set-font-lock
      (if (functionp kw) (funcall kw (current-buffer)) kw))))
+
+(defun valsi--grammar-registered (id)
+  "Reinstall font-lock in every artifact buffer showing grammar ID.
+Runs on `valsi-registry-hook', so a (re)registered grammar's keywords take
+effect in open buffers immediately.  Re-detection follows on the next sync."
+  (dolist (buffer (buffer-list))
+    (with-current-buffer buffer
+      (when (and valsi-artifact-minor-mode (eq valsi--grammar id))
+        (valsi--install-font-lock)))))
+
+(add-hook 'valsi-registry-hook #'valsi--grammar-registered)
 
 (defun valsi--update-sidebar-context ()
   "Keep the visible project sidebar contextual to the selected artifact."
@@ -409,26 +492,46 @@ a keymap (\\{valsi-artifact-mode-map})."
         (valsi--sync t)                  ; artifact/didOpen
         (valsi-tree)                     ; fetch symbols -> local tree
         (valsi--install-font-lock)
-        (setq-local header-line-format '(:eval (valsi--header-line)))
+        ;; The globalized mode can enable twice; keep the first saved value.
+        (unless (eq header-line-format valsi--header-line-format)
+          (setq valsi--saved-header-line
+                (cons (local-variable-p 'header-line-format)
+                      header-line-format)))
+        (setq-local header-line-format valsi--header-line-format)
         (add-hook 'after-change-functions #'valsi--after-change nil t)
         (add-hook 'after-save-hook #'valsi-refresh nil t)
         (add-hook 'post-command-hook #'valsi--update-sidebar-context nil t)
         (add-hook 'kill-buffer-hook #'valsi--cancel-refresh nil t)
         (add-hook 'kill-buffer-hook #'valsi--close-document nil t)
+        (add-hook 'clone-indirect-buffer-hook #'valsi--forget-cloned-document
+                  nil t)
+        (add-hook 'clone-buffer-hook #'valsi--forget-cloned-document nil t)
         ;; No explicit sidebar display here: chrome is reconciled with the
         ;; displayed buffers by `valsi-app--sync-chrome' on the window hooks,
         ;; which fire once this buffer is actually shown.
         (valsi-app--install-window-hooks)
-        (valsi-enter-browse))
+        ;; Insert survives only a major-mode rerun in place (`revert-buffer',
+        ;; `normal-mode'), which keeps `buffer-read-only' as it was; Browse
+        ;; there would leave its keymap on a writable buffer.
+        (if (eq valsi--interaction-state 'insert)
+            (valsi-enter-insert)
+          (valsi-enter-browse)))
     (valsi--close-document)
     (setq valsi--tree nil valsi--synced-version nil)
     (valsi-view-set-font-lock nil)
-    (setq-local header-line-format nil)
+    (setq valsi--font-lock-key nil)
+    (when (eq header-line-format valsi--header-line-format)
+      (if (car valsi--saved-header-line)
+          (setq-local header-line-format (cdr valsi--saved-header-line))
+        (kill-local-variable 'header-line-format)))
+    (setq valsi--saved-header-line nil)
     (remove-hook 'after-change-functions #'valsi--after-change t)
     (remove-hook 'after-save-hook #'valsi-refresh t)
     (remove-hook 'post-command-hook #'valsi--update-sidebar-context t)
     (remove-hook 'kill-buffer-hook #'valsi--cancel-refresh t)
     (remove-hook 'kill-buffer-hook #'valsi--close-document t)
+    (remove-hook 'clone-indirect-buffer-hook #'valsi--forget-cloned-document t)
+    (remove-hook 'clone-buffer-hook #'valsi--forget-cloned-document t)
     (valsi--cancel-refresh)
     (valsi-browse-mode -1)
     (setq valsi--interaction-state nil)
@@ -494,8 +597,11 @@ structure shallowly.")
     (erase-buffer)
     (insert (propertize
              (format "%s\n\n"
-                     (file-name-nondirectory
-                      (buffer-local-value 'buffer-file-name source)))
+                     (let ((file (buffer-local-value 'buffer-file-name
+                                                     source)))
+                       (if file
+                           (file-name-nondirectory file)
+                         (buffer-name source))))
              'face 'bold))
     (valsi-view-insert-outline
      (with-current-buffer source (valsi-tree)) source 3)
@@ -511,7 +617,9 @@ dashboards: same node tree, same sectioned rendering as the sidebar."
   (let* ((source (current-buffer))
          (buffer (get-buffer-create
                   (format "*Valsi Outline: %s*"
-                          (abbreviate-file-name buffer-file-name)))))
+                          (if buffer-file-name
+                              (abbreviate-file-name buffer-file-name)
+                            (buffer-name))))))
     (with-current-buffer buffer
       (valsi-outline-mode)
       (setq valsi-outline--source source
