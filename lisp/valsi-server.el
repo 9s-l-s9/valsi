@@ -78,7 +78,7 @@
             (and has-id
                  (list :jsonrpc valsi-server-jsonrpc-version
                        :id id :result result)))
-        (wrong-type-argument
+        ((valsi-proto-invalid-params wrong-type-argument)
          (and has-id
               (valsi-server--error id -32602 "Invalid params"
                                   (error-message-string err))))
@@ -94,22 +94,28 @@
           (eq (aref record (1- (length record))) ?\r))
       (valsi-server--send server
                          (valsi-server--error nil -32700 "Parse error"))
-    (condition-case err
-        (let* ((request
-                (json-parse-string record :object-type 'plist
-                                   :array-type 'array
-                                   :null-object :null
-                                   :false-object :false))
-               (response (valsi-server--dispatch request)))
-          (when response (valsi-server--send server response)))
-      (json-parse-error
-       (valsi-server--send
-        server (valsi-server--error nil -32700 "Parse error"
-                                   (error-message-string err))))
-      (error
-       (valsi-server--send
-        server (valsi-server--error nil -32600 "Invalid Request"
-                                   (error-message-string err)))))))
+    ;; Any failure to decode the record (including an invalid surrogate
+    ;; escape, which `json-parse-string' does not report as
+    ;; `json-parse-error') is a parse error; only later failures are -32600.
+    (let ((request
+           (condition-case err
+               (json-parse-string record :object-type 'plist
+                                  :array-type 'array
+                                  :null-object :null
+                                  :false-object :false)
+             (error
+              (valsi-server--send
+               server (valsi-server--error nil -32700 "Parse error"
+                                          (error-message-string err)))
+              'valsi-server--unparsed))))
+      (unless (eq request 'valsi-server--unparsed)
+        (condition-case err
+            (let ((response (valsi-server--dispatch request)))
+              (when response (valsi-server--send server response)))
+          (error
+           (valsi-server--send
+            server (valsi-server--error nil -32600 "Invalid Request"
+                                       (error-message-string err)))))))))
 
 (defun valsi-server-consume (server chunk)
   "Consume possibly partial strict-LF JSONL CHUNK for SERVER."

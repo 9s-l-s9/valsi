@@ -54,6 +54,18 @@
 
 ;;;; Dispatch
 
+(define-error 'valsi-proto-invalid-params "Invalid AAP params")
+
+(defun valsi-proto--string-param (params key &optional optional)
+  "Return the string at KEY in PARAMS.
+Signal `valsi-proto-invalid-params' unless it is a string, or absent and
+OPTIONAL is non-nil."
+  (let ((value (plist-get params key)))
+    (if (or (stringp value) (and optional (null value)))
+        value
+      (signal 'valsi-proto-invalid-params
+              (list (format "%s must be a string" key) value)))))
+
 (defun valsi-proto-request (method params)
   "Handle an AAP request: METHOD (symbol) with PARAMS (plist) -> response plist.
 This is the native in-process seam.  A wire transport wraps
@@ -64,28 +76,36 @@ This is the native in-process seam.  A wire transport wraps
     ('grammar/register
      (list :id (valsi-proto--register (plist-get params :spec))))
     ('grammar/describe
-     (valsi-registry-describe (plist-get params :id)))
+     (let ((id (plist-get params :id)))
+       (unless (and id (or (stringp id) (symbolp id)))
+         (signal 'valsi-proto-invalid-params
+                 (list ":id must be a grammar id" id)))
+       ;; Wire ids arrive as strings; the registry is keyed by symbols.
+       (valsi-registry-describe (if (stringp id) (intern id) id))))
     ('grammar/list
      (list :grammars (valsi-registry-all)))
     ('grammar/detect
-     (list :id (valsi-registry-detect (plist-get params :uri)
-                                     (plist-get params :text))))
-    ('artifact/didOpen
-     (valsi-proto--sync (plist-get params :uri) (plist-get params :text)))
-    ('artifact/didChange
-     (valsi-proto--sync (plist-get params :uri) (plist-get params :text)))
+     (list :id (valsi-registry-detect
+                (valsi-proto--string-param params :uri t)
+                (valsi-proto--string-param params :text t))))
+    ((or 'artifact/didOpen 'artifact/didChange)
+     (valsi-proto--sync (valsi-proto--string-param params :uri)
+                        (valsi-proto--string-param params :text)))
     ('artifact/didClose
-     (remhash (plist-get params :uri) valsi-proto--docs)
-     (list :uri (plist-get params :uri)))
+     (let ((uri (valsi-proto--string-param params :uri)))
+       (remhash uri valsi-proto--docs)
+       (list :uri uri)))
     ('artifact/symbols
-     (let ((doc (gethash (plist-get params :uri) valsi-proto--docs)))
+     (let ((doc (gethash (valsi-proto--string-param params :uri)
+                         valsi-proto--docs)))
        (and doc (valsi-proto-doc-tree doc))))
     ('artifact/capabilities
-     (let ((doc (gethash (plist-get params :uri) valsi-proto--docs)))
+     (let ((doc (gethash (valsi-proto--string-param params :uri)
+                         valsi-proto--docs)))
        (list :capabilities (and doc (valsi-proto-doc-caps doc)))))
     ('artifact/planContext
-     (valsi-proto--plan-context (plist-get params :uri)
-                               (plist-get params :taskId)))
+     (valsi-proto--plan-context (valsi-proto--string-param params :uri)
+                               (valsi-proto--string-param params :taskId t)))
     (_ (list :error (format "unknown method: %s" method)))))
 
 (defun valsi-proto-json-request (method params)
@@ -96,9 +116,9 @@ JSON-RPC transport; the in-process client continues to use
   (let* ((method-symbol (if (symbolp method) method (intern method)))
          (response (valsi-proto-request method-symbol params)))
     (cond
-     ((and (memq method-symbol '(artifact/symbols artifact/planContext))
-           (null response))
-      :null)
+     ;; An absent result (no tree, unknown grammar, no task) is JSON null,
+     ;; never the empty object `json-serialize' would make of nil.
+     ((null response) :null)
      ((eq method-symbol 'artifact/planContext)
       (valsi-proto--json-plan-context response))
      (t (valsi-proto--jsonify response)))))
@@ -114,8 +134,14 @@ JSON-RPC transport; the in-process client continues to use
                        (vconcat (or (plist-get context key) nil)))))
     out))
 
+(defconst valsi-proto--json-array-keys
+  '(:capabilities :grammars :commands :children)
+  "Response keys whose value is always a JSON array, even when empty.")
+
 (defun valsi-proto--jsonify (value)
-  "Recursively convert native protocol VALUE to JSON-ready data."
+  "Recursively convert native protocol VALUE to JSON-ready data.
+A nil value under one of `valsi-proto--json-array-keys' becomes the empty
+array; elsewhere nil stays nil, which `json-serialize' writes as {}."
   (cond
    ((valsi-node-p value) (valsi-proto--jsonify (valsi-node-to-plist value)))
    ((null value) nil)
@@ -128,7 +154,11 @@ JSON-RPC transport; the in-process client continues to use
     (let (out)
       (while value
         (setq out (plist-put out (car value)
-                             (valsi-proto--jsonify (cadr value))))
+                             (if (and (null (cadr value))
+                                      (memq (car value)
+                                            valsi-proto--json-array-keys))
+                                 []
+                               (valsi-proto--jsonify (cadr value)))))
         (setq value (cddr value)))
       out))
    ((listp value) (vconcat (mapcar #'valsi-proto--jsonify value)))
@@ -158,8 +188,14 @@ JSON-RPC transport; the in-process client continues to use
     (list :uri uri :grammar grammar :capabilities caps :version version)))
 
 (defun valsi-proto--register (spec)
-  "Register JSON-safe grammar declaration SPEC and hot-reload open documents."
-  (let ((id (valsi-registry-register-declaration spec)))
+  "Register JSON-safe grammar declaration SPEC and hot-reload open documents.
+A malformed SPEC is the client's error: signal `valsi-proto-invalid-params'."
+  (let ((id (condition-case err
+                (if (and spec (listp spec))
+                    (valsi-registry-register-declaration spec)
+                  (error ":spec must be a grammar declaration object"))
+              (error (signal 'valsi-proto-invalid-params
+                             (list (error-message-string err)))))))
     (maphash
      (lambda (uri doc) (valsi-proto--sync uri (valsi-proto-doc-text doc)))
      valsi-proto--docs)
