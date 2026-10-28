@@ -72,6 +72,65 @@
                                                            'valsi-row-id))
                                       '(0 1 2))))))))))
 
+;; Visiting source positions keeps a narrowing that contains them.
+
+(defun valsi-view-render-test--visit (source position)
+  "Visit POSITION in SOURCE through a one-row source table."
+  (let ((table (generate-new-buffer " *valsi-view-table*")))
+    (unwind-protect
+        (with-current-buffer table
+          (tabulated-list-mode)
+          (setq tabulated-list-format [("Row" 10 nil)]
+                tabulated-list-entries `((,position ["row"]))
+                valsi-view--source-buffer source)
+          (tabulated-list-init-header)
+          (tabulated-list-print)
+          (goto-char (point-min))
+          (valsi-view-visit-source))
+      (kill-buffer table))))
+
+(ert-deftest valsi-view-visit-source-keeps-containing-narrowing ()
+  "Visiting a row widens the source only for positions outside (#58)."
+  (let ((source (generate-new-buffer " *valsi-view-narrowed*")))
+    (unwind-protect
+        (save-window-excursion
+          (with-current-buffer source
+            (insert "# T\n\n## A\n\n## B\n")
+            (narrow-to-region (point-min) 8))
+          (valsi-view-render-test--visit source 1)
+          (with-current-buffer source
+            (should (buffer-narrowed-p))
+            (should (= 1 (point))))
+          (valsi-view-render-test--visit source 12)
+          (with-current-buffer source
+            (should-not (buffer-narrowed-p))
+            (should (= 12 (point)))))
+      (kill-buffer source))))
+
+(ert-deftest valsi-view-outline-jump-widens-only-outside-narrowing ()
+  "An outline jump outside the narrowing widens instead of clamping (#58)."
+  (let ((source (generate-new-buffer " *valsi-view-narrowed*")))
+    (unwind-protect
+        (save-window-excursion
+          (with-current-buffer source
+            (insert "# T\n\n## A\n\n## B\n")
+            (narrow-to-region (point-min) 8))
+          (with-temp-buffer
+            (insert-text-button "T" 'valsi-source source 'valsi-pos 1
+                                'action #'valsi-view--outline-jump)
+            (valsi-view--outline-jump (button-at (point-min))))
+          (with-current-buffer source
+            (should (buffer-narrowed-p))
+            (should (= 1 (point))))
+          (with-temp-buffer
+            (insert-text-button "B" 'valsi-source source 'valsi-pos 12
+                                'action #'valsi-view--outline-jump)
+            (valsi-view--outline-jump (button-at (point-min))))
+          (with-current-buffer source
+            (should-not (buffer-narrowed-p))
+            (should (= 12 (point)))))
+      (kill-buffer source))))
+
 (provide 'valsi-view-render-test)
 
 ;;; valsi-view-render-test.el ends here

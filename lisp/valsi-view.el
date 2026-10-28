@@ -192,7 +192,10 @@ expanded state.  BODY is a function called with no arguments."
     (if-let* ((window (get-buffer-window source t)))
         (select-window window)
       (switch-to-buffer source))
-    (when pos (goto-char pos))))
+    (when pos
+      (when (or (< pos (point-min)) (> pos (point-max)))
+        (widen))
+      (goto-char pos))))
 
 (defun valsi-view--outline-entry-nodes (tree)
   "Return TREE's children, descending through singleton wrapper nodes.
@@ -355,7 +358,8 @@ Keep project navigation and directory context associated with the source."
     (unless (buffer-live-p valsi-view--source-buffer)
       (user-error "The table's source buffer has been closed"))
     (pop-to-buffer valsi-view--source-buffer)
-    (widen)
+    (when (or (< position (point-min)) (> position (point-max)))
+      (widen))
     (goto-char position)
     (beginning-of-line)))
 
