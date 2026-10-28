@@ -713,8 +713,9 @@ Refuses on non-speckit dialects (positional ids are meaningful there)."
     (message "Promoted step -> %s" (or id "task"))))
 
 (defconst valsi-plan--leading-id-re
-  "\\`\\(?:\\[[^]]*\\][ \t]*\\)*\\(?:T[0-9]+\\|[0-9]+\\(?:\\.[0-9]+\\)*\\)\\.?[ \t]+"
-  "A leading task-id token (with optional preceding tags), for stripping.")
+  "\\`\\(\\(?:\\[[^]]*\\][ \t]*\\)*\\)\\(?:T[0-9]+\\(?:\\.[0-9]+\\)*\\|[0-9]+\\(?:\\.[0-9]+\\)*\\)[.)]?[ \t]+"
+  "A leading task-id token, for stripping.
+Group 1 holds the tags preceding the id, which are kept.")
 
 (defun valsi-plan-demote-task ()
   "Turn the task at point into a plain step bullet (drop the checkbox and id)."
@@ -730,7 +731,8 @@ Refuses on non-speckit dialects (positional ids are meaningful there)."
            ;; string-match below clobbers the buffer match data, so we edit by
            ;; region rather than `replace-match'.
            (rest (if (string-match valsi-plan--leading-id-re rest)
-                     (substring rest (match-end 0))
+                     (concat (match-string 1 rest)
+                             (substring rest (match-end 0)))
                    rest)))
       (delete-region lbeg lend)
       (goto-char lbeg)

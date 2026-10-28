@@ -34,5 +34,17 @@
     (valsi-plan-move-task-down)
     (should (equal "- [ ] b\n- [ ] a" (buffer-string)))))
 
+(ert-deftest valsi-plan-commands-test-demote-keeps-tags ()
+  "Demote keeps leading tags and strips dotted and `)' ids (#13)."
+  (dolist (case '(("- [ ] [P] T005 foo\n" . "- [P] foo\n")
+                  ("- [ ] T001.2 foo\n" . "- foo\n")
+                  ("- [ ] 1.2) foo\n" . "- foo\n")
+                  ("- [ ] [US1] bar\n" . "- [US1] bar\n")))
+    (with-temp-buffer
+      (insert (car case))
+      (goto-char (point-min))
+      (valsi-plan-demote-task)
+      (should (equal (cdr case) (buffer-string))))))
+
 (provide 'valsi-plan-commands-test)
 ;;; valsi-plan-commands-test.el ends here
