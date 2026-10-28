@@ -175,5 +175,55 @@
           (valsi-projects-remove)
           (should-not (member a (valsi-project-roots))))))))
 
+;; Hub agent rows behave like the Projects rows (#39 follow-up).
+
+(defun valsi-terminal-agent-test--hub-row (name)
+  "Move to agent NAME's row in the current project hub."
+  (goto-char (point-min))
+  (let ((match (text-property-search-forward
+                'valsi-row-id (format "agent:%s" name) #'equal)))
+    (should match)
+    (goto-char (prop-match-beginning match))))
+
+(ert-deftest valsi-terminal-agent-test-hub-row-agent-keys ()
+  "Hub a and k act on the agent row at point, not on primary (#39)."
+  (valsi-projects-test--with-projects
+    (cl-letf (((symbol-function 'valsi-terminal-agent--eat) #'ignore)
+              ((symbol-function 'valsi-terminal-agent--ensure-program)
+               (lambda (program _) program))
+              ((symbol-function 'yes-or-no-p) (lambda (&rest _) t))
+              ((symbol-function 'eat-make)
+               (lambda (name &rest _)
+                 (let ((buffer (generate-new-buffer name)))
+                   (make-pipe-process :name name :buffer buffer :noquery t)
+                   buffer))))
+      (should (eq 'valsi-app-open-agent (lookup-key valsi-app-mode-map (kbd "a"))))
+      (should (eq 'valsi-app-stop-agent (lookup-key valsi-app-mode-map (kbd "k"))))
+      (let ((reviewer (valsi-terminal-agent--start a "reviewer" 'claude))
+            hub)
+        (let ((default-directory a))
+          (setq hub (valsi-app--open nil)))
+        (should (eq 'valsi-app-mode (buffer-local-value 'major-mode hub)))
+        (let ((kill-buffer-query-functions nil))
+          (kill-buffer (valsi-terminal-agent-instance-buffer reviewer)))
+        (with-current-buffer hub
+          (valsi-app-refresh)
+          (valsi-terminal-agent-test--hub-row "reviewer")
+          ;; The stopped row names its agent and the keys acting on it.
+          (should (string-match-p
+                   "reviewer is stopped"
+                   (cadr (should-error (valsi-app-activate) :type 'user-error))))
+          ;; a restarts this row's agent with its backend, not primary.
+          (save-window-excursion (valsi-app-open-agent)))
+        (should-not (valsi-terminal-agent-get a "primary"))
+        (let ((restarted (valsi-terminal-agent-get a "reviewer")))
+          (should restarted)
+          (should (eq 'claude (valsi-terminal-agent-instance-backend restarted))))
+        (with-current-buffer hub
+          (valsi-app-refresh)
+          (valsi-terminal-agent-test--hub-row "reviewer")
+          (valsi-app-stop-agent)
+          (should-not (valsi-terminal-agent-list a)))))))
+
 (provide 'valsi-terminal-agent-test)
 ;;; valsi-terminal-agent-test.el ends here

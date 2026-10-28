@@ -409,13 +409,44 @@ CHANGED-FILES identifies edits that may be analyzed incrementally."
 
 (defun valsi-app--agent-button (button)
   "Focus the terminal agent represented by BUTTON."
-  (valsi-app-hide-sidebars)
   (let ((buffer (button-get button 'valsi-buffer))
         (root valsi-app--root))
     (unless (buffer-live-p buffer)
-      (user-error "Terminal is closed; use a to open an agent"))
+      (user-error "Agent %s is stopped; a restarts it, k dismisses it"
+                  (button-get button 'valsi-agent-name)))
+    (valsi-app-hide-sidebars)
     (switch-to-buffer buffer)
     (valsi-app-show-command-rail buffer root)))
+
+(defun valsi-app--selected-agent ()
+  "Return the registered agent on the current hub row, or nil."
+  (when-let* ((name (get-text-property (line-beginning-position)
+                                       'valsi-agent-name))
+              (root (or valsi-app--root (valsi-terminal-agent-project-root))))
+    (seq-find (lambda (instance)
+                (equal name (valsi-terminal-agent-instance-name instance)))
+              (valsi-terminal-agent-list root))))
+
+(defun valsi-app-open-agent ()
+  "Open or start the agent on the current row, else the primary agent."
+  (interactive)
+  (let ((instance (valsi-app--selected-agent))
+        (default-directory (or valsi-app--root default-directory)))
+    (if instance
+        (valsi-agent (valsi-terminal-agent-instance-name instance)
+                     (valsi-terminal-agent-instance-backend instance))
+      (call-interactively #'valsi-agent))))
+
+(defun valsi-app-stop-agent ()
+  "Stop or dismiss the agent on the current row, or one read from the project."
+  (interactive)
+  (let ((root (or valsi-app--root (valsi-terminal-agent-project-root)))
+        (instance (valsi-app--selected-agent)))
+    (valsi-terminal-agent-stop
+     (if instance
+         (valsi-terminal-agent-instance-name instance)
+       (valsi-terminal-agent--read-registered root "Stop agent: "))
+     root)))
 
 (defun valsi-app--insert-file (entry root &optional section)
   "Insert artifact ENTRY relative to ROOT, identified within SECTION."
@@ -846,13 +877,16 @@ ROOT is the project root; the section is omitted when empty."
          (dolist (entry active)
            (valsi-app--insert-file entry root 'active))
          (dolist (agent agents)
-           (valsi-app--row
-            (format "active-agent:%s"
-                    (valsi-terminal-agent-instance-name agent))
-            (format "  agent %-12s %s"
-                    (valsi-terminal-agent-instance-name agent)
-                    (or (valsi-terminal-agent-instance-task agent)
-                        (valsi-terminal-agent-status-label agent))))))
+           (let ((start (point)))
+             (valsi-app--row
+              (format "active-agent:%s"
+                      (valsi-terminal-agent-instance-name agent))
+              (format "  agent %-12s %s"
+                      (valsi-terminal-agent-instance-name agent)
+                      (or (valsi-terminal-agent-instance-task agent)
+                          (valsi-terminal-agent-status-label agent))))
+             (put-text-property start (point) 'valsi-agent-name
+                                (valsi-terminal-agent-instance-name agent)))))
        nil t))))
 
 (defun valsi-app--insert-artifacts-section (recognized groups root)
@@ -895,6 +929,7 @@ LAYOUT selects the narrow or wide row format."
          (insert-text-button
           (valsi-terminal-agent-instance-name instance)
           'follow-link t 'valsi-buffer buffer
+          'valsi-agent-name (valsi-terminal-agent-instance-name instance)
           'action #'valsi-app--agent-button)
          (insert
           (if (eq layout 'narrow)
@@ -908,7 +943,9 @@ LAYOUT selects the narrow or wide row format."
           start (point)
           `(valsi-row-id
             ,(format "agent:%s"
-                     (valsi-terminal-agent-instance-name instance)))))))
+                     (valsi-terminal-agent-instance-name instance))
+            valsi-agent-name
+            ,(valsi-terminal-agent-instance-name instance))))))
    (format "%d running" (seq-count #'valsi-terminal-agent--live-p agents)) t))
 
 (defun valsi-app--insert-project-section ()
@@ -977,7 +1014,8 @@ LAYOUT selects the narrow or wide row format."
     (define-key map (kbd "/") #'valsi-app-filter)
     (define-key map (kbd "TAB") #'valsi-view-toggle-section)
     (define-key map (kbd "<backtab>") #'backward-button)
-    (define-key map (kbd "a") #'valsi-agent)
+    (define-key map (kbd "a") #'valsi-app-open-agent)
+    (define-key map (kbd "k") #'valsi-app-stop-agent)
     (define-key map (kbd "N") #'valsi-agent-new)
     (define-key map (kbd "S") #'valsi-agent-switch)
     (define-key map (kbd "@") #'valsi-app-handoff)
@@ -1183,9 +1221,10 @@ target belonging to a different row."
     ("T" "tree" valsi-app-project-tree)
     ("b" "buffers" project-switch-to-buffer)]
    ["Agents"
-    ("a" "agent terminal" valsi-agent)
+    ("a" "agent terminal" valsi-app-open-agent)
     ("N" "new named agent" valsi-agent-new)
     ("S" "switch agent" valsi-agent-switch)
+    ("k" "stop agent" valsi-app-stop-agent)
     ("@" "hand off reference" valsi-app-handoff)]
    ["Session"
     ("P" "projects" valsi-projects)
@@ -1277,7 +1316,7 @@ HINTS is a list of (KEY LABEL COMMAND) entries and `gap' group separators."
     ("g" "refresh" valsi-app-refresh)
     ("/" "filter" valsi-app-filter)
     gap
-    ("a" "agent" valsi-agent)
+    ("a" "agent" valsi-app-open-agent)
     ("@" "reference" valsi-app-handoff)
     ("s" "hide context" valsi-app-hide-sidebar)
     ("q" "back" quit-window)
