@@ -58,7 +58,21 @@ The closer uses FENCE's character, is at least as long, and has no info."
   (and (string-match valsi-parse-fence-re text)
        (eq (aref fence 0) (aref (match-string 1 text) 0))
        (>= (length (match-string 1 text)) (length fence))
-       (string-blank-p (match-string 2 text))))
+       ;; Blank info, as `string-blank-p' without another regexp.
+       (let ((info (match-string 2 text)) (i 0))
+         (while (and (< i (length info))
+                     (memq (aref info i) '(?\s ?\t ?\n ?\r)))
+           (setq i (1+ i)))
+         (= i (length info)))))
+
+(defsubst valsi-parse--lead-char (text)
+  "Return the first character of TEXT that is not a space or tab, or nil.
+A cheap guard that lets the per-line recognizers skip their regexps on
+lines that cannot match; see `valsi-test-perf-regexp-working-set'."
+  (let ((i 0) (n (length text)))
+    (while (and (< i n) (memq (aref text i) '(?\s ?\t)))
+      (setq i (1+ i)))
+    (and (< i n) (aref text i))))
 
 (defun valsi-parse-lines (&optional buffer keep-fenced)
   "Return a list of `valsi-line' for every line of BUFFER (or current).
@@ -74,17 +88,27 @@ KEEP-FENCED, return them too, marked by a non-nil `valsi-line-fenced'."
           (let* ((beg (line-beginning-position))
                  (end (line-end-position))
                  (text (buffer-substring-no-properties beg end))
+                 ;; Column of the first non-blank char, nil on a blank line.
+                 (indent (let ((skip (skip-chars-forward " \t" end)))
+                           (and (< (point) end) skip)))
+                 (lead (and indent (aref text indent)))
+                 ;; Only a line led by a fence char can open or close a
+                 ;; fence; the guard keeps the fence regexp off other lines.
                  (fenced (cond (fence
-                                (when (valsi-parse--fence-close-p text fence)
+                                (when (and (eq lead (aref fence 0))
+                                           (valsi-parse--fence-close-p
+                                            text fence))
                                   (setq fence nil))
                                 t)
-                               ((setq fence (valsi-parse--fence-open text))
+                               ((and (memq lead '(?` ?~))
+                                     (setq fence
+                                           (valsi-parse--fence-open text)))
                                 t))))
             (when (or keep-fenced (not fenced))
               (push (valsi-line-create
                      :n n :beg beg :end (min (point-max) (1+ end))
                      :text text
-                     :indent (string-match-p "[^ \t]" text)
+                     :indent indent
                      :fenced fenced)
                     acc)))
           (setq n (1+ n))
@@ -102,13 +126,16 @@ KEEP-FENCED, return them too, marked by a non-nil `valsi-line-fenced'."
 (defun valsi-parse-heading (text)
   "If TEXT is an ATX heading return (LEVEL . TITLE), else nil.
 A closing sequence of hashes (\"## Foo ##\") is not part of TITLE."
-  (when (string-match valsi-parse-heading-re text)
+  (when (and (> (length text) 0) (eq (aref text 0) ?#)
+             (string-match valsi-parse-heading-re text))
     (let ((level (length (match-string 1 text)))
           (title (match-string 2 text)))
       (cons level
             (string-trim
-             (replace-regexp-in-string valsi-parse-heading-close-re ""
-                                       title t t))))))
+             (if (string-search "#" title)
+                 (replace-regexp-in-string valsi-parse-heading-close-re ""
+                                           title t t)
+               title))))))
 
 (defconst valsi-parse-checkbox-re
   "^\\([ \t]*\\)-[ \t]+\\[\\(.\\)\\][ \t]+\\(.*\\)$"
@@ -128,7 +155,8 @@ Descriptive: unknown chars are surfaced, never rewritten."
 (defun valsi-parse-checkbox (text)
   "If TEXT is a checkbox line return a plist, else nil.
 Plist keys: :indent (columns) :state :char :rest :rest-offset."
-  (when (string-match valsi-parse-checkbox-re text)
+  (when (and (eq (valsi-parse--lead-char text) ?-)
+             (string-match valsi-parse-checkbox-re text))
     (list :indent (length (match-string 1 text))
           :char (match-string 2 text)
           :state (valsi-parse-state-char (match-string 2 text))
@@ -140,7 +168,8 @@ Plist keys: :indent (columns) :state :char :rest :rest-offset."
 
 (defun valsi-parse-bullet (text)
   "If TEXT is a plain (non-checkbox) bullet return (INDENT . REST), else nil."
-  (when (and (string-match valsi-parse-bullet-re text)
+  (when (and (eq (valsi-parse--lead-char text) ?-)
+             (string-match valsi-parse-bullet-re text)
              (not (valsi-parse-checkbox text)))
     (cons (length (match-string 1 text)) (match-string 2 text))))
 
@@ -153,6 +182,12 @@ Plist keys: :indent (columns) :state :char :rest :rest-offset."
   "[ \t]*\\(?:T[0-9]+\\(?:\\.[0-9]+\\)*\\|[0-9]+\\(?:\\.[0-9]+\\)*\\)\\.?\\(?:[ \t)]\\|\\'\\)"
   "A task id that may sit among the leading tags (cf. `valsi-parse-id-re').")
 
+(defconst valsi-parse--lead-tag-re (concat "[ \t]*" valsi-parse-tag-re)
+  "A bracketed tag among the leading tokens.")
+
+(defconst valsi-parse--lead-story-re "[ \t]*\\(US[0-9]+\\)\\b"
+  "A bare story id among the leading tokens.")
+
 (defun valsi-parse--match-at (regexp text pos)
   "Return non-nil when REGEXP matches TEXT exactly at POS (match data set)."
   (eq pos (string-match regexp text pos)))
@@ -164,23 +199,34 @@ Only the leading run of tokens counts: bracketed tags, bare story ids,
 and at most one task id (speckit puts it first: \"T001 [P] [US1] do\").
 Brackets after the first word of free description (citations, link text)
 are not tags."
-  (let ((tags nil) (pos 0) (id-seen nil) (done nil))
+  (let ((tags nil) (pos 0) (id-seen nil) (done nil) (len (length text))
+        lead)
     (while (not done)
+      ;; Each token kind starts with a distinct character, so dispatch on
+      ;; the next non-blank one: a regexp that cannot match at POS would
+      ;; otherwise scan the rest of the line before failing.
+      (setq lead (let ((i pos))
+                   (while (and (< i len) (memq (aref text i) '(?\s ?\t)))
+                     (setq i (1+ i)))
+                   (and (< i len) (aref text i))))
       (cond
        ;; [TAG], but not the text of a markdown link [text](url)
-       ((and (valsi-parse--match-at
-              (concat "[ \t]*" valsi-parse-tag-re) text pos)
-             (not (eq ?\( (aref (concat text " ") (match-end 0)))))
+       ((and (eq lead ?\[)
+             (valsi-parse--match-at valsi-parse--lead-tag-re text pos)
+             (not (and (< (match-end 0) len)
+                       (eq ?\( (aref text (match-end 0))))))
         (let ((tok (match-string 1 text)))
           (push (cons tok (valsi-parse--tag-kind tok)) tags)
           (setq pos (match-end 0))))
        ;; bare story id: US1
-       ((valsi-parse--match-at "[ \t]*\\(US[0-9]+\\)\\b" text pos)
+       ((and (eq lead ?U)
+             (valsi-parse--match-at valsi-parse--lead-story-re text pos))
         (let ((tok (match-string 1 text)))
           (unless (assoc tok tags)
             (push (cons tok 'story) tags))
           (setq pos (match-end 0))))
        ((and (not id-seen)
+             lead (or (eq lead ?T) (<= ?0 lead ?9))
              (valsi-parse--match-at valsi-parse--lead-id-re text pos))
         (setq id-seen t
               pos (match-end 0)))
@@ -245,7 +291,8 @@ so ids that contain underscores (FR_2, REQ_1_2) are kept whole.")
 
 (defun valsi-parse-requirements (text)
   "Return a list of requirement ids if TEXT is an R6a trace line."
-  (when (string-match valsi-parse-req-re text)
+  (when (and (string-search "_Requirements:" text)
+             (string-match valsi-parse-req-re text))
     (mapcar #'string-trim
             (split-string (match-string 1 text) "[ ,]+" t))))
 
@@ -256,9 +303,9 @@ Tolerates the colon inside (`**Verify:**') or outside (`**Verify**:') the bold."
 
 (defun valsi-parse-meta-label (text)
   "Return the meta label keyword in TEXT (downcased symbol) or nil."
-  (when (string-match valsi-parse-meta-re text)
-    (intern (downcase (replace-regexp-in-string
-                       " " "-" (match-string 1 text))))))
+  (when (and (eq (valsi-parse--lead-char text) ?*)
+             (string-match valsi-parse-meta-re text))
+    (intern (downcase (string-replace " " "-" (match-string 1 text))))))
 
 (provide 'valsi-parse)
 ;;; valsi-parse.el ends here
