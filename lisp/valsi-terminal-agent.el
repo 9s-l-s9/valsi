@@ -361,13 +361,27 @@ Deliberately small: the CLI owns every printable key."
             valsi-agent-terminal-backends)
     nil t nil nil (symbol-name valsi-agent-terminal-backend))))
 
-(defun valsi-terminal-agent--read-name (root &optional prompt)
-  "Read an agent name at ROOT, using PROMPT when supplied."
-  (let ((names
-         (mapcar #'valsi-terminal-agent-instance-name
-                 (valsi-terminal-agent-list root))))
-    (completing-read (or prompt "Agent name: ") names nil nil nil nil
-                     (if (member "primary" names) "primary" nil))))
+(defun valsi-terminal-agent--check-name (name)
+  "Return agent NAME without surrounding whitespace.
+Signal a user error when nothing remains."
+  (let ((name (string-trim (or name ""))))
+    (when (string-empty-p name)
+      (user-error "Agent name must not be empty"))
+    name))
+
+(defun valsi-terminal-agent--read-name (root &optional prompt new)
+  "Read an agent name at ROOT, using PROMPT when supplied.
+When NEW is non-nil the name is for a new agent: only stopped agents are
+offered for reuse and no running name is proposed as the default."
+  (let* ((instances (valsi-terminal-agent-list root))
+         (names
+          (mapcar #'valsi-terminal-agent-instance-name
+                  (if new
+                      (seq-remove #'valsi-terminal-agent--live-p instances)
+                    instances))))
+    (valsi-terminal-agent--check-name
+     (completing-read (or prompt "Agent name: ") names nil nil nil nil
+                      (if (and (not new) (member "primary" names)) "primary" nil)))))
 
 (defun valsi-terminal-agent--target (&optional name)
   "Return the current project's live target agent, optionally named NAME.
@@ -425,7 +439,7 @@ NAME defaults to \"primary\" and BACKEND to
                (valsi-terminal-agent--read-backend)))
      (list nil nil)))
   (let* ((root (valsi-terminal-agent-project-root))
-         (name (or name "primary"))
+         (name (if name (valsi-terminal-agent--check-name name) "primary"))
          (backend (or backend valsi-agent-terminal-backend))
          (instance (or (valsi-terminal-agent-get root name)
                        (valsi-terminal-agent--start root name backend))))
@@ -437,9 +451,10 @@ NAME defaults to \"primary\" and BACKEND to
   "Start a new named terminal agent NAME using BACKEND."
   (interactive
    (let ((root (valsi-terminal-agent-project-root)))
-     (list (valsi-terminal-agent--read-name root "New agent name: ")
+     (list (valsi-terminal-agent--read-name root "New agent name: " t)
            (valsi-terminal-agent--read-backend))))
-  (let ((root (valsi-terminal-agent-project-root)))
+  (let ((root (valsi-terminal-agent-project-root))
+        (name (valsi-terminal-agent--check-name name)))
     (when (valsi-terminal-agent-get root name)
       (user-error "Agent %s is already running in this project" name))
     (valsi-agent name backend)))

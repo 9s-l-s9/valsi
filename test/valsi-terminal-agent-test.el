@@ -69,5 +69,26 @@
         (should (eq docs (valsi-terminal-agent--target "docs"))))
       (should (= 2 (length (valsi-terminal-agent-list root)))))))
 
+(ert-deftest valsi-terminal-agent-test-rejects-blank-names ()
+  "Empty or whitespace-only agent names are rejected, others trimmed (#41)."
+  (valsi-terminal-agent-test--with-root
+    (should-error (valsi-agent-new "" 'pi) :type 'user-error)
+    (should-error (valsi-agent-new "   " 'pi) :type 'user-error)
+    (should-error (valsi-agent " \t" 'pi) :type 'user-error)
+    (should-not (valsi-terminal-agent-list root))
+    (let ((docs (save-window-excursion (valsi-agent-new " docs " 'pi))))
+      (should (equal "docs" (valsi-terminal-agent-instance-name docs))))
+    (save-window-excursion (valsi-agent "primary" 'pi))
+    ;; RET at the New prompt neither proposes the running primary nor
+    ;; accepts an empty name.
+    (let (default)
+      (cl-letf (((symbol-function 'completing-read)
+                 (lambda (_prompt _collection &optional _pred _req _init _hist def &rest _)
+                   (setq default def)
+                   (or def ""))))
+        (should-error (valsi-terminal-agent--read-name root "New agent name: " t)
+                      :type 'user-error)
+        (should-not default)))))
+
 (provide 'valsi-terminal-agent-test)
 ;;; valsi-terminal-agent-test.el ends here
