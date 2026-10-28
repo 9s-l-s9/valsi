@@ -317,13 +317,21 @@ A project with a running agent must be stopped explicitly before removal."
 (defun valsi-projects-quit ()
   "Return to the window layout from which Projects was opened."
   (interactive)
-  (if-let* ((state (frame-parameter nil 'valsi-projects-origin)))
-      (progn
-        (window-state-put state (frame-root-window) 'safe)
+  (if-let* ((origin (frame-parameter nil 'valsi-projects-origin)))
+      (let ((projects (current-buffer))
+            (root (cdr origin)))
+        (window-state-put (car origin) (frame-root-window) 'safe)
         ;; Emacs 29 restores the selected window without making its
         ;; buffer current.
         (select-window (frame-selected-window))
-        (set-frame-parameter nil 'valsi-projects-origin nil))
+        (set-frame-parameter nil 'valsi-projects-origin nil)
+        ;; Windows whose saved buffers were killed keep showing Projects;
+        ;; they fall back to the origin project's hub.
+        (dolist (window (get-buffer-window-list projects 'nomini))
+          (if (and root (member root (valsi-project-roots)) (file-directory-p root))
+              (set-window-buffer window (valsi-app--buffer root nil))
+            (switch-to-prev-buffer window 'bury)))
+        (set-buffer (window-buffer (selected-window))))
     (quit-window)))
 
 (transient-define-prefix valsi-projects-menu ()
@@ -371,7 +379,9 @@ A project with a running agent must be stopped explicitly before removal."
   (interactive)
   (unless (derived-mode-p 'valsi-projects-mode)
     (valsi-projects--save-layout)
-    (set-frame-parameter nil 'valsi-projects-origin (window-state-get (frame-root-window))))
+    (set-frame-parameter nil 'valsi-projects-origin
+                         (cons (window-state-get (frame-root-window))
+                               (valsi-project-current-root))))
   (let ((buffer (get-buffer-create "*Valsi Projects*")))
     (with-current-buffer buffer
       (unless (derived-mode-p 'valsi-projects-mode) (valsi-projects-mode))
