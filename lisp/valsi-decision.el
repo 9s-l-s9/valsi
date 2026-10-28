@@ -130,9 +130,16 @@ otherwise fall back to the whole cleaned line (kept descriptive)."
       (if (re-search-forward valsi-decision-status-re nil t)
           (progn
             (forward-line 1)
-            (while (looking-at "^[ \t]*$") (forward-line 1))
-            (delete-region (line-beginning-position) (line-end-position))
-            (insert status)
+            (while (and (not (eobp)) (looking-at "^[ \t]*$"))
+              (forward-line 1))
+            ;; Replace only an existing value line; an empty section gets
+            ;; a new line so the next heading (or EOF) is left intact.
+            (cond
+             ((and (eobp) (not (bolp))) (insert "\n\n" status "\n"))
+             ((eobp) (insert status "\n"))
+             ((looking-at "^#+[ \t]") (insert status "\n\n"))
+             (t (delete-region (line-beginning-position) (line-end-position))
+                (insert status)))
             (message "ADR status -> %s" status))
         (message "No ## Status section found")))))
 

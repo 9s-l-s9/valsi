@@ -133,6 +133,36 @@
     (should (string-match-p "missing section: Consequences" reported))
     (should-not (string-match-p "missing section: Context" reported))))
 
+;; Regression tests for issue #1.
+
+(defun valsi-family-test--set-status (text status)
+  "Return TEXT after `valsi-decision-set-status' chooses STATUS."
+  (with-temp-buffer
+    (insert text)
+    (cl-letf (((symbol-function 'completing-read)
+               (lambda (&rest _) status)))
+      (valsi-decision-set-status))
+    (buffer-string)))
+
+(ert-deftest valsi-test-decision-set-status-empty-section ()
+  "An empty Status section gains a value; the next heading survives."
+  (should (equal "# T\n\n## Status\n\nAccepted\n\n## Context\nfoo\n"
+                 (valsi-family-test--set-status
+                  "# T\n\n## Status\n\n## Context\nfoo\n" "Accepted")))
+  (should (equal "# T\n\n## Status\n\nAccepted\n"
+                 (valsi-family-test--set-status
+                  "# T\n\n## Status\n\n" "Accepted")))
+  (should (equal "# T\n\n## Status\n\nAccepted\n"
+                 (valsi-family-test--set-status
+                  "# T\n\n## Status" "Accepted"))))
+
+(ert-deftest valsi-test-decision-set-status-replaces-value ()
+  "An existing status value line is replaced in place."
+  (should (equal "# T\n\n## Status\n\nRejected\n\n## Context\n"
+                 (valsi-family-test--set-status
+                  "# T\n\n## Status\n\nProposed\n\n## Context\n"
+                  "Rejected"))))
+
 ;;;; Overview
 
 (defconst valsi-family-test--readme
