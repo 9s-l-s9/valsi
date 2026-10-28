@@ -15,6 +15,7 @@
 
 (require 'cl-lib)
 (require 'json)
+(require 'subr-x)
 (require 'valsi-proto)
 
 (cl-defstruct (valsi-server (:constructor valsi-server-create))
@@ -149,27 +150,38 @@
   (require 'valsi-registry)
   (valsi-registry-register-bundled))
 
-(defun valsi-server-stdio ()
-  "Run the AAP reference server over stdin/stdout until EOF.
-An unbuffered shell reader inherits the process's stdin through `/proc' and
-tags complete versus unterminated records.  This preserves the strict-LF EOF
-contract that batch minibuffer input otherwise loses.  Output is flushed after
-every response, so callers never wait for process exit."
-  (valsi-server-init)
-  (let* ((server
-          (valsi-server-create
-           :send-function
-           (lambda (record)
-             (princ record)
-             (when (fboundp 'flush-standard-output)
-               (flush-standard-output)))))
-         (wrapper-buffer "")
-         (stdin-path (format "/proc/%d/fd/0" (emacs-pid)))
+(defun valsi-server--stdin-target ()
+  "Return what this process's stdin refers to, or nil if unknown.
+On Linux this is the `/proc' link target, such as \"pipe:[N]\",
+\"socket:[N]\" or a file name."
+  (and (file-directory-p "/proc/self/fd")
+       (file-symlink-p (format "/proc/%d/fd/0" (emacs-pid)))))
+
+(defun valsi-server--stdio-line-loop (server)
+  "Feed SERVER from stdin one line at a time until EOF.
+This is the fallback for stdin that cannot be reopened through `/proc', such
+as the socketpair Node's `child_process.spawn' creates (opening a socket via
+`/proc' fails with ENXIO).  Batch line input cannot tell an unterminated final
+record from a terminated one, and ends a line at CR as well as LF, so this
+path is less strict than the `/proc' reader."
+  (condition-case nil
+      (while t
+        (valsi-server-consume server (concat (read-from-minibuffer "") "\n")))
+    (end-of-file nil))
+  (valsi-server-eof server))
+
+(defun valsi-server--stdio-proc-reader (server stdin-path)
+  "Feed SERVER from STDIN-PATH through an unbuffered shell reader until EOF.
+The reader tags complete versus unterminated records, which preserves the
+strict-LF EOF contract.  A reader failure is reported on stderr and ends
+Emacs with a non-zero status instead of looking like EOF."
+  (let* ((wrapper-buffer "")
+         (errors (generate-new-buffer " *valsi-aap-stdin-errors*"))
          (shell (or (executable-find "sh")
                     (error "AAP stdio requires a POSIX shell")))
          (script
           (concat
-           "exec 3< \"$1\"\n"
+           "exec 3< \"$1\" || exit 3\n"
            "line=\n"
            "while IFS= read -r line <&3; do\n"
            "  printf 'L%s\\n' \"$line\"\n"
@@ -187,6 +199,7 @@ every response, so callers never wait for process exit."
            :connection-type 'pipe
            :coding 'utf-8-unix
            :noquery t
+           :stderr errors
            :filter
            (lambda (_process chunk)
              (setq wrapper-buffer (concat wrapper-buffer chunk))
@@ -210,8 +223,35 @@ every response, so callers never wait for process exit."
     (while (process-live-p reader)
       (accept-process-output reader 0.1))
     (accept-process-output reader 0.1)
+    (unless (zerop (process-exit-status reader))
+      (message "valsi-server-stdio: cannot read stdin (%s): %s"
+               stdin-path
+               (string-trim (with-current-buffer errors (buffer-string))))
+      (kill-emacs 2))
     (unless (valsi-server-closed server)
       (valsi-server-eof server))))
+
+(defun valsi-server-stdio ()
+  "Run the AAP reference server over stdin/stdout until EOF.
+When stdin is a pipe or file, an unbuffered shell reader inherits it through
+`/proc' and tags complete versus unterminated records.  This preserves the
+strict-LF EOF contract that batch minibuffer input otherwise loses.  A socket
+\(as created by Node's `child_process.spawn') cannot be reopened that way, so
+it is read line by line instead.  Output is flushed after every response, so
+callers never wait for process exit."
+  (valsi-server-init)
+  (let ((server
+         (valsi-server-create
+          :send-function
+          (lambda (record)
+            (princ record)
+            (when (fboundp 'flush-standard-output)
+              (flush-standard-output)))))
+        (target (valsi-server--stdin-target)))
+    (if (and target (not (string-prefix-p "socket:" target)))
+        (valsi-server--stdio-proc-reader
+         server (format "/proc/%d/fd/0" (emacs-pid)))
+      (valsi-server--stdio-line-loop server))))
 
 (provide 'valsi-server)
 ;;; valsi-server.el ends here
