@@ -241,20 +241,30 @@ Architecture Decision Records under @file{doc/adr/} (also @file{docs/adr/},
 @file{adr/}, or a @file{decisions/} directory) in the Nygard or MADR shape;
 evidence tier @code{standardized}.  The grammar takes the first level-1
 heading as the title, records every other heading as a section, and reads the
-status from the first non-blank line after @code{## Status}, recognizing the
+status from whichever comes first: a YAML frontmatter @code{status:} key
+(MADR), an inline @samp{Status: @var{value}} line before the first section
+(also as a list item, as in MADR 2), or the first non-blank line after
+@code{## Status}.  It recognizes the
 lifecycle values @code{Proposed}, @code{Accepted}, @code{Rejected},
 @code{Deprecated}, and @code{Superseded} with an optional @samp{by ADR-NNNN}
 clause.  The lifecycle word is matched case-insensitively as a whole word
 (MADR's @samp{accepted} reads as @code{Accepted}) and a leading list marker
 is ignored.  Any other status line is kept verbatim and linted as
 non-standard.  @code{Context},
-@code{Decision}, and @code{Consequences} are the canonical sections;
+@code{Decision}, and @code{Consequences} are the canonical sections; MADR's
+@code{Context and Problem Statement} and @code{Decision Outcome} count as
+Context and Decision, @code{Positive Consequences} and
+@code{Negative Consequences} as Consequences, and in a record with a MADR
+heading Consequences is optional.  Other MADR sections (options, pros and
+cons) are recorded as plain sections.
 @code{Supersedes}/@code{Superseded by}/@code{Amends} references are
 highlighted but not resolved.
 
 Commands: @code{info} (title, status, and the sections present),
-@code{set-status} (also bound to toggle; rewrites the status value line from a
-completing-read over the lifecycle values, available once a status exists), a
+@code{set-status} (also bound to toggle; rewrites the status value from a
+completing-read over the lifecycle values, available once a status exists; a
+frontmatter or inline value is replaced in place, keeping its quotes and a
+lowercase spelling), a
 lint that reports a missing or non-standard status and missing canonical
 sections, and a dashboard listing every ADR in the decision directory with its
 title and status; @key{RET} on a row visits the record.

@@ -212,6 +212,41 @@
           (should (string-match-p "non-standard status" reported))
         (should (equal "Valsi ADR: complete" reported))))))
 
+;; Regression tests for issue #66.
+
+(defconst valsi-family-test--madr
+  (concat "---\nstatus: accepted\ndate: 2026-01-01\n---\n"
+          "# Use MADR\n\n"
+          "## Context and Problem Statement\nc\n"
+          "## Decision Outcome\nd\n")
+  "A MADR 3 record: frontmatter status, MADR section names.")
+
+(ert-deftest valsi-test-decision-madr-record ()
+  "MADR frontmatter status and section names satisfy the lint."
+  (let ((root (valsi-decision-parse valsi-family-test--madr)))
+    (should (equal "Accepted" (valsi-node-prop root :status)))
+    (should (equal "Use MADR" (valsi-node-prop root :title))))
+  (should (equal "Valsi ADR: complete"
+                 (valsi-family-test--lint valsi-family-test--madr)))
+  (should (string-prefix-p "---\nstatus: rejected\ndate: 2026-01-01\n---\n"
+                           (valsi-family-test--set-status
+                            valsi-family-test--madr "Rejected"))))
+
+(ert-deftest valsi-test-decision-inline-status ()
+  "An inline Status line before the first section is the status."
+  (let ((text (concat "# 1. X\n\nStatus: Superseded by ADR-0002\n\n"
+                      "## Context\nc\n## Decision\nd\n"
+                      "## Consequences\nStatus: not this\n")))
+    (should (equal "Superseded by ADR-0002"
+                   (valsi-node-prop (valsi-decision-parse text) :status)))
+    (should (equal "Valsi ADR: complete" (valsi-family-test--lint text)))
+    (should (string-prefix-p "# 1. X\n\nStatus: Deprecated\n\n"
+                             (valsi-family-test--set-status text "Deprecated"))))
+  (should (equal "Proposed"
+                 (valsi-node-prop
+                  (valsi-decision-parse "# X\n\n* **Status:** proposed\n")
+                  :status))))
+
 ;;;; Overview
 
 (defconst valsi-family-test--readme

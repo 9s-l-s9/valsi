@@ -9,7 +9,9 @@
 ;;
 ;; Evidence tier: standardized (adr.github.io, MADR).  Recognizes the ADR
 ;; title, the Status value + lifecycle (proposed/accepted/deprecated/
-;; superseded), and the canonical sections (Context/Decision/Consequences).
+;; superseded) from a `## Status' section, an inline `Status:' line, or MADR
+;; frontmatter, and the canonical sections (Context/Decision/Consequences,
+;; with MADR's section names as aliases).
 ;; Provides a status readout, an ADR-directory dashboard, a status editor, and
 ;; a lint (missing status / sections).
 
@@ -37,27 +39,79 @@
   '("Context" "Decision" "Consequences")
   "Canonical ADR body sections.")
 
+(defconst valsi-decision-section-aliases
+  '(("Context" "Context" "Context and Problem Statement")
+    ("Decision" "Decision" "Decision Outcome")
+    ("Consequences" "Consequences" "Positive Consequences"
+     "Negative Consequences"))
+  "Each canonical section followed by the heading titles that name it.
+The longer titles are MADR's.")
+
+(defconst valsi-decision-madr-sections
+  '("Context and Problem Statement" "Decision Outcome")
+  "Headings that mark a MADR record, where Consequences is optional.")
+
+(defconst valsi-decision-frontmatter-re "\\`---[ \t]*\\'"
+  "A YAML frontmatter fence line.")
+
+(defconst valsi-decision-status-key-re
+  "[ \t]*\\(?:[-+*][ \t]+\\)?[*_]*Status[*_]*[ \t]*:[*_]*[ \t]*\\(.*[^ \t\n]\\)"
+  "An inline `Status: VALUE' line or frontmatter `status:' key, unanchored.")
+
 ;;;; Parse
 
 (defun valsi-decision-parse (content)
   "Parse CONTENT (a string) into an offset-based ADR node tree."
   (valsi-parse-in-content content #'valsi-decision--parse-current))
 
+(defun valsi-decision--frontmatter-end (lines)
+  "Return the closing fence line of a frontmatter block opening LINES, or nil."
+  (when (and lines (string-match-p valsi-decision-frontmatter-re
+                                   (valsi-line-text (car lines))))
+    (cl-find-if (lambda (ln) (string-match-p valsi-decision-frontmatter-re
+                                             (valsi-line-text ln)))
+                (cdr lines))))
+
+(defun valsi-decision--status-key (text)
+  "Return the value of a `Status:' line TEXT (quotes stripped), or nil."
+  (let ((case-fold-search t))
+    (when (string-match (concat "\\`" valsi-decision-status-key-re) text)
+      (let ((v (match-string 1 text)))
+        (if (string-match "\\`\\([\"']\\)\\(.*\\)\\1\\'" v)
+            (match-string 2 v)
+          v)))))
+
 (defun valsi-decision--parse-current ()
-  "Parse the current buffer into an ADR node tree (buffer positions)."
-  (let ((root (valsi-node-create :type 'decision
-                                :beg (point-min) :end (point-max)
-                                :recognizer 'valsi-decision))
-        (in-status nil))
-    (dolist (line (valsi-parse-lines (current-buffer)))
+  "Parse the current buffer into an ADR node tree (buffer positions).
+The status comes from a frontmatter `status:' key (MADR), a `## Status'
+section, or an inline `Status:' line before the first section, whichever
+appears first."
+  (let* ((root (valsi-node-create :type 'decision
+                                 :beg (point-min) :end (point-max)
+                                 :recognizer 'valsi-decision))
+         (lines (valsi-parse-lines (current-buffer)))
+         (fm-end (valsi-decision--frontmatter-end lines))
+         (in-frontmatter fm-end)
+         (in-status nil)
+         (in-preamble t))
+    (dolist (line lines)
       (let* ((text (valsi-line-text line))
-             (heading (valsi-parse-heading text)))
+             (heading (and (not in-frontmatter) (valsi-parse-heading text)))
+             (key (and (or in-frontmatter in-preamble)
+                       (null (valsi-node-prop root :status))
+                       (valsi-decision--status-key text))))
         (cond
+         ;; Frontmatter (only its status key is read)
+         (in-frontmatter
+          (when key
+            (valsi-node-put root :status (valsi-decision--status-of key)))
+          (when (eq line fm-end) (setq in-frontmatter nil)))
          ;; Title (first level-1 heading)
          ((and heading (= 1 (car heading)) (null (valsi-node-prop root :title)))
           (valsi-node-put root :title (cdr heading)))
          ;; Section headings
          (heading
+          (setq in-preamble nil)
           (setq in-status (string-match-p valsi-decision-status-re text))
           (valsi-node-add-child
            root (valsi-node-create
@@ -69,8 +123,17 @@
          ((and in-status (string-match "[^ \t]" text)
                (null (valsi-node-prop root :status)))
           (valsi-node-put root :status (valsi-decision--status-of text))
-          (setq in-status nil)))))
+          (setq in-status nil))
+         ;; Inline `Status: Accepted' line before the first section
+         ;; (Nygard variant, MADR 2 metadata list)
+         (key
+          (valsi-node-put root :status (valsi-decision--status-of key))))))
     root))
+
+(defun valsi-decision--canonical-section (title)
+  "Return the canonical section named by heading TITLE, or nil."
+  (car (cl-find-if (lambda (entry) (member-ignore-case title (cdr entry)))
+                   valsi-decision-section-aliases)))
 
 (defconst valsi-decision--status-word-re
   (concat "\\(" (mapconcat #'identity valsi-decision-statuses "\\|") "\\)\\>")
@@ -118,7 +181,8 @@ The base word is the text before a `by' clause, compared case-insensitively."
 ;;;; Font-lock
 
 (defvar valsi-decision-font-lock-keywords
-  `(("^##[ \t]+\\(Status\\|Context\\|Decision\\|Consequences\\)[ \t]*$"
+  `((,(concat "^##[ \t]+\\(Status\\|Context\\(?: and Problem Statement\\)?"
+              "\\|Decision\\(?: Outcome\\)?\\|Consequences\\)[ \t]*$")
      1 'valsi-story-face)
     (,(concat "\\_<\\("
               (mapconcat #'identity valsi-decision-statuses "\\|")
@@ -141,27 +205,57 @@ The base word is the text before a `by' clause, compared case-insensitively."
              (or (valsi-node-prop root :status) "none")
              (mapconcat #'identity sections ", "))))
 
+(defun valsi-decision--set-status-key (status)
+  "Replace the value of a `Status:' line before the first section with STATUS.
+Covers a frontmatter `status:' key and an inline `Status:' line.  Quotes
+around the old value are kept and a lowercase old value (MADR) keeps
+STATUS lowercase.  Return non-nil when a value was replaced."
+  (let ((case-fold-search t)
+        (limit (save-excursion
+                 (goto-char (point-min))
+                 (and (re-search-forward "^#\\{2,6\\}[ \t]" nil t)
+                      (match-beginning 0)))))
+    (goto-char (point-min))
+    (when (re-search-forward
+           (concat "^" valsi-decision-status-key-re) limit t)
+      (let* ((beg (match-beginning 1)) (end (match-end 1))
+             (old (match-string 1))
+             (quoted (string-match-p "\\`\\([\"']\\).*\\1\\'" old)))
+        (when quoted (setq beg (1+ beg) end (1- end)))
+        (let ((case-fold-search nil))
+          (when (string-match-p "\\`[\"']?[[:lower:]]" old)
+            (setq status (downcase status))))
+        (delete-region beg end)
+        (goto-char beg)
+        (insert status)
+        t))))
+
 (defun valsi-decision-set-status ()
-  "Set the ADR status to a chosen lifecycle value, updating the value line."
+  "Set the ADR status to a chosen lifecycle value, updating the value line.
+The value is a frontmatter `status:' key or inline `Status:' line before
+the first section, else the first line of the `## Status' section."
   (interactive)
   (let ((status (completing-read "Status: " valsi-decision-statuses nil nil)))
     (save-excursion
       (goto-char (point-min))
-      (if (re-search-forward valsi-decision-status-re nil t)
-          (progn
-            (forward-line 1)
-            (while (and (not (eobp)) (looking-at "^[ \t]*$"))
-              (forward-line 1))
-            ;; Replace only an existing value line; an empty section gets
-            ;; a new line so the next heading (or EOF) is left intact.
-            (cond
-             ((and (eobp) (not (bolp))) (insert "\n\n" status "\n"))
-             ((eobp) (insert status "\n"))
-             ((looking-at "^#+[ \t]") (insert status "\n\n"))
-             (t (delete-region (line-beginning-position) (line-end-position))
-                (insert status)))
-            (message "ADR status -> %s" status))
-        (message "No ## Status section found")))))
+      (cond
+       ((valsi-decision--set-status-key status)
+        (message "ADR status -> %s" status))
+       ((progn (goto-char (point-min))
+               (re-search-forward valsi-decision-status-re nil t))
+        (forward-line 1)
+        (while (and (not (eobp)) (looking-at "^[ \t]*$"))
+          (forward-line 1))
+        ;; Replace only an existing value line; an empty section gets
+        ;; a new line so the next heading (or EOF) is left intact.
+        (cond
+         ((and (eobp) (not (bolp))) (insert "\n\n" status "\n"))
+         ((eobp) (insert status "\n"))
+         ((looking-at "^#+[ \t]") (insert status "\n\n"))
+         (t (delete-region (line-beginning-position) (line-end-position))
+            (insert status)))
+        (message "ADR status -> %s" status))
+       (t (message "No ## Status section found"))))))
 
 (defun valsi-decision-lint ()
   "Lint the ADR: missing status or canonical sections."
@@ -169,6 +263,10 @@ The base word is the text before a `by' clause, compared case-insensitively."
   (let* ((root (valsi-tree))
          (titles (mapcar (lambda (s) (valsi-node-prop s :title))
                          (valsi-node-of-type root 'section)))
+         (present (mapcar #'valsi-decision--canonical-section titles))
+         (madr (cl-some (lambda (title)
+                          (member-ignore-case title valsi-decision-madr-sections))
+                        titles))
          (issues nil))
     (unless (valsi-node-prop root :status)
       (push "missing Status value" issues))
@@ -177,8 +275,9 @@ The base word is the text before a `by' clause, compared case-insensitively."
                      (valsi-node-prop root :status))))
       (push (format "non-standard status %S" (valsi-node-prop root :status))
             issues))
-    (dolist (s valsi-decision-sections)
-      (unless (member s titles)
+    (dolist (s (if madr (remove "Consequences" valsi-decision-sections)
+                 valsi-decision-sections))
+      (unless (member s present)
         (push (format "missing section: %s" s) issues)))
     (if (null issues)
         (message "Valsi ADR: complete")
@@ -240,9 +339,12 @@ The base word is the text before a `by' clause, compared case-insensitively."
       (goto-char (point-min))
       (when (re-search-forward valsi-decision-status-re nil t) (cl-incf score 3))
       (goto-char (point-min))
-      (when (re-search-forward "^##[ \t]+Context[ \t]*$" nil t) (cl-incf score 1))
+      (when (re-search-forward
+             "^##[ \t]+Context\\(?: and Problem Statement\\)?[ \t]*$" nil t)
+        (cl-incf score 1))
       (goto-char (point-min))
-      (when (re-search-forward "^##[ \t]+Decision[ \t]*$" nil t) (cl-incf score 1)))
+      (when (re-search-forward "^##[ \t]+Decision\\(?: Outcome\\)?[ \t]*$" nil t)
+        (cl-incf score 1)))
     score))
 
 (defun valsi-decision-register ()
