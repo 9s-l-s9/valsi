@@ -222,7 +222,8 @@ parents so each subtree contributes once, without recursive recomputation."
 ;;;; Dialect detection
 
 (defun valsi-plan--detect-dialect (root)
-  "Score dialect profiles for ROOT; return the winning profile symbol."
+  "Score dialect profiles for ROOT; return the winning profile symbol.
+A plan with no dialect evidence at all is `plain' (no ids are minted)."
   (let ((speckit 0) (kiro 0) (superpowers 0) (gsd 0))
     (dolist (task (valsi-node-of-type root 'task))
       (let ((id (valsi-node-prop task :id)))
@@ -238,7 +239,9 @@ parents so each subtree contributes once, without recursive recomputation."
       (setq gsd 10))
     (let ((scores (list (cons 'speckit speckit) (cons 'kiro kiro)
                         (cons 'superpowers superpowers) (cons 'gsd gsd))))
-      (car (cl-reduce (lambda (a b) (if (>= (cdr a) (cdr b)) a b)) scores)))))
+      (if (cl-every (lambda (s) (zerop (cdr s))) scores)
+          'plain
+        (car (cl-reduce (lambda (a b) (if (>= (cdr a) (cdr b)) a b)) scores))))))
 
 (defun valsi-plan-detect-dialect ()
   "Report the detected dialect profile for this plan buffer."
