@@ -95,6 +95,35 @@
       (should (equal "# First\n- [ ] T001 First task\n"
                      (with-temp-buffer (insert-file-contents fa) (buffer-string)))))))
 
+(ert-deftest valsi-projects-forget-canonicalizes-like-remember ()
+  "Forgetting through a symlink or without a trailing slash removes the root."
+  (valsi-projects-test--with-projects
+    (let ((alias (expand-file-name "alias" base))
+          (valsi-project-file (expand-file-name "state/projects.eld" base)))
+      (make-symbolic-link a alias)
+      (valsi-project-remember alias)
+      (valsi-project-remember b)
+      (should (equal (list a b) (valsi-project-roots)))
+      (valsi-project-forget alias)
+      (should (equal (list b) (valsi-project-roots)))
+      (valsi-project-forget (directory-file-name b))
+      (should-not (valsi-project-roots))
+      (let ((valsi-project--roots nil) (valsi-project--saved-roots nil)
+            (valsi-project--loaded nil))
+        (should-not (valsi-project-roots))))))
+
+(ert-deftest valsi-projects-forget-remote-root-does-not-connect ()
+  "Forgetting a remembered remote root does not canonicalize it."
+  (valsi-projects-test--with-projects
+    (let ((valsi-project--saved-roots '("/ssh:offline:/work/app/"))
+          (truename (symbol-function 'file-truename)))
+      (cl-letf (((symbol-function 'file-truename)
+                 (lambda (name &rest args)
+                   (should-not (file-remote-p name))
+                   (apply truename name args))))
+        (valsi-project-forget "/ssh:offline:/work/app/")
+        (should-not (valsi-project-roots))))))
+
 (ert-deftest valsi-projects-invalid-state-is-not-overwritten ()
   "Bad declarations stay intact, and unavailable saved roots remain visible."
   (valsi-projects-test--with-projects
