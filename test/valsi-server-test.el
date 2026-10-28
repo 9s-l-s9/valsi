@@ -290,5 +290,67 @@
                                      :id)))
     (should (equal grammars (valsi-registry-all)))))
 
+(defun valsi-server-test--emacs-program ()
+  "Return the running Emacs binary for a real-stdio test, or nil."
+  (or (let ((self (expand-file-name invocation-name invocation-directory)))
+        (and (file-executable-p self) self))
+      (executable-find invocation-name)
+      (executable-find "emacs")))
+
+(defun valsi-server-test--stdio-bytes (input &optional environment)
+  "Run a real stdio server on unibyte INPUT; return its raw stdout bytes.
+ENVIRONMENT entries are prepended to `process-environment'."
+  (let ((program (valsi-server-test--emacs-program))
+        (process-environment (append environment process-environment))
+        (coding-system-for-read 'binary)
+        (coding-system-for-write 'binary))
+    (with-temp-buffer
+      (set-buffer-multibyte nil)
+      (insert input)
+      (should (zerop (call-process-region
+                      (point-min) (point-max) program t '(t nil) nil
+                      "-Q" "--batch"
+                      "--eval" "(setq load-prefer-newer t)"
+                      "-L" (expand-file-name "lisp" default-directory)
+                      "-l" "valsi-server" "-f" "valsi-server-stdio")))
+      (buffer-string))))
+
+(ert-deftest valsi-test-server-real-stdio-writes-utf-8 ()
+  "Issue #79: non-ASCII output is valid UTF-8 on stdout, in any locale."
+  (skip-unless (file-exists-p "/proc/self/fd/0"))
+  (skip-unless (valsi-server-test--emacs-program))
+  (let* ((uri "café-\U0001F600- .md")
+         (text "# Café \U0001F600 x\n- [ ] T1 naïve\n")
+         (input (encode-coding-string
+                 (concat
+                  (json-serialize
+                   (list :jsonrpc "2.0" :id 1 :method "artifact/didOpen"
+                         :params (list :uri uri :text text)))
+                  "\n"
+                  (json-serialize
+                   (list :jsonrpc "2.0" :id 2 :method "artifact/symbols"
+                         :params (list :uri uri)))
+                  "\n")
+                 'utf-8-unix)))
+    (dolist (environment '(nil ("LC_ALL=C" "LANG=C")))
+      (let ((bytes (valsi-server-test--stdio-bytes input environment)))
+        (should-not (multibyte-string-p bytes))
+        ;; é is C3 A9, U+1F600 is F0 9F 98 80 and U+2028 is E2 80 A8; never
+        ;; Emacs's internal raw-byte forms such as C1 83 C0 A9.
+        (should (string-search
+                 "caf\303\251-\360\237\230\200-\342\200\250.md" bytes))
+        (should (string-search "Caf\303\251 \360\237\230\200" bytes))
+        (should-not (string-match-p "[\300\301]" bytes))
+        ;; U+2028 is data, so there are exactly two LF-terminated records.
+        (should (= 2 (cl-count ?\n bytes)))
+        (let ((records (split-string
+                        (decode-coding-string bytes 'utf-8-unix) "\n" t)))
+          (should (equal uri
+                         (plist-get
+                          (plist-get (json-parse-string
+                                      (car records) :object-type 'plist)
+                                     :result)
+                          :uri))))))))
+
 (provide 'valsi-server-test)
 ;;; valsi-server-test.el ends here

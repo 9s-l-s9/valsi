@@ -43,9 +43,21 @@
           :id (or id :null)
           :error error)))
 
+(defun valsi-server--write-stdout (record)
+  "Write RECORD to stdout as UTF-8 bytes and flush.
+`json-serialize' returns unibyte UTF-8; `princ' would print each byte as a
+raw-byte character in its internal two-byte form.  A unibyte string reaches
+`send-string-to-terminal' unconverted, independent of the locale."
+  (send-string-to-terminal
+   (if (multibyte-string-p record)
+       (encode-coding-string record 'utf-8-unix)
+     record)))
+
 (defun valsi-server--send (server value)
-  "Encode VALUE as one strict-LF JSON record through SERVER."
-  (funcall (or (valsi-server-send-function server) #'princ)
+  "Encode VALUE as one strict-LF JSON record through SERVER.
+The record is a unibyte UTF-8 string."
+  (funcall (or (valsi-server-send-function server)
+               #'valsi-server--write-stdout)
            (concat (json-serialize value :null-object :null
                                    :false-object :false)
                    "\n")))
@@ -240,13 +252,8 @@ strict-LF EOF contract that batch minibuffer input otherwise loses.  A socket
 it is read line by line instead.  Output is flushed after every response, so
 callers never wait for process exit."
   (valsi-server-init)
-  (let ((server
-         (valsi-server-create
-          :send-function
-          (lambda (record)
-            (princ record)
-            (when (fboundp 'flush-standard-output)
-              (flush-standard-output)))))
+  (let ((server (valsi-server-create
+                 :send-function #'valsi-server--write-stdout))
         (target (valsi-server--stdin-target)))
     (if (and target (not (string-prefix-p "socket:" target)))
         (valsi-server--stdio-proc-reader

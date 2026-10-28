@@ -79,3 +79,27 @@ test("issue #78: the real server answers a client spawned with a socketpair stdi
 		client.close();
 	}
 });
+
+test("issue #79: the real server round-trips non-ASCII text in any locale", { skip }, async () => {
+	const uri = "café-\u{1F600}- .md";
+	for (const env of [process.env, { ...process.env, LC_ALL: "C", LANG: "C" }]) {
+		const client = realServer({ env });
+		let raw = "";
+		client.child.stdout.on("data", (chunk) => {
+			raw += chunk;
+		});
+		try {
+			const opened = await client.request("artifact/didOpen", {
+				uri,
+				text: "# Café \u{1F600} x\n- [ ] T1 naïve\n",
+			});
+			assert.equal(opened.uri, uri);
+			const symbols = await client.request("artifact/symbols", { uri });
+			assert.equal(symbols.children[0].props.title, "Café \u{1F600} x");
+			// Invalid UTF-8 would have been decoded to U+FFFD.
+			assert.ok(!raw.includes("�"));
+		} finally {
+			client.close();
+		}
+	}
+});
