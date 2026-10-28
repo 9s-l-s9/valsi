@@ -95,6 +95,9 @@ Nil means stale; `valsi-tree' refetches it from the server via the proto layer."
 (defvar-local valsi--synced-version nil
   "Text tick and grammar revision last synchronized with the server.")
 
+(defvar-local valsi--open-uri nil
+  "The uri this buffer's document is open under on the server, or nil.")
+
 (defvar valsi--interaction-state)
 (defvar valsi--original-read-only)
 
@@ -114,10 +117,20 @@ Nil means stale; `valsi-tree' refetches it from the server via the proto layer."
   "Return the document uri for the current buffer."
   (or buffer-file-name (buffer-name)))
 
+(defun valsi--close-document ()
+  "Send artifact/didClose for the uri this buffer's document is open under."
+  (when valsi--open-uri
+    (valsi--request 'artifact/didClose (list :uri valsi--open-uri))
+    (setq valsi--open-uri nil)))
+
 (defun valsi--sync (&optional open)
   "Push the buffer's content to the server (didChange, or didOpen when OPEN).
 Records the resolved grammar + capabilities.  Marks the local tree stale."
   (unless valsi--initialized (valsi-init))
+  ;; `rename-buffer' or `write-file' moved the document: close the old uri.
+  (unless (equal valsi--open-uri (valsi--uri))
+    (valsi--close-document)
+    (setq open t))
   (let ((resp (save-restriction
                 (widen)
                 (valsi--request
@@ -125,6 +138,7 @@ Records the resolved grammar + capabilities.  Marks the local tree stale."
                  (list :uri (valsi--uri)
                        :text (buffer-substring-no-properties
                               (point-min) (point-max)))))))
+    (setq valsi--open-uri (valsi--uri))
     (setq valsi--grammar (plist-get resp :grammar))
     (setq valsi--capabilities (plist-get resp :capabilities))
     (setq valsi--tree nil)
@@ -400,12 +414,13 @@ a keymap (\\{valsi-artifact-mode-map})."
         (add-hook 'after-save-hook #'valsi-refresh nil t)
         (add-hook 'post-command-hook #'valsi--update-sidebar-context nil t)
         (add-hook 'kill-buffer-hook #'valsi--cancel-refresh nil t)
+        (add-hook 'kill-buffer-hook #'valsi--close-document nil t)
         ;; No explicit sidebar display here: chrome is reconciled with the
         ;; displayed buffers by `valsi-app--sync-chrome' on the window hooks,
         ;; which fire once this buffer is actually shown.
         (valsi-app--install-window-hooks)
         (valsi-enter-browse))
-    (valsi--request 'artifact/didClose (list :uri (valsi--uri)))
+    (valsi--close-document)
     (setq valsi--tree nil valsi--synced-version nil)
     (valsi-view-set-font-lock nil)
     (setq-local header-line-format nil)
@@ -413,6 +428,7 @@ a keymap (\\{valsi-artifact-mode-map})."
     (remove-hook 'after-save-hook #'valsi-refresh t)
     (remove-hook 'post-command-hook #'valsi--update-sidebar-context t)
     (remove-hook 'kill-buffer-hook #'valsi--cancel-refresh t)
+    (remove-hook 'kill-buffer-hook #'valsi--close-document t)
     (valsi--cancel-refresh)
     (valsi-browse-mode -1)
     (setq valsi--interaction-state nil)

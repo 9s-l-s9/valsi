@@ -659,6 +659,41 @@ interior-state contradictions."
     (valsi-proto-request 'artifact/didClose (list :uri uri))
     (should-not (member uri (valsi-proto-open-uris)))))
 
+(ert-deftest valsi-test-kill-buffer-closes-document ()
+  "Killing an artifact buffer sends didClose (issue #3)."
+  (valsi-init)
+  (valsi-proto-reset)
+  (let ((buf (generate-new-buffer "kill-close")))
+    (with-current-buffer buf
+      (setq buffer-file-name "/tmp/valsi-kill-close/PLAN.md")
+      (insert "# Plan\n- [ ] T001 ship\n")
+      (text-mode)
+      (let ((valsi-app-auto-sidebar nil))
+        (valsi-artifact-minor-mode 1)))
+    (should (member "/tmp/valsi-kill-close/PLAN.md" (valsi-proto-open-uris)))
+    (with-current-buffer buf (set-buffer-modified-p nil))
+    (kill-buffer buf)
+    (should-not (member "/tmp/valsi-kill-close/PLAN.md"
+                        (valsi-proto-open-uris)))))
+
+(ert-deftest valsi-test-uri-change-closes-old-document ()
+  "Renaming an artifact's uri closes the document under the old uri (#3)."
+  (valsi-init)
+  (valsi-proto-reset)
+  (with-temp-buffer
+    (setq buffer-file-name "/tmp/valsi-uri-change/PLAN.md")
+    (insert "# Plan\n- [ ] T001 ship\n")
+    (text-mode)
+    (let ((valsi-app-auto-sidebar nil))
+      (valsi-artifact-minor-mode 1))
+    (setq buffer-file-name "/tmp/valsi-uri-change/TASKS.md")
+    (valsi-tree)
+    (should (equal '("/tmp/valsi-uri-change/TASKS.md")
+                   (valsi-proto-open-uris)))
+    (valsi-artifact-minor-mode -1)
+    (should-not (valsi-proto-open-uris))
+    (set-buffer-modified-p nil)))
+
 (ert-deftest valsi-test-proto-hot-reload ()
   "grammar/register through proto re-resolves already-open documents."
   (valsi-init)
