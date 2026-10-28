@@ -186,7 +186,8 @@ By id sort-key prefix when both have keys, else by indent."
 
 (defun valsi-plan--state-index (root)
   "Return effective states and leaf counts for every node below ROOT.
-Each value has :state, :done, :total and :active fields.  Visit children before
+Each value has :state, :done, :total and :active fields.  Cancelled leaves
+are excluded from the counts.  Visit children before
 parents so each subtree contributes once, without recursive recomputation."
   (let ((index (make-hash-table :test #'eq))
         (pending (list root))
@@ -203,8 +204,10 @@ parents so each subtree contributes once, without recursive recomputation."
             (cl-incf total (plist-get stats :total))
             (cl-incf active (plist-get stats :active))))
         (if (and (eq (valsi-node-type node) 'task) (zerop total))
+            ;; A cancelled leaf leaves the denominator rather than
+            ;; counting as unfinished work.
             (setq state (valsi-node-prop node :state)
-                  total 1
+                  total (if (eq state 'cancelled) 0 1)
                   done (if (eq state 'done) 1 0)
                   active (if (eq state 'in-progress) 1 0))
           (setq state (cond ((zerop total) nil)
@@ -222,7 +225,8 @@ parents so each subtree contributes once, without recursive recomputation."
 ;;;; Dialect detection
 
 (defun valsi-plan--detect-dialect (root)
-  "Score dialect profiles for ROOT; return the winning profile symbol."
+  "Score dialect profiles for ROOT; return the winning profile symbol.
+A plan with no dialect evidence at all is `plain' (no ids are minted)."
   (let ((speckit 0) (kiro 0) (superpowers 0) (gsd 0))
     (dolist (task (valsi-node-of-type root 'task))
       (let ((id (valsi-node-prop task :id)))
@@ -238,7 +242,9 @@ parents so each subtree contributes once, without recursive recomputation."
       (setq gsd 10))
     (let ((scores (list (cons 'speckit speckit) (cons 'kiro kiro)
                         (cons 'superpowers superpowers) (cons 'gsd gsd))))
-      (car (cl-reduce (lambda (a b) (if (>= (cdr a) (cdr b)) a b)) scores)))))
+      (if (cl-every (lambda (s) (zerop (cdr s))) scores)
+          'plain
+        (car (cl-reduce (lambda (a b) (if (>= (cdr a) (cdr b)) a b)) scores))))))
 
 (defun valsi-plan-detect-dialect ()
   "Report the detected dialect profile for this plan buffer."
@@ -382,11 +388,13 @@ parents so each subtree contributes once, without recursive recomputation."
                                  nil t))
          (char (pcase state
                  ("open" " ") ("done" "[xX]")
-                 ("in-progress" "[-~/]") (_ "."))))
+                 ("in-progress" "[-~/]")
+                 ;; Every char `valsi-parse-state-char' does not recognize.
+                 (_ "[^xX ~/cC-]"))))
     (occur (format "^[ \t]*-[ \t]+\\[%s\\][ \t]" char))))
 
 (defun valsi-plan-next-actionable ()
-  "Jump to the first open task whose dependencies are all satisfied."
+  "Jump to the first open leaf task whose dependencies are all satisfied."
   (interactive)
   (let* ((root (valsi-tree))
          (tasks (valsi-node-of-type root 'task))
@@ -398,9 +406,16 @@ parents so each subtree contributes once, without recursive recomputation."
               (when (eq (plist-get (gethash task states) :state) 'done)
                 (when-let* ((id (valsi-node-prop task :id)))
                   (puthash id t done-ids))))
+            ;; Only leaf work is actionable: an interior task is done
+            ;; through its children.  Cancelled children do not count.
             (cl-find-if
              (lambda (tk)
-               (and (eq (valsi-node-prop tk :state) 'open)
+               (and (eq (plist-get (gethash tk states) :state) 'open)
+                    (not (cl-some
+                          (lambda (c) (and (eq (valsi-node-type c) 'task)
+                                           (not (eq (valsi-node-prop c :state)
+                                                    'cancelled))))
+                          (valsi-node-children tk)))
                     (cl-every (lambda (d) (gethash d done-ids))
                               (valsi-node-prop tk :deps))))
              tasks))))
@@ -418,7 +433,8 @@ parents so each subtree contributes once, without recursive recomputation."
 
 (defun valsi-plan-toggle (&optional _arg)
   "Cycle the task at point: open -> in-progress -> done -> open.
-On an interior task with children, offer to apply to all children."
+Only this line's checkbox changes, even on an interior task; use
+`valsi-plan-complete-with-children' to mark a whole subtree done."
   (interactive "P")
   (save-excursion
     (beginning-of-line)
@@ -434,11 +450,12 @@ On an interior task with children, offer to apply to all children."
 (defun valsi-plan-block ()
   "Mark the task at point blocked, recording a reason as a child bullet."
   (interactive)
-  (let* ((task (valsi-plan--task-at-line
-                (valsi-node-of-type (valsi-plan--buffer-tree) 'task)))
-         (reason (read-string "Blocked reason: ")))
+  (let ((task (valsi-plan--task-at-line
+               (valsi-node-of-type (valsi-plan--buffer-tree) 'task)))
+        reason)
     (unless task
       (user-error "No task on this line"))
+    (setq reason (read-string "Blocked reason: "))
     (save-excursion
       (end-of-line)
       (let ((indent (save-excursion (beginning-of-line)
@@ -472,8 +489,21 @@ On an interior task with children, offer to apply to all children."
           (setq max (max max (string-to-number (match-string 1 id)))))))
     max))
 
+(defun valsi-plan--subtree-line-end (root)
+  "Return the end of the last line of the ROOT task subtree at point.
+Off a task line, return the end of the current line."
+  (let ((task (valsi-plan--task-at-line (valsi-node-of-type root 'task))))
+    (if (not task)
+        (line-end-position)
+      (save-excursion
+        (goto-char (cdr (valsi-plan--task-region task)))
+        (when (and (bolp) (> (point) (point-min)))
+          (backward-char))
+        (point)))))
+
 (defun valsi-plan-insert-task (desc)
   "Insert a new open task after point, numbered in the buffer's dialect.
+On a task line the new task follows that task's whole subtree.
 DESC is the task description.  Speckit buffers get the next Tnnn id, kiro
 buffers the next integer id; other dialects get no id."
   (interactive "sTask description: ")
@@ -483,7 +513,7 @@ buffers the next integer id; other dialects get no id."
                    (buffer-substring-no-properties
                     (point) (progn (skip-chars-forward " \t") (point)))))
          (id (valsi-plan--dialect-next-id root)))
-    (end-of-line)
+    (goto-char (valsi-plan--subtree-line-end root))
     (insert (format "\n%s- [ ] %s%s" indent (if id (concat id " ") "") desc))
     (message "Inserted %s" (or id "task"))))
 
@@ -577,8 +607,10 @@ Like dependency lookup, duplicate ids use their first task's dependencies."
       (when (equal dep cur-id) (user-error "A task cannot depend on itself"))
       (when (and cur-id (valsi-plan--reaches-p dep cur-id tasks))
         (user-error "Refusing: %s already depends on %s (cycle)" dep cur-id))
-      (valsi-plan--insert-dep-on-line dep)
-      (message "%s now depends on %s" (or cur-id "task") dep))))
+      (if (member dep (valsi-node-prop cur :deps))
+          (message "%s already depends on %s" (or cur-id "task") dep)
+        (valsi-plan--insert-dep-on-line dep)
+        (message "%s now depends on %s" (or cur-id "task") dep)))))
 
 (defun valsi-plan--insert-dep-on-line (dep)
   "Add DEP to the task line at point, merging into an existing deps group."
@@ -586,8 +618,11 @@ Like dependency lookup, duplicate ids use their first task's dependencies."
     (beginning-of-line)
     (let ((eol (line-end-position)))
       (if (re-search-forward valsi-parse-dep-re eol t)
-          (progn (goto-char (1- (match-end 0))) ; just before the closing paren
-                 (insert ", " dep))
+          (if (string-match-p "\\`[ \t]*\\'" (match-string 1))
+              (replace-match dep t t nil 1)       ; fill an empty group
+            (goto-char (1- (match-end 0)))        ; just before the closing paren
+            (skip-chars-backward " \t")
+            (insert ", " dep))
         (goto-char eol)
         (insert (format " (depends on %s)" dep))))))
 
@@ -702,10 +737,12 @@ top-level id (T001); only exact MAP keys are rewritten."
       (message "Completed %d task(s) with children" n))))
 
 (defun valsi-plan-split-task ()
-  "Split the task at point in two: text after point becomes a new task below."
+  "Split the task at point in two: text after point becomes a new task below.
+The new task follows the original's subtree, so its children stay put."
   (interactive)
   (let* ((root (valsi-plan--buffer-tree))
-         (id (valsi-plan--dialect-next-id root)))
+         (id (valsi-plan--dialect-next-id root))
+         (end (copy-marker (valsi-plan--subtree-line-end root))))
     (save-excursion (beginning-of-line)
                     (unless (looking-at valsi-parse-checkbox-re)
                       (user-error "No task on this line")))
@@ -717,7 +754,9 @@ top-level id (T001); only exact MAP keys are rewritten."
                  (buffer-substring-no-properties (point) (line-end-position)))))
       (atomic-change-group
         (delete-region (point) (line-end-position))
+        (goto-char end)
         (insert (format "\n%s- [ ] %s%s" indent (if id (concat id " ") "") rest)))
+      (set-marker end nil)
       (message "Split into %s" (or id "a new task")))))
 
 (defun valsi-plan-promote-step ()
@@ -739,8 +778,9 @@ top-level id (T001); only exact MAP keys are rewritten."
     (message "Promoted step -> %s" (or id "task"))))
 
 (defconst valsi-plan--leading-id-re
-  "\\`\\(?:\\[[^]]*\\][ \t]*\\)*\\(?:T[0-9]+\\|[0-9]+\\(?:\\.[0-9]+\\)*\\)\\.?[ \t]+"
-  "A leading task-id token (with optional preceding tags), for stripping.")
+  "\\`\\(\\(?:\\[[^]]*\\][ \t]*\\)*\\)\\(?:T[0-9]+\\(?:\\.[0-9]+\\)*\\|[0-9]+\\(?:\\.[0-9]+\\)*\\)[.)]?[ \t]+"
+  "A leading task-id token, for stripping.
+Group 1 holds the tags preceding the id, which are kept.")
 
 (defun valsi-plan-demote-task ()
   "Turn the task at point into a plain step bullet (drop the checkbox and id)."
@@ -756,7 +796,8 @@ top-level id (T001); only exact MAP keys are rewritten."
            ;; string-match below clobbers the buffer match data, so we edit by
            ;; region rather than `replace-match'.
            (rest (if (string-match valsi-plan--leading-id-re rest)
-                     (substring rest (match-end 0))
+                     (concat (match-string 1 rest)
+                             (substring rest (match-end 0)))
                    rest)))
       (delete-region lbeg lend)
       (goto-char lbeg)
@@ -792,12 +833,21 @@ Refuses a move that would place a task on the wrong side of a dependency."
              (task-text (buffer-substring (car tr) (cdr tr))))
         (atomic-change-group
           (if (eq dir 'up)
-              (progn (delete-region (car tr) (cdr tr))
-                     (goto-char (car sr))
-                     (insert task-text))
+              (if (string-suffix-p "\n" task-text)
+                  (progn (delete-region (car tr) (cdr tr))
+                         (goto-char (car sr))
+                         (insert task-text))
+                ;; Last line without a final newline: take the preceding
+                ;; newline along so the swapped lines stay separate.
+                (delete-region (1- (car tr)) (cdr tr))
+                (goto-char (car sr))
+                (insert task-text "\n"))
             ;; down: insert after the sibling, then delete the original.
             (goto-char (cdr sr))
-            (save-excursion (insert task-text))
+            (save-excursion
+              (if (eq (char-before) ?\n)
+                  (insert task-text)
+                (insert "\n" (string-remove-suffix "\n" task-text))))
             (delete-region (car tr) (cdr tr))))
         (goto-char (car sr))
         (beginning-of-line))
@@ -861,6 +911,13 @@ build on this; the buffer/filesystem checks are layered on top there."
   "Return the structural lint messages for ROOT as a list of strings."
   (mapcar #'cdr (valsi-plan--lint-collect root)))
 
+(defun valsi-plan--pathref-file (ref)
+  "Return the file named by path-ref REF without its :LINE suffix.
+Return nil when REF is a URL or a glob rather than a single file."
+  (unless (or (string-match-p "\\`[a-zA-Z][a-zA-Z0-9+.-]*://" ref)
+              (string-match-p "[*?[]" ref))
+    (car (split-string ref ":"))))
+
 (defun valsi-plan--missing-file-findings (root &optional dir)
   "Return (NODE . MESSAGE) findings for done tasks whose manifest files are gone.
 ROOT is the plan tree.  DIR (default `default-directory') resolves relative
@@ -871,8 +928,9 @@ path-refs."
     (dolist (tk (valsi-node-of-type root 'task))
       (when (eq (plist-get (gethash tk states) :state) 'done)
         (dolist (pr (valsi-node-prop tk :pathrefs))
-          (let ((file (car (split-string pr ":"))))
-            (unless (file-exists-p (expand-file-name file dir))
+          (let ((file (valsi-plan--pathref-file pr)))
+            (unless (or (null file)
+                        (file-exists-p (expand-file-name file dir)))
               (push (cons tk (format "%s: done but manifest file missing: %s"
                                      (or (valsi-node-prop tk :id) "?") file))
                     found))))))
@@ -1075,9 +1133,9 @@ A pair is stale when its task's path-ref target is newer than the plan."
     (when plan-mtime
       (dolist (tk (valsi-node-of-type root 'task))
         (dolist (pr (valsi-node-prop tk :pathrefs))
-          (let* ((file (car (split-string pr ":")))
-                 (abs (expand-file-name file dir)))
-            (when (and (file-exists-p abs)
+          (let* ((file (valsi-plan--pathref-file pr))
+                 (abs (and file (expand-file-name file dir))))
+            (when (and abs (file-exists-p abs)
                        (time-less-p plan-mtime
                                     (file-attribute-modification-time
                                      (file-attributes abs))))

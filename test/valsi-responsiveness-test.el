@@ -54,7 +54,8 @@
                         "- [c] T002 Cancelled\n"
                         "- [?] T003 Unknown\n")))
          (tasks (valsi-node-of-type tree 'task)))
-    (should (equal '(1 5 1) (valsi-plan--leaf-stats tree)))
+    ;; The cancelled T002 leaves the denominator (#32).
+    (should (equal '(1 4 1) (valsi-plan--leaf-stats tree)))
     (should (equal '(in-progress done in-progress open open cancelled unknown)
                    (mapcar #'valsi-plan-effective-state tasks)))
     (should (equal '(0 0 0) (valsi-plan--leaf-stats (valsi-plan-parse "# Empty\n"))))
