@@ -49,6 +49,10 @@ Also accepts a bare `## version - date' and `## version (date)'.")
   "^###[ \t]+\\(Added\\|Changed\\|Deprecated\\|Removed\\|Fixed\\|Security\\)[ \t]*$"
   "Category heading recognizer.")
 
+(defconst valsi-changelog-heading-re
+  "^###[ \t]+\\(.*[^ \t\n]\\)[ \t]*$"
+  "Any level-3 heading; under a release it is a (possibly unknown) category.")
+
 ;;;; Parse
 
 (defun valsi-changelog-parse (content)
@@ -76,7 +80,9 @@ Also accepts a bare `## version - date' and `## version (date)'.")
                                                              "Unreleased" ver)))))
             (setq category nil)
             (valsi-node-add-child root release)))
-         ((string-match valsi-changelog-category-re text)
+         ((if release
+              (string-match valsi-changelog-heading-re text)
+            (string-match valsi-changelog-category-re text))
           (setq category (valsi-node-create
                           :type 'category
                           :beg (valsi-line-beg line) :end (valsi-line-end line)

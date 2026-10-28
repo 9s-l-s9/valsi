@@ -97,6 +97,27 @@
             (should (search-forward "empty category Fixed" nil t))))
       (when (buffer-live-p result) (kill-buffer result)))))
 
+;; Return the lint report for CONTENT, or nil when lint finds it clean.
+(defun valsi-family-test--changelog-lint (content)
+  "Run `valsi-changelog-lint' over CONTENT; return the report text or nil."
+  (let ((root (valsi-changelog-parse content))
+        result)
+    (unwind-protect
+        (cl-letf (((symbol-function 'valsi-tree) (lambda () root))
+                  ((symbol-function 'switch-to-buffer)
+                   (lambda (buffer &rest _) (setq result buffer))))
+          (valsi-changelog-lint)
+          (and result (with-current-buffer result (buffer-string))))
+      (when (buffer-live-p result) (kill-buffer result)))))
+
+(ert-deftest valsi-test-changelog-lint-unknown-category ()
+  "Lint reports a category heading outside the six names (issue #68)."
+  (let ((report (valsi-family-test--changelog-lint
+                 "# C\n## [1.0.0] - 2020-01-01\n### Misc\n- a\n### Added\n- b\n")))
+    (should report)
+    (should (string-match-p "1\\.0\\.0: unknown category \"Misc\"" report))
+    (should-not (string-match-p "unknown category \"Added\"" report))))
+
 ;;;; Decision (ADR)
 
 (defconst valsi-family-test--adr
