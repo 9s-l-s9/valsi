@@ -91,9 +91,10 @@ With RELOAD, read them again so a repaired file is accepted."
   (when (or reload (not valsi-project--loaded))
     (setq valsi-project--loaded t
           valsi-project--load-error nil)
-    (when (and valsi-project-file (file-exists-p valsi-project-file))
+    (when valsi-project-file
       (condition-case err
-          (setq valsi-project--saved-roots (valsi-project--read))
+          (setq valsi-project--saved-roots
+                (and (file-exists-p valsi-project-file) (valsi-project--read)))
         (error
          (setq valsi-project--load-error (error-message-string err))
          (message "Valsi projects: %s" valsi-project--load-error))))))
@@ -103,16 +104,18 @@ With RELOAD, read them again so a repaired file is accepted."
   (valsi-project--load)
   (delete-dups (append valsi-project--saved-roots valsi-project--roots)))
 
-(defun valsi-project--save (roots)
-  "Atomically save project ROOTS before changing remembered membership."
-  (when valsi-project-file
-    ;; The file may have been repaired since it failed to load.
-    (when valsi-project--load-error
-      (valsi-project--load t))
+(defun valsi-project--save (function)
+  "Atomically save remembered roots changed by FUNCTION.
+FUNCTION receives the roots currently in the file, so changes another Emacs
+made since they were loaded are kept, and returns the roots to save."
+  (if (not valsi-project-file)
+      (setq valsi-project--saved-roots (funcall function valsi-project--saved-roots))
+    (valsi-project--load t)
     (when valsi-project--load-error
       (user-error "Repair %s before saving projects: %s"
                   valsi-project-file valsi-project--load-error))
-    (let* ((directory (file-name-directory (expand-file-name valsi-project-file)))
+    (let* ((roots (funcall function valsi-project--saved-roots))
+           (directory (file-name-directory (expand-file-name valsi-project-file)))
            temporary)
       (make-directory directory t)
       (unwind-protect
@@ -124,15 +127,15 @@ With RELOAD, read them again so a repaired file is accepted."
                 (insert "\n")))
             (rename-file temporary valsi-project-file t))
         (when (and temporary (file-exists-p temporary))
-          (delete-file temporary))))))
+          (delete-file temporary)))
+      (setq valsi-project--saved-roots roots))))
 
 (defun valsi-project-remember (root)
   "Remember ROOT across sessions and include it in the working set."
   (valsi-project--load)
-  (let* ((root (valsi-project-canonical-root root))
-         (roots (delete-dups (append valsi-project--saved-roots (list root)))))
-    (valsi-project--save roots)
-    (setq valsi-project--saved-roots roots)
+  (let ((root (valsi-project-canonical-root root)))
+    (valsi-project--save
+     (lambda (roots) (delete-dups (append roots (list root)))))
     (valsi-project-register root)
     (run-hooks 'valsi-project-change-hook)
     root))
@@ -145,11 +148,9 @@ With RELOAD, read them again so a repaired file is accepted."
   (setq root (file-name-as-directory root))
   (unless (member root (valsi-project-roots))
     (setq root (valsi-project-canonical-root root)))
-  (let ((roots (delete root (copy-sequence valsi-project--saved-roots))))
-    (valsi-project--save roots)
-    (setq valsi-project--saved-roots roots
-          valsi-project--roots (delete root valsi-project--roots))
-    (run-hooks 'valsi-project-change-hook)))
+  (valsi-project--save (lambda (roots) (delete root (copy-sequence roots))))
+  (setq valsi-project--roots (delete root valsi-project--roots))
+  (run-hooks 'valsi-project-change-hook))
 
 (defun valsi-project-current-root ()
   "Return current buffer's project identity, or nil outside a project."

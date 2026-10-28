@@ -68,5 +68,20 @@
     (should valsi-project--load-error)
     (should-not (string-match-p "killed buffer" valsi-project--load-error))))
 
+(ert-deftest valsi-project-state-concurrent-writers-keep-changes ()
+  "Saving merges with roots another Emacs wrote after the load (#49)."
+  (valsi-project-state-test--with-state
+    (let ((c (file-name-as-directory (expand-file-name "c" base))))
+      (should-not (valsi-project-roots))
+      ;; Another instance remembers A while this one has loaded nothing.
+      (with-temp-file file (prin1 (list :version 1 :roots (list a)) (current-buffer)))
+      (valsi-project-remember b)
+      (should (equal (list a b) (valsi-project-state-test--saved file)))
+      (should (equal (list a b) (valsi-project-roots)))
+      ;; Another instance remembers C; forgetting A removes only A.
+      (with-temp-file file (prin1 (list :version 1 :roots (list a b c)) (current-buffer)))
+      (valsi-project-forget a)
+      (should (equal (list b c) (valsi-project-state-test--saved file))))))
+
 (provide 'valsi-project-state-test)
 ;;; valsi-project-state-test.el ends here
