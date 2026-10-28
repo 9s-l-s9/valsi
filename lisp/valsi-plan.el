@@ -394,7 +394,7 @@ A plan with no dialect evidence at all is `plain' (no ids are minted)."
     (occur (format "^[ \t]*-[ \t]+\\[%s\\][ \t]" char))))
 
 (defun valsi-plan-next-actionable ()
-  "Jump to the first open task whose dependencies are all satisfied."
+  "Jump to the first open leaf task whose dependencies are all satisfied."
   (interactive)
   (let* ((root (valsi-tree))
          (tasks (valsi-node-of-type root 'task))
@@ -406,9 +406,16 @@ A plan with no dialect evidence at all is `plain' (no ids are minted)."
               (when (eq (plist-get (gethash task states) :state) 'done)
                 (when-let* ((id (valsi-node-prop task :id)))
                   (puthash id t done-ids))))
+            ;; Only leaf work is actionable: an interior task is done
+            ;; through its children.  Cancelled children do not count.
             (cl-find-if
              (lambda (tk)
-               (and (eq (valsi-node-prop tk :state) 'open)
+               (and (eq (plist-get (gethash tk states) :state) 'open)
+                    (not (cl-some
+                          (lambda (c) (and (eq (valsi-node-type c) 'task)
+                                           (not (eq (valsi-node-prop c :state)
+                                                    'cancelled))))
+                          (valsi-node-children tk)))
                     (cl-every (lambda (d) (gethash d done-ids))
                               (valsi-node-prop tk :deps))))
              tasks))))

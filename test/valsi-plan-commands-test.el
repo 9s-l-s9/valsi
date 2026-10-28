@@ -138,5 +138,32 @@
     (should (string-prefix-p "Implement task T001: Parent"
                              (valsi-plan-bundle->prompt bundle)))))
 
+(defun valsi-plan-commands-test--actionable (content)
+  "Return the id of the next actionable task in CONTENT."
+  (with-temp-buffer
+    (insert content)
+    (cl-letf (((symbol-function 'valsi-tree)
+               (lambda () (valsi-plan-parse (buffer-string)))))
+      (let ((task (valsi-plan-next-actionable)))
+        (and task (valsi-node-prop task :id))))))
+
+(ert-deftest valsi-plan-commands-test-actionable-skips-interior ()
+  "Next-actionable picks open leaves by effective state, never containers (#36)."
+  (should (equal "T002" (valsi-plan-commands-test--actionable
+                         (concat "- [ ] T001 parent\n"
+                                 "  - [ ] T001.1 child (depends on T002)\n"
+                                 "- [ ] T002 x\n"))))
+  ;; T002's box is open but its children make it effectively done.
+  (should (equal "T003" (valsi-plan-commands-test--actionable
+                         (concat "- [ ] T001 a (depends on T003)\n"
+                                 "- [ ] T002 b\n"
+                                 "  - [x] T002.1 sub\n"
+                                 "- [ ] T003 c\n"))))
+  (should-not (valsi-plan-commands-test--actionable
+               (concat "- [ ] T001 a (depends on T002)\n"
+                       "- [ ] T002 b\n"
+                       "  - [x] T002.1 sub\n"
+                       "  - [ ] T002.2 sub (depends on T001)\n"))))
+
 (provide 'valsi-plan-commands-test)
 ;;; valsi-plan-commands-test.el ends here
