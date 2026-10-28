@@ -66,5 +66,31 @@
          (kill-buffer clone))
        (should (member uri (valsi-proto-open-uris)))))))
 
+;;;; #72: revert keeps the interaction state consistent
+
+(ert-deftest valsi-core-test-revert-keeps-state-consistent ()
+  "Reverting with `valsi-global-mode' never leaves Browse on a writable buffer."
+  (valsi-init)
+  (let ((global valsi-global-mode))
+    (unwind-protect
+        (progn
+          (valsi-global-mode 1)
+          (valsi-core-test--with-file
+           "PLAN.md" valsi-core-test--plan
+           (lambda ()
+             (should valsi-artifact-minor-mode)
+             (valsi-enter-insert)
+             (revert-buffer t t)
+             (should valsi-artifact-minor-mode)
+             (should (eq (eq valsi--interaction-state 'browse)
+                         (and valsi-browse-mode t)))
+             (should (eq (and valsi-browse-mode t) (and buffer-read-only t)))
+             (valsi-enter-browse)
+             (revert-buffer t t)
+             (should (eq valsi--interaction-state 'browse))
+             (should valsi-browse-mode)
+             (should buffer-read-only))))
+      (valsi-global-mode (if global 1 -1)))))
+
 (provide 'valsi-core-test)
 ;;; valsi-core-test.el ends here

@@ -433,7 +433,12 @@ a keymap (\\{valsi-artifact-mode-map})."
         ;; displayed buffers by `valsi-app--sync-chrome' on the window hooks,
         ;; which fire once this buffer is actually shown.
         (valsi-app--install-window-hooks)
-        (valsi-enter-browse))
+        ;; Insert survives only a major-mode rerun in place (`revert-buffer',
+        ;; `normal-mode'), which keeps `buffer-read-only' as it was; Browse
+        ;; there would leave its keymap on a writable buffer.
+        (if (eq valsi--interaction-state 'insert)
+            (valsi-enter-insert)
+          (valsi-enter-browse)))
     (valsi--close-document)
     (setq valsi--tree nil valsi--synced-version nil)
     (valsi-view-set-font-lock nil)
