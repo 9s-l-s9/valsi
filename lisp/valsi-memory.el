@@ -62,21 +62,28 @@
         (when (re-search-forward "^---[ \t]*$" nil t)
           (cons beg (line-end-position)))))))
 
-(defun valsi-memory--parse-frontmatter (beg end)
-  "Parse top-level KEY: VALUE pairs between BEG and END in the current buffer."
+(defun valsi-memory--frontmatter-fields (beg end)
+  "Return (KEY VALUE LINE-BEG LINE-END) per field between BEG and END.
+Each field carries its own line region, so sibling `field' nodes are disjoint."
   (save-excursion
     (goto-char beg)
     (forward-line 1)
-    (let (pairs)
+    (let (fields)
       (while (< (point) end)
         (let ((line (buffer-substring-no-properties
                      (line-beginning-position) (line-end-position))))
           (when (string-match "^\\([A-Za-z0-9_-]+\\):[ \t]*\\(.*\\)$" line)
-            (push (cons (match-string 1 line)
-                        (string-trim (match-string 2 line)))
-                  pairs)))
+            (push (list (match-string 1 line)
+                        (string-trim (match-string 2 line))
+                        (line-beginning-position) (line-end-position))
+                  fields)))
         (forward-line 1))
-      (nreverse pairs))))
+      (nreverse fields))))
+
+(defun valsi-memory--parse-frontmatter (beg end)
+  "Parse top-level KEY: VALUE pairs between BEG and END in the current buffer."
+  (mapcar (lambda (f) (cons (nth 0 f) (nth 1 f)))
+          (valsi-memory--frontmatter-fields beg end)))
 
 (defun valsi-memory--record-kind (beg end)
   "Return the record kind symbol (R4) found between BEG and END, or nil."
@@ -96,57 +103,60 @@
   (let* ((bounds (valsi-memory--frontmatter-bounds))
          (kind (if bounds 'record 'index))
          (root (valsi-node-create :type 'memory
-                                 :beg (point-min) :end (point-max)
-                                 :recognizer 'valsi-memory
-                                 :props (list :kind kind))))
+                                  :beg (point-min) :end (point-max)
+                                  :recognizer 'valsi-memory
+                                  :props (list :kind kind))))
     ;; record: typed frontmatter fields + record kind (R2/R3/R4)
     (when bounds
       (let* ((beg (car bounds)) (end (cdr bounds))
-             (pairs (valsi-memory--parse-frontmatter beg end))
+             (fields (valsi-memory--frontmatter-fields beg end))
+             (pairs (mapcar (lambda (f) (cons (nth 0 f) (nth 1 f))) fields))
              (mtype (valsi-memory--record-kind beg end))
              (fm (valsi-node-create
                   :type 'frontmatter :beg beg :end end
                   :recognizer 'valsi-memory-frontmatter
                   :props (list :pairs pairs :mtype mtype))))
         (valsi-node-put root :mtype mtype)
-        (dolist (p pairs)
+        (dolist (f fields)
           (valsi-node-add-child
            fm (valsi-node-create
-               :type 'field :beg beg :end end
+               :type 'field :beg (nth 2 f) :end (nth 3 f)
                :recognizer 'valsi-memory-field
-               :props (list :key (car p) :value (cdr p)
-                            :known (and (member (car p)
+               :props (list :key (nth 0 f) :value (nth 1 f)
+                            :known (and (member (nth 0 f)
                                                 (plist-get valsi-memory-vocab
                                                            :known))
                                         t)
-                            :required (and (member (car p)
+                            :required (and (member (nth 0 f)
                                                    (plist-get valsi-memory-vocab
                                                               :required))
                                            t)))))
         (valsi-node-add-child root fm)))
     ;; index pointers (R1) + wiki links (R5); a pointer's hook may carry
-    ;; links too, so the link scan runs on every line.
+    ;; links too, so the link scan runs on every body line.  Frontmatter
+    ;; lines are skipped so no root-level sibling overlaps the frontmatter.
     (dolist (line (valsi-parse-lines (current-buffer)))
       (let ((text (valsi-line-text line))
             (start 0))
-        (when (string-match valsi-memory-pointer-re text)
-          (valsi-node-add-child
-           root (valsi-node-create
-                 :type 'pointer
-                 :beg (valsi-line-beg line) :end (valsi-line-end line)
-                 :recognizer 'valsi-memory-pointer
-                 :props (list :title (match-string 1 text)
-                              :target (match-string 2 text)
-                              :hook (or (match-string 3 text) "")))))
-        (while (string-match valsi-memory-link-re text start)
-          (valsi-node-add-child
-           root (valsi-node-create
-                 :type 'link
-                 :beg (+ (valsi-line-beg line) (match-beginning 1))
-                 :end (+ (valsi-line-beg line) (match-end 1))
-                 :recognizer 'valsi-memory-link
-                 :props (list :target (match-string 1 text))))
-          (setq start (match-end 0)))))
+        (unless (and bounds (<= (valsi-line-beg line) (cdr bounds)))
+          (when (string-match valsi-memory-pointer-re text)
+            (valsi-node-add-child
+             root (valsi-node-create
+                   :type 'pointer
+                   :beg (valsi-line-beg line) :end (valsi-line-end line)
+                   :recognizer 'valsi-memory-pointer
+                   :props (list :title (match-string 1 text)
+                                :target (match-string 2 text)
+                                :hook (or (match-string 3 text) "")))))
+          (while (string-match valsi-memory-link-re text start)
+            (valsi-node-add-child
+             root (valsi-node-create
+                   :type 'link
+                   :beg (+ (valsi-line-beg line) (match-beginning 1))
+                   :end (+ (valsi-line-beg line) (match-end 1))
+                   :recognizer 'valsi-memory-link
+                   :props (list :target (match-string 1 text))))
+            (setq start (match-end 0))))))
     root))
 
 ;;;; Accessors (pure over the tree)

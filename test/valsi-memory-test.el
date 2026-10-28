@@ -65,6 +65,21 @@
       (should (valsi-node-prop name :known))
       (should-not (valsi-node-prop bogus :known)))))
 
+(ert-deftest valsi-test-memory-field-regions-disjoint ()
+  "Each field covers its own line, so siblings never overlap (issue #38)."
+  (let* ((root (valsi-memory-test--tree "---\ne:\ns:\n---"))
+         (fields (valsi-node-of-type root 'field)))
+    (should (equal '((4 . 6) (7 . 9))
+                   (mapcar (lambda (f) (cons (valsi-node-beg f) (valsi-node-end f)))
+                           fields)))))
+
+(ert-deftest valsi-test-memory-frontmatter-links-skipped ()
+  "A [[link]] inside the frontmatter is not a root-level sibling (issue #38)."
+  (let ((root (valsi-memory-test--tree "---\n[[x]]\n---\n\n[[y]]\n")))
+    (should (equal '(frontmatter link)
+                   (mapcar #'valsi-node-type (valsi-node-children root))))
+    (should (equal '("y") (valsi-memory-links root)))))
+
 ;;;; Index pointers (R1)
 
 (ert-deftest valsi-test-memory-pointer ()

@@ -81,21 +81,28 @@ Lets the pure parser see the filename for type discrimination.")
         (when (re-search-forward "^---[ \t]*$" nil t)
           (cons beg (line-end-position)))))))
 
-(defun valsi-promptfile--parse-frontmatter (beg end)
-  "Parse simple KEY: VALUE pairs between BEG and END in the current buffer."
+(defun valsi-promptfile--frontmatter-fields (beg end)
+  "Return (KEY VALUE LINE-BEG LINE-END) per field between BEG and END.
+Each field carries its own line region, so sibling `field' nodes are disjoint."
   (save-excursion
     (goto-char beg)
     (forward-line 1)
-    (let (pairs)
+    (let (fields)
       (while (< (point) end)
         (let ((line (buffer-substring-no-properties
                      (line-beginning-position) (line-end-position))))
           (when (string-match "^\\([A-Za-z0-9_-]+\\):[ \t]*\\(.*\\)$" line)
-            (push (cons (match-string 1 line)
-                        (string-trim (match-string 2 line)))
-                  pairs)))
+            (push (list (match-string 1 line)
+                        (string-trim (match-string 2 line))
+                        (line-beginning-position) (line-end-position))
+                  fields)))
         (forward-line 1))
-      (nreverse pairs))))
+      (nreverse fields))))
+
+(defun valsi-promptfile--parse-frontmatter (beg end)
+  "Parse simple KEY: VALUE pairs between BEG and END in the current buffer."
+  (mapcar (lambda (f) (cons (nth 0 f) (nth 1 f)))
+          (valsi-promptfile--frontmatter-fields beg end)))
 
 ;;;; Argument placeholders (R6)
 
@@ -121,8 +128,9 @@ Lets the pure parser see the filename for type discrimination.")
   "Parse the current buffer (holding CONTENT) into a prompt-file node tree.
 CONTENT is passed for URI-independent type refinement and argument scanning."
   (let* ((bounds (valsi-promptfile--frontmatter-bounds))
-         (pairs (and bounds (valsi-promptfile--parse-frontmatter
-                             (car bounds) (cdr bounds))))
+         (fields (and bounds (valsi-promptfile--frontmatter-fields
+                              (car bounds) (cdr bounds))))
+         (pairs (mapcar (lambda (f) (cons (nth 0 f) (nth 1 f))) fields))
          (type (valsi-promptfile--type valsi-promptfile--parse-uri pairs))
          (root (valsi-node-create :type 'promptfile
                                  :beg (point-min) :end (point-max)
@@ -134,18 +142,18 @@ CONTENT is passed for URI-independent type refinement and argument scanning."
                  :beg (car bounds) :end (cdr bounds)
                  :recognizer 'valsi-promptfile-frontmatter
                  :props (list :pairs pairs :disclosure 'eager))))
-        (dolist (p pairs)
+        (dolist (f fields)
           (valsi-node-add-child
            fm (valsi-node-create
                :type 'field
-               :beg (car bounds) :end (cdr bounds)
+               :beg (nth 2 f) :end (nth 3 f)
                :recognizer 'valsi-promptfile-field
-               :props (list :key (car p) :value (cdr p)
-                            :known (and (member (car p)
+               :props (list :key (nth 0 f) :value (nth 1 f)
+                            :known (and (member (nth 0 f)
                                                 (valsi-promptfile--vocab
                                                  type :known))
                                         t)
-                            :required (and (member (car p)
+                            :required (and (member (nth 0 f)
                                                    (valsi-promptfile--vocab
                                                     type :required))
                                            t)))))
