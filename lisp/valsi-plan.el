@@ -288,6 +288,18 @@ A plan with no dialect evidence at all is `plain' (no ids are minted)."
 
 ;;;; Font-lock
 
+(defun valsi-plan--match-requirements (limit)
+  "Font-lock matcher for a `_Requirements: ..._' trace before LIMIT.
+Uses `valsi-parse-req-re', so the highlight ends at the same closing
+underscore the parser uses and ids containing underscores (FR_2) are
+covered whole.  The character the regexp consumes after that underscore
+is excluded from the match."
+  (when (re-search-forward valsi-parse-req-re limit t)
+    (let ((end (1+ (match-end 1))))
+      (set-match-data (list (match-beginning 0) end))
+      (goto-char end)
+      t)))
+
 (defvar valsi-plan-font-lock-keywords
   `((,(concat "^[ \t]*-[ \t]+\\(\\[[xX]\\]\\)[ \t]*\\(.*\\)$")
      (1 'valsi-done-box-face) (2 'valsi-done-face))
@@ -302,7 +314,7 @@ A plan with no dialect evidence at all is `plain' (no ids are minted)."
     ("\\[\\(US[0-9]+\\)\\]" (1 'valsi-story-face))
     ("\\(\\[P\\]\\)" (1 'valsi-tag-face))
     ("(depends on[^)]*)" . 'valsi-dep-face)
-    ("_Requirements:[^_]*_" . 'valsi-trace-face)
+    (valsi-plan--match-requirements . 'valsi-trace-face)
     ("`[^`\n]*/[^`\n]*`" . 'valsi-trace-face)
     ("^[ \t]*\\*\\*\\(?:Files\\|Verify\\|Goal\\|Purpose\\|Checkpoint\\|Spec\\|Independent Test\\):?\\*\\*:?"
      . 'valsi-meta-face))

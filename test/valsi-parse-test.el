@@ -34,6 +34,22 @@
                         (valsi-graph--edges-plan f)))
       (delete-file f))))
 
+(ert-deftest valsi-parse-test-requirements-highlight-underscore-ids ()
+  "The plan highlight covers the whole trace, as `valsi-parse-req-re' does."
+  (with-temp-buffer
+    (insert "- [ ] 1 a\n  - _Requirements: FR_2, REQ_1_2_.\n")
+    (setq-local font-lock-defaults '(nil t))
+    (setq-local font-lock-keywords nil)
+    (font-lock-add-keywords nil valsi-plan-font-lock-keywords)
+    (font-lock-ensure)
+    (goto-char (point-min))
+    (let* ((beg (search-forward "_Requirements:"))
+           (close (1- (search-forward "REQ_1_2_"))))
+      (dolist (pos (list (- beg 14) (- close 2) close))
+        (should (eq (get-text-property pos 'face) 'valsi-trace-face)))
+      ;; The trailing delimiter consumed by the regexp is not highlighted.
+      (should-not (get-text-property (1+ close) 'face)))))
+
 ;;;; Leading tags (#8)
 
 (ert-deftest valsi-parse-test-tags-leading-only ()
