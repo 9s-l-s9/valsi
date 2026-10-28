@@ -88,11 +88,15 @@ provisional v0 extension used by the Pi harness.
 
 ### `grammar/register`
 - **params**: `{ spec: GrammarDeclaration }` (see §6).
-- **result**: `{ id: GrammarId }`.
+- **result**: `{ id: GrammarId, failed: { uri, message }[] }`.
 - **effect (hot-reload)**: the server MUST re-resolve every currently-open
   document against the updated registry, with no reopen. A grammar registered
   now updates the capabilities of documents opened before it existed. *(This is
   the liveness guarantee; the conformance suite tests it directly.)*
+  Each document is re-resolved independently. A document that fails to parse
+  under the updated registry does not fail the request or stop the others: the
+  server closes it and lists it in `failed`, so it cannot block later
+  registrations. `failed` is `[]` when every document was re-resolved.
 
 ### `grammar/describe`
 - **params**: `{ id: GrammarId }`.
@@ -223,6 +227,19 @@ parser functions. Rich bundled grammars use the server-local Elisp plugin API
 directly; executable functions never cross the protocol boundary. `evidence`
 records the honesty of the mapping so clients can calibrate trust. The
 `generic` grammar remains the universal fallback.
+
+Declared regexps run inside the single-threaded server, and Emacs cannot
+interrupt a running regexp match, so the reference server bounds them instead
+of timing them out. Registration answers `-32602` for a regexp with a back
+reference or a repeated group (`*`, `+`, or an interval) that itself contains
+a quantifier or an alternative, such as `\(a*\)*b` or `\(a\|aa\)*b`: the
+exponential backtracking class. Matching input is capped at 4000 characters
+(`valsi-registry-declarative-match-limit`): `textRegexp` sees only that prefix
+of the text, a longer URI never matches `uriRegexp`, and recognizers skip
+longer lines, which then resolve less detail. Polynomial patterns therefore
+stay bounded. Clients should still treat a request timeout as a wedged server
+and kill it; the Pi `AAPClient` does so, and `close()` kills a server that has
+not exited shortly after stdin closes.
 
 ## 7. Capabilities (the ladder)
 

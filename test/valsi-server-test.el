@@ -290,5 +290,213 @@
                                      :id)))
     (should (equal grammars (valsi-registry-all)))))
 
+(ert-deftest valsi-test-server-rejects-catastrophic-regexps ()
+  "Issue #80: wire grammars cannot register exponential regexps."
+  (valsi-server-init)
+  (valsi-proto-reset)
+  (let* ((grammars (valsi-registry-all))
+         (evil '("\\(a*\\)*b" "\\(a+\\)+$" "\\(a\\|aa\\)*b" "\\(?:a*\\)+"
+                 "\\(a*\\)\\{2,\\}" "\\(\\(a\\)*\\)*" "\\(x\\)\\1"))
+         (id 0)
+         (requests
+          (cl-loop
+           for re in evil
+           append
+           (list (list :jsonrpc "2.0" :id (cl-incf id)
+                       :method "grammar/register"
+                       :params (list :spec (list :id "evil"
+                                                 :match (list :textRegexp re)
+                                                 :recognizers [])))
+                 (list :jsonrpc "2.0" :id (cl-incf id)
+                       :method "grammar/register"
+                       :params (list :spec (list :id "evil"
+                                                 :match (list :uriRegexp re)
+                                                 :recognizers [])))
+                 (list :jsonrpc "2.0" :id (cl-incf id)
+                       :method "grammar/register"
+                       :params
+                       (list :spec
+                             (list :id "evil"
+                                   :match (list :uriSuffix ".evil")
+                                   :recognizers
+                                   (vector (list :type "x" :regexp re))))))))
+         (responses
+          (apply #'valsi-server-test--exchange
+                 (append requests
+                         (list (list :jsonrpc "2.0" :id "after"
+                                     :method "initialize"))))))
+    (should (equal (append (make-list (* 3 (length evil)) -32602) '(nil))
+                   (valsi-server-test--codes responses)))
+    (should (string-match-p "rejected"
+                            (plist-get (plist-get (car responses) :error)
+                                       :data)))
+    (should (equal grammars (valsi-registry-all)))
+    ;; Ordinary regexps are still accepted.
+    (dolist (re '("^\\(#+\\) \\(.*\\)$" "\\(foo\\)?bar" "[(*]+"
+                  "^- \\[\\([ x]\\)\\] \\(T[0-9]+\\) \\(.*\\)$"
+                  "[]*]+\\(x\\)*" "[[:alpha:]*]+\\(y\\)+"))
+      (should-not (valsi-registry--regexp-risk re)))))
+
+(ert-deftest valsi-test-server-declarative-match-input-is-bounded ()
+  "Issue #80: declared regexps only see bounded input."
+  (valsi-server-init)
+  (valsi-proto-reset)
+  (unwind-protect
+      (let* ((limit valsi-registry-declarative-match-limit)
+             (late (concat (make-string limit ?\s) "MAGIC\n"))
+             (long-line (concat "ITEM " (make-string limit ?x) "\n"))
+             (responses
+              (valsi-server-test--exchange
+               (list :jsonrpc "2.0" :id 1 :method "grammar/register"
+                     :params
+                     (list :spec
+                           (list :id "bounded"
+                                 :match (list :textRegexp "MAGIC"
+                                              :uriRegexp "\\.bnd\\'"
+                                              :score 1000)
+                                 :recognizers
+                                 (vector (list :type "item"
+                                               :regexp "^ITEM")))))
+               (list :jsonrpc "2.0" :id 2 :method "grammar/detect"
+                     :params (list :uri "a.txt" :text "MAGIC\n"))
+               (list :jsonrpc "2.0" :id 3 :method "grammar/detect"
+                     :params (list :uri "a.txt" :text late))
+               (list :jsonrpc "2.0" :id 4 :method "grammar/detect"
+                     :params (list :uri (concat (make-string limit ?u)
+                                                ".bnd")
+                                   :text ""))
+               (list :jsonrpc "2.0" :id 5 :method "artifact/didOpen"
+                     :params (list :uri "b.bnd"
+                                   :text (concat "ITEM short\n" long-line)))
+               (list :jsonrpc "2.0" :id 6 :method "artifact/symbols"
+                     :params (list :uri "b.bnd")))))
+        (cl-flet ((detected (n)
+                    (plist-get (plist-get (nth n responses) :result) :id)))
+          (should (equal "bounded" (detected 1)))
+          (should-not (equal "bounded" (detected 2)))
+          (should-not (equal "bounded" (detected 3))))
+        ;; The over-long line resolves less detail; it is not an error.
+        (should (= 1 (length (plist-get (plist-get (nth 5 responses) :result)
+                                        :children)))))
+    (valsi-registry-unregister 'bounded)
+    (valsi-proto-reset)))
+
+(ert-deftest valsi-test-server-register-resyncs-each-document ()
+  "Issue #81: one failing document neither aborts nor blocks registration."
+  (valsi-server-init)
+  (valsi-proto-reset)
+  (unwind-protect
+      (let ((open (lambda (uri text)
+                    (list :jsonrpc "2.0" :id uri :method "artifact/didOpen"
+                          :params (list :uri uri :text text))))
+            (spec (lambda (id suffix)
+                    (list :id id :match (list :uriSuffix suffix :score 50)
+                          :recognizers (vector (list :type "x"
+                                                     :regexp "^hi"))
+                          :capabilities ["so-cap"]))))
+        (valsi-server-test--exchange
+         (funcall open "aa.so" "hi\n") (funcall open "big.boom" "hi\n")
+         (funcall open "nest.boom" "nest\n") (funcall open "zz.so" "hi\n"))
+        ;; A grammar that now fails on the already open .boom documents.
+        (valsi-registry-register
+         (list :id 'boom81 :name "boom"
+               :match (lambda (uri _text)
+                        (if (string-suffix-p ".boom" (or uri "")) 100 0))
+               :parse (lambda (content)
+                        (if (string-prefix-p "nest" content)
+                            (signal 'excessive-lisp-nesting '(1601))
+                          (error "Stack overflow in regexp matcher")))))
+        (let* ((responses
+                (valsi-server-test--exchange
+                 (list :jsonrpc "2.0" :id "r" :method "grammar/register"
+                       :params (list :spec (funcall spec "so81" ".so")))
+                 (list :jsonrpc "2.0" :id "c" :method "artifact/capabilities"
+                       :params (list :uri "zz.so"))
+                 (list :jsonrpc "2.0" :id "r2" :method "grammar/register"
+                       :params (list :spec (funcall spec "zzz81" ".zzz")))))
+               (result (plist-get (car responses) :result))
+               (failed (append (plist-get result :failed) nil)))
+          (should (equal '(nil nil nil) (valsi-server-test--codes responses)))
+          (should (equal "so81" (plist-get result :id)))
+          (should (equal '("big.boom" "nest.boom")
+                         (mapcar (lambda (f) (plist-get f :uri)) failed)))
+          (should (string-match-p "Stack overflow"
+                                  (plist-get (car failed) :message)))
+          ;; Documents after the failing ones were re-resolved.
+          (should (equal ["so-cap"]
+                         (plist-get (plist-get (nth 1 responses) :result)
+                                    :capabilities)))
+          (should (eq 'so81 (valsi-proto-doc-grammar
+                             (gethash "aa.so" valsi-proto--docs))))
+          ;; Failed documents are closed and no longer block registration.
+          (should (equal '("aa.so" "zz.so")
+                         (sort (valsi-proto-open-uris) #'string<)))
+          (should (equal [] (plist-get (plist-get (nth 2 responses) :result)
+                                       :failed)))))
+    (dolist (id '(boom81 so81 zzz81)) (valsi-registry-unregister id))
+    (valsi-proto-reset)))
+
+(defun valsi-server-test--emacs-program ()
+  "Return the running Emacs binary for a real-stdio test, or nil."
+  (or (let ((self (expand-file-name invocation-name invocation-directory)))
+        (and (file-executable-p self) self))
+      (executable-find invocation-name)
+      (executable-find "emacs")))
+
+(defun valsi-server-test--stdio-bytes (input &optional environment)
+  "Run a real stdio server on unibyte INPUT; return its raw stdout bytes.
+ENVIRONMENT entries are prepended to `process-environment'."
+  (let ((program (valsi-server-test--emacs-program))
+        (process-environment (append environment process-environment))
+        (coding-system-for-read 'binary)
+        (coding-system-for-write 'binary))
+    (with-temp-buffer
+      (set-buffer-multibyte nil)
+      (insert input)
+      (should (zerop (call-process-region
+                      (point-min) (point-max) program t '(t nil) nil
+                      "-Q" "--batch"
+                      "--eval" "(setq load-prefer-newer t)"
+                      "-L" (expand-file-name "lisp" default-directory)
+                      "-l" "valsi-server" "-f" "valsi-server-stdio")))
+      (buffer-string))))
+
+(ert-deftest valsi-test-server-real-stdio-writes-utf-8 ()
+  "Issue #79: non-ASCII output is valid UTF-8 on stdout, in any locale."
+  (skip-unless (file-exists-p "/proc/self/fd/0"))
+  (skip-unless (valsi-server-test--emacs-program))
+  (let* ((uri "café-\U0001F600- .md")
+         (text "# Café \U0001F600 x\n- [ ] T1 naïve\n")
+         (input (encode-coding-string
+                 (concat
+                  (json-serialize
+                   (list :jsonrpc "2.0" :id 1 :method "artifact/didOpen"
+                         :params (list :uri uri :text text)))
+                  "\n"
+                  (json-serialize
+                   (list :jsonrpc "2.0" :id 2 :method "artifact/symbols"
+                         :params (list :uri uri)))
+                  "\n")
+                 'utf-8-unix)))
+    (dolist (environment '(nil ("LC_ALL=C" "LANG=C")))
+      (let ((bytes (valsi-server-test--stdio-bytes input environment)))
+        (should-not (multibyte-string-p bytes))
+        ;; é is C3 A9, U+1F600 is F0 9F 98 80 and U+2028 is E2 80 A8; never
+        ;; Emacs's internal raw-byte forms such as C1 83 C0 A9.
+        (should (string-search
+                 "caf\303\251-\360\237\230\200-\342\200\250.md" bytes))
+        (should (string-search "Caf\303\251 \360\237\230\200" bytes))
+        (should-not (string-match-p "[\300\301]" bytes))
+        ;; U+2028 is data, so there are exactly two LF-terminated records.
+        (should (= 2 (cl-count ?\n bytes)))
+        (let ((records (split-string
+                        (decode-coding-string bytes 'utf-8-unix) "\n" t)))
+          (should (equal uri
+                         (plist-get
+                          (plist-get (json-parse-string
+                                      (car records) :object-type 'plist)
+                                     :result)
+                          :uri))))))))
+
 (provide 'valsi-server-test)
 ;;; valsi-server-test.el ends here

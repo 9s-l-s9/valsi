@@ -3,6 +3,8 @@
 import { spawn } from "node:child_process";
 
 export const AAP_TIMEOUT_MS = 10_000;
+/** How long close() waits for the server to exit on EOF before killing it. */
+export const AAP_CLOSE_GRACE_MS = 2_000;
 
 /** A strict-LF JSON-RPC client for the headless Valsi AAP server. */
 export class AAPClient {
@@ -11,6 +13,7 @@ export class AAPClient {
 		this.pending = new Map();
 		this.buffer = "";
 		this.timeoutMs = options.timeoutMs ?? AAP_TIMEOUT_MS;
+		this.closeGraceMs = options.closeGraceMs ?? AAP_CLOSE_GRACE_MS;
 		this.child = (options.spawn ?? spawn)(command, args, {
 			cwd: options.cwd,
 			env: options.env ?? process.env,
@@ -103,6 +106,10 @@ export class AAPClient {
 			const timer = setTimeout(() => {
 				this.pending.delete(id);
 				reject(new Error(`AAP request timed out: ${method}`));
+				// The server is synchronous: a request that times out has
+				// wedged it, so later requests would only queue behind it.
+				// Kill it; a connection respawns a fresh server.
+				this.child?.kill("SIGKILL");
 			}, this.timeoutMs);
 			this.pending.set(id, { resolve, reject, timer });
 			signal?.addEventListener("abort", finishAbort, { once: true });
@@ -125,10 +132,17 @@ export class AAPClient {
 		this.pending.clear();
 	}
 
+	/** End the server's stdin; kill it if it has not exited after the grace period. */
 	close() {
 		this.failAll(new Error("AAP client closed"));
-		this.child?.stdin.end();
+		const child = this.child;
 		this.child = undefined;
+		if (!child) return;
+		child.stdin.end();
+		if (child.exitCode !== null || child.signalCode) return;
+		const timer = setTimeout(() => child.kill("SIGKILL"), this.closeGraceMs);
+		timer.unref?.();
+		child.once("exit", () => clearTimeout(timer));
 	}
 }
 

@@ -39,6 +39,14 @@
 (defvar valsi-registry-generation 0
   "Revision of grammar definitions, for invalidating derived caches.")
 
+(defconst valsi-registry-declarative-match-limit 4000
+  "Longest string a client-declared regexp is matched against.
+`textRegexp' sees only this many leading characters of a document (compare
+`magic-mode-regexp-match-limit'); a longer URI never matches `uriRegexp';
+and declarative recognizers skip longer lines, which then resolve less
+detail.  Together with `valsi-registry--regexp-risk' this bounds the time a
+wire-registered grammar can spend in the regexp matcher.")
+
 ;;;; Registration (grammar/register, grammar/reload)
 
 (defun valsi-registry-register (spec)
@@ -102,7 +110,69 @@ optional `:confidence', and optional capture-index `:properties'."
         (string-match-p regexp "")
       (invalid-regexp
        (error "Grammar declaration has invalid %s: %s"
-              field (error-message-string err))))))
+              field (error-message-string err))))
+    (let ((risk (valsi-registry--regexp-risk regexp)))
+      (when risk
+        (error "Grammar declaration %s is rejected (%s): %s"
+               field risk regexp)))))
+
+(defun valsi-registry--regexp-risk (regexp)
+  "Return why client-supplied REGEXP may backtrack catastrophically, or nil.
+Emacs cannot interrupt a running regexp match in batch, so one exponential
+match would wedge the single-threaded server for good.  Declarations are
+therefore restricted: a repeated group (`*', `+' or an interval) may not
+itself contain a quantifier or an alternative, as in \\(a*\\)*b or
+\\(a\\|aa\\)*b, and back references are not allowed.  The remaining
+polynomial cases are bounded by `valsi-registry-declarative-match-limit'."
+  (let ((i 0) (len (length regexp))
+        ;; One frame per open group: (HAS-QUANTIFIER . HAS-ALTERNATIVE).
+        (frames (list (cons nil nil)))
+        risk)
+    (cl-flet ((repeat-at (pos)
+                (and (< pos len)
+                     (or (memq (aref regexp pos) '(?* ?+))
+                         (and (< (1+ pos) len)
+                              (eq (aref regexp pos) ?\\)
+                              (eq (aref regexp (1+ pos)) ?{))))))
+      (while (and (< i len) (not risk))
+        (let ((c (aref regexp i)))
+          (cond
+           ((eq c ?\[)
+            ;; Skip a bracket expression; a leading `]' is literal.
+            (setq i (1+ i))
+            (when (and (< i len) (eq (aref regexp i) ?^)) (setq i (1+ i)))
+            (when (and (< i len) (eq (aref regexp i) ?\])) (setq i (1+ i)))
+            (while (and (< i len) (not (eq (aref regexp i) ?\])))
+              (if (and (eq (aref regexp i) ?\[) (< (1+ i) len)
+                       (eq (aref regexp (1+ i)) ?:))
+                  (setq i (+ 2 (or (string-search ":]" regexp (+ i 2))
+                                   len)))
+                (setq i (1+ i))))
+            (setq i (1+ i)))
+           ((and (eq c ?\\) (< (1+ i) len))
+            (let ((d (aref regexp (1+ i))))
+              (setq i (+ i 2))
+              (cond
+               ((eq d ?\() (push (cons nil nil) frames))
+               ((eq d ?|) (setcdr (car frames) t))
+               ((eq d ?{)
+                (setcar (car frames) t)
+                (setq i (+ 2 (or (string-search "\\}" regexp i) len))))
+               ((and (>= d ?1) (<= d ?9))
+                (setq risk "back reference"))
+               ((eq d ?\))
+                (let ((inner (pop frames)))
+                  (unless frames (setq frames (list (cons nil nil))))
+                  (when (or (car inner) (cdr inner))
+                    (when (repeat-at i)
+                      (setq risk (concat "repeated group with a quantifier"
+                                         " or alternative")))
+                    (setcar (car frames) t)))))))
+           ((memq c '(?* ?+ ?\?))
+            (setcar (car frames) t)
+            (setq i (1+ i)))
+           (t (setq i (1+ i)))))))
+    risk))
 
 (defun valsi-registry--validate-declaration (match-decl recognizers)
   "Validate declarative MATCH-DECL and line RECOGNIZERS."
@@ -150,8 +220,18 @@ optional `:confidence', and optional capture-index `:properties'."
         (score (or (plist-get declaration :score) 1)))
     (lambda (uri text)
       (if (or (and suffix (string-suffix-p suffix (or uri "")))
-              (and uri-re (string-match-p uri-re (or uri "")))
-              (and text-re (string-match-p text-re (or text ""))))
+              (and uri-re
+                   (<= (length uri) valsi-registry-declarative-match-limit)
+                   (string-match-p uri-re (or uri "")))
+              (and text-re
+                   (string-match-p
+                    text-re
+                    (let ((text (or text "")))
+                      (if (> (length text)
+                             valsi-registry-declarative-match-limit)
+                          (substring text 0
+                                     valsi-registry-declarative-match-limit)
+                        text)))))
           score
         0))))
 
@@ -168,7 +248,10 @@ optional `:confidence', and optional capture-index `:properties'."
            (dolist (recognizer recognizers)
              (let ((regexp (plist-get recognizer :regexp))
                    (text (valsi-line-text line)))
-               (when (and regexp (string-match regexp text))
+               (when (and regexp
+                          (<= (length text)
+                              valsi-registry-declarative-match-limit)
+                          (string-match regexp text))
                  (valsi-node-add-child
                   root
                   (valsi-node-create

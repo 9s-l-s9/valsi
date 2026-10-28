@@ -69,7 +69,7 @@ test:
 	  -f ert-run-tests-batch-and-exit
 
 test-extension:
-	$(NODE) --test extensions/valsi-pi/test/*.test.mjs
+	EMACS="$(EMACS)" $(NODE) --test extensions/valsi-pi/test/*.test.mjs
 
 benchmark: ensure-emacs
 	$(BATCH) -l test/valsi-benchmark.el
