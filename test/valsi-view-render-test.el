@@ -48,6 +48,30 @@
                            (point)))))))
       (kill-buffer buffer))))
 
+;; Outline rows with identical labels.
+
+(ert-deftest valsi-view-outline-duplicate-labels-keep-their-row ()
+  "Refreshing an outline keeps point on the same duplicate-label row (#45)."
+  (valsi-init)
+  (let ((tree (valsi-overview-parse
+               "# Doc\n\n## Example\n\n## Example\n\n## Example\n")))
+    (with-temp-buffer
+      (let ((render (lambda ()
+                      (erase-buffer)
+                      (valsi-view-insert-outline tree (current-buffer) 3))))
+        (funcall render)
+        (goto-char (point-min))
+        (forward-line 2)
+        (valsi-view-preserving-render render)
+        (should (= 3 (line-number-at-pos)))
+        (should (= 3 (length (delete-dups
+                              (mapcar (lambda (line)
+                                        (goto-char (point-min))
+                                        (forward-line line)
+                                        (get-text-property (point)
+                                                           'valsi-row-id))
+                                      '(0 1 2))))))))))
+
 (provide 'valsi-view-render-test)
 
 ;;; valsi-view-render-test.el ends here

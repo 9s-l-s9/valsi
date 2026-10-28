@@ -207,7 +207,8 @@ A document usually has one top-level group; its children are the outline."
   "Insert outline rows for TREE's children, jumping into artifact SOURCE.
 DEPTH limits nesting (default 2); ROW-LIMIT truncates each level."
   (valsi-view--insert-outline-nodes
-   (valsi-view--outline-entry-nodes tree) source (or depth 2) row-limit 0))
+   (valsi-view--outline-entry-nodes tree) source (or depth 2) row-limit 0
+   (make-hash-table :test #'equal)))
 
 (defun valsi-view--outline-node-visible-p (node)
   "Return non-nil when NODE is a real outline entry.
@@ -218,14 +219,19 @@ Untitled, stateless leaves are structural noise, not outline entries."
       (valsi-node-prop node :state)
       (valsi-node-children node)))
 
-(defun valsi-view--insert-outline-nodes (nodes source depth row-limit indent)
+(defun valsi-view--insert-outline-nodes
+    (nodes source depth row-limit indent seen)
   "Insert outline rows for NODES from SOURCE at INDENT.
-See `valsi-view-insert-outline' for DEPTH and ROW-LIMIT."
+See `valsi-view-insert-outline' for DEPTH and ROW-LIMIT.  SEEN counts
+row ids already used, so repeated labels still get unique row ids."
   (let* ((nodes (seq-filter #'valsi-view--outline-node-visible-p nodes))
          (visible (if row-limit (seq-take nodes row-limit) nodes)))
     (dolist (node visible)
-      (let ((start (point))
-            (label (valsi-view--outline-label node)))
+      (let* ((start (point))
+             (label (valsi-view--outline-label node))
+             (id (format "outline:%d:%s" indent label))
+             (count (gethash id seen 0)))
+        (puthash id (1+ count) seen)
         (insert (make-string (+ 2 (* 2 indent)) ?\s))
         (insert-text-button
          label
@@ -237,10 +243,12 @@ See `valsi-view-insert-outline' for DEPTH and ROW-LIMIT."
         (insert "\n")
         (add-text-properties
          start (point)
-         `(valsi-row-id ,(format "outline:%d:%s" indent label))))
+         `(valsi-row-id ,(if (zerop count) id
+                             (format "%s:%d" id count)))))
       (when (> depth 1)
         (valsi-view--insert-outline-nodes
-         (valsi-node-children node) source (1- depth) row-limit (1+ indent))))
+         (valsi-node-children node) source (1- depth) row-limit (1+ indent)
+         seen)))
     (when (and row-limit (> (length nodes) row-limit))
       (insert (propertize
                (format "%s… %d more\n"
