@@ -43,7 +43,8 @@
                                 :recognizer 'valsi-overview))
         (stack nil)                     ; (level . section-node)
         (in-fence nil))
-    (dolist (line (valsi-parse-lines (current-buffer)))
+    ;; Keep fenced lines: the overview records code blocks itself.
+    (dolist (line (valsi-parse-lines (current-buffer) t))
       (let* ((text (valsi-line-text line))
              (heading (unless in-fence (valsi-parse-heading text))))
         (cond

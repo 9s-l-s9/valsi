@@ -37,24 +37,56 @@ This is the seam a wire transport (or a non-Emacs server) plugs into."
 ;;;; Line records
 
 (cl-defstruct (valsi-line (:constructor valsi-line-create))
-  "One physical line of a buffer, with byte region and text."
-  n beg end text indent)
+  "One physical line of a buffer, with byte region and text.
+FENCED is non-nil for a fenced code block line, delimiters included."
+  n beg end text indent fenced)
 
-(defun valsi-parse-lines (&optional buffer)
-  "Return a list of `valsi-line' for every line of BUFFER (or current)."
+(defconst valsi-parse-fence-re "^[ \t]*\\(`\\{3,\\}\\|~\\{3,\\}\\)\\(.*\\)$"
+  "Fenced code block delimiter: three or more backticks or tildes.")
+
+(defun valsi-parse--fence-open (text)
+  "Return the fence string if TEXT opens a fenced code block, else nil.
+A backtick fence's info string may not contain a backtick (CommonMark)."
+  (when (and (string-match valsi-parse-fence-re text)
+             (not (and (eq ?` (aref (match-string 1 text) 0))
+                       (string-search "`" (match-string 2 text)))))
+    (match-string 1 text)))
+
+(defun valsi-parse--fence-close-p (text fence)
+  "Return non-nil when TEXT closes the code block opened by FENCE.
+The closer uses FENCE's character, is at least as long, and has no info."
+  (and (string-match valsi-parse-fence-re text)
+       (eq (aref fence 0) (aref (match-string 1 text) 0))
+       (>= (length (match-string 1 text)) (length fence))
+       (string-blank-p (match-string 2 text))))
+
+(defun valsi-parse-lines (&optional buffer keep-fenced)
+  "Return a list of `valsi-line' for every line of BUFFER (or current).
+Lines of fenced code blocks (delimiters included) are omitted, so no
+grammar reads a checkbox or heading inside a fence as structure; an
+unclosed fence runs to the end of the buffer, as in CommonMark.  With
+KEEP-FENCED, return them too, marked by a non-nil `valsi-line-fenced'."
   (with-current-buffer (or buffer (current-buffer))
     (save-excursion
       (goto-char (point-min))
-      (let ((n 0) acc)
+      (let ((n 0) (fence nil) acc)
         (while (not (eobp))
           (let* ((beg (line-beginning-position))
                  (end (line-end-position))
-                 (text (buffer-substring-no-properties beg end)))
-            (push (valsi-line-create
-                   :n n :beg beg :end (min (point-max) (1+ end))
-                   :text text
-                   :indent (string-match-p "[^ \t]" text))
-                  acc))
+                 (text (buffer-substring-no-properties beg end))
+                 (fenced (cond (fence
+                                (when (valsi-parse--fence-close-p text fence)
+                                  (setq fence nil))
+                                t)
+                               ((setq fence (valsi-parse--fence-open text))
+                                t))))
+            (when (or keep-fenced (not fenced))
+              (push (valsi-line-create
+                     :n n :beg beg :end (min (point-max) (1+ end))
+                     :text text
+                     :indent (string-match-p "[^ \t]" text)
+                     :fenced fenced)
+                    acc)))
           (setq n (1+ n))
           (forward-line 1))
         (nreverse acc)))))
