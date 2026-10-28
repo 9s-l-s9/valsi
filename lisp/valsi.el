@@ -378,6 +378,12 @@ See `valsi-enter-browse-hook'.")
 
 ;;;; Minor mode
 
+(defconst valsi--header-line-format '(:eval (valsi--header-line))
+  "The `header-line-format' Valsi installs in artifact buffers.")
+
+(defvar-local valsi--saved-header-line nil
+  "The header line before Valsi enabled, as (LOCALP . VALUE), or nil.")
+
 (defun valsi--install-font-lock ()
   "Install the active grammar's font-lock keywords."
   (let* ((spec (valsi-registry-get valsi--grammar))
@@ -420,7 +426,12 @@ a keymap (\\{valsi-artifact-mode-map})."
         (valsi--sync t)                  ; artifact/didOpen
         (valsi-tree)                     ; fetch symbols -> local tree
         (valsi--install-font-lock)
-        (setq-local header-line-format '(:eval (valsi--header-line)))
+        ;; The globalized mode can enable twice; keep the first saved value.
+        (unless (eq header-line-format valsi--header-line-format)
+          (setq valsi--saved-header-line
+                (cons (local-variable-p 'header-line-format)
+                      header-line-format)))
+        (setq-local header-line-format valsi--header-line-format)
         (add-hook 'after-change-functions #'valsi--after-change nil t)
         (add-hook 'after-save-hook #'valsi-refresh nil t)
         (add-hook 'post-command-hook #'valsi--update-sidebar-context nil t)
@@ -442,7 +453,11 @@ a keymap (\\{valsi-artifact-mode-map})."
     (valsi--close-document)
     (setq valsi--tree nil valsi--synced-version nil)
     (valsi-view-set-font-lock nil)
-    (setq-local header-line-format nil)
+    (when (eq header-line-format valsi--header-line-format)
+      (if (car valsi--saved-header-line)
+          (setq-local header-line-format (cdr valsi--saved-header-line))
+        (kill-local-variable 'header-line-format)))
+    (setq valsi--saved-header-line nil)
     (remove-hook 'after-change-functions #'valsi--after-change t)
     (remove-hook 'after-save-hook #'valsi-refresh t)
     (remove-hook 'post-command-hook #'valsi--update-sidebar-context t)

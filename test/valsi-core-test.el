@@ -92,5 +92,24 @@
              (should buffer-read-only))))
       (valsi-global-mode (if global 1 -1)))))
 
+;;;; #73: the header line is restored on disable
+
+(ert-deftest valsi-core-test-header-line-restored ()
+  "Disabling the minor mode restores the previous header line."
+  (valsi-init)
+  (with-temp-buffer
+    (insert "# P\n\n- [ ] T001 x\n")
+    (setq-local header-line-format "MY HEADER")
+    (valsi-artifact-minor-mode 1)
+    (should (equal header-line-format valsi--header-line-format))
+    (valsi-artifact-minor-mode 1)
+    (valsi-artifact-minor-mode -1)
+    (should (equal header-line-format "MY HEADER")))
+  (with-temp-buffer
+    (insert "# P\n")
+    (valsi-artifact-minor-mode 1)
+    (valsi-artifact-minor-mode -1)
+    (should-not (local-variable-p 'header-line-format))))
+
 (provide 'valsi-core-test)
 ;;; valsi-core-test.el ends here
