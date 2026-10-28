@@ -109,3 +109,29 @@ test("a connection respawns the client after the server exits or fails to spawn"
 	connection.close();
 	assert.equal(third.running, false);
 });
+
+test("a pre-aborted signal rejects at once and settled requests detach their listener", async () => {
+	let writes = 0;
+	const child = fakeProcess((record, process) => {
+		writes++;
+		const { id } = JSON.parse(record);
+		queueMicrotask(() =>
+			process.stdout.emit("data", `{"jsonrpc":"2.0","id":"${id}","result":1}\n`),
+		);
+	});
+	const client = new AAPClient("unused", [], { spawn: () => child });
+	const aborted = new AbortController();
+	aborted.abort(new Error("pre-aborted"));
+	await assert.rejects(client.request("x", {}, aborted.signal), /pre-aborted/);
+	assert.equal(writes, 0);
+	assert.equal(client.pending.size, 0);
+
+	const live = new AbortController();
+	const added = [];
+	const removed = [];
+	live.signal.addEventListener = (type, listener) => added.push([type, listener]);
+	live.signal.removeEventListener = (type, listener) =>
+		removed.push([type, listener]);
+	assert.equal(await client.request("y", {}, live.signal), 1);
+	assert.deepEqual(removed, added);
+});

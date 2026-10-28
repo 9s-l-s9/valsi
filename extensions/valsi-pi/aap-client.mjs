@@ -79,8 +79,20 @@ export class AAPClient {
 		if (!this.running) {
 			return Promise.reject(new Error("AAP server is not running"));
 		}
+		if (signal?.aborted) {
+			return Promise.reject(signal.reason ?? new Error("AAP request aborted"));
+		}
 		const id = `pi-${this.nextId++}`;
-		return new Promise((resolve, reject) => {
+		return new Promise((settleResolve, settleReject) => {
+			// Every settlement path detaches the abort listener.
+			const resolve = (value) => {
+				signal?.removeEventListener("abort", finishAbort);
+				settleResolve(value);
+			};
+			const reject = (error) => {
+				signal?.removeEventListener("abort", finishAbort);
+				settleReject(error);
+			};
 			const finishAbort = () => {
 				const pending = this.pending.get(id);
 				if (!pending) return;
