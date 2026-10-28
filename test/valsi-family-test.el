@@ -40,6 +40,25 @@
       (should (= 1 (length (valsi-node-of-type rel 'category))))
       (should (= 2 (length (valsi-node-of-type rel 'entry)))))))
 
+(ert-deftest valsi-test-changelog-release-heading-forms ()
+  "Bare, parenthesized, and linked release headings keep the date (issue #2)."
+  (dolist (heading '("## [1.2.0] - 2024-01-01"
+                     "## 1.2.0 - 2024-01-01"
+                     "## v1.2.0 (2024-01-01)"
+                     "## [1.2.0](https://x/y) - 2024-01-01"))
+    (let ((rel (car (valsi-node-of-type
+                     (valsi-changelog-parse (concat heading "\n"))
+                     'release))))
+      (should (equal "1.2.0" (valsi-node-prop rel :version)))
+      (should (equal "2024-01-01" (valsi-node-prop rel :date)))))
+  (should (equal "1.0.0-rc.1"
+                 (valsi-node-prop
+                  (car (valsi-node-of-type
+                        (valsi-changelog-parse "## 1.0.0-rc.1\n") 'release))
+                  :version)))
+  (should-not (valsi-node-of-type
+               (valsi-changelog-parse "## 2 reasons to upgrade\n") 'release)))
+
 (ert-deftest valsi-test-changelog-match-scoring ()
   "A real changelog scores high on URI + text; unrelated text scores 0."
   (should (>= (valsi-changelog-match "/p/CHANGELOG.md"
@@ -132,6 +151,36 @@
     (should (string-match-p "missing section: Decision" reported))
     (should (string-match-p "missing section: Consequences" reported))
     (should-not (string-match-p "missing section: Context" reported))))
+
+;; Regression tests for issue #1.
+
+(defun valsi-family-test--set-status (text status)
+  "Return TEXT after `valsi-decision-set-status' chooses STATUS."
+  (with-temp-buffer
+    (insert text)
+    (cl-letf (((symbol-function 'completing-read)
+               (lambda (&rest _) status)))
+      (valsi-decision-set-status))
+    (buffer-string)))
+
+(ert-deftest valsi-test-decision-set-status-empty-section ()
+  "An empty Status section gains a value; the next heading survives."
+  (should (equal "# T\n\n## Status\n\nAccepted\n\n## Context\nfoo\n"
+                 (valsi-family-test--set-status
+                  "# T\n\n## Status\n\n## Context\nfoo\n" "Accepted")))
+  (should (equal "# T\n\n## Status\n\nAccepted\n"
+                 (valsi-family-test--set-status
+                  "# T\n\n## Status\n\n" "Accepted")))
+  (should (equal "# T\n\n## Status\n\nAccepted\n"
+                 (valsi-family-test--set-status
+                  "# T\n\n## Status" "Accepted"))))
+
+(ert-deftest valsi-test-decision-set-status-replaces-value ()
+  "An existing status value line is replaced in place."
+  (should (equal "# T\n\n## Status\n\nRejected\n\n## Context\n"
+                 (valsi-family-test--set-status
+                  "# T\n\n## Status\n\nProposed\n\n## Context\n"
+                  "Rejected"))))
 
 ;;;; Overview
 

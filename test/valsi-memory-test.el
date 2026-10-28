@@ -65,6 +65,21 @@
       (should (valsi-node-prop name :known))
       (should-not (valsi-node-prop bogus :known)))))
 
+(ert-deftest valsi-test-memory-field-regions-disjoint ()
+  "Each field covers its own line, so siblings never overlap (issue #38)."
+  (let* ((root (valsi-memory-test--tree "---\ne:\ns:\n---"))
+         (fields (valsi-node-of-type root 'field)))
+    (should (equal '((4 . 6) (7 . 9))
+                   (mapcar (lambda (f) (cons (valsi-node-beg f) (valsi-node-end f)))
+                           fields)))))
+
+(ert-deftest valsi-test-memory-frontmatter-links-skipped ()
+  "A [[link]] inside the frontmatter is not a root-level sibling (issue #38)."
+  (let ((root (valsi-memory-test--tree "---\n[[x]]\n---\n\n[[y]]\n")))
+    (should (equal '(frontmatter link)
+                   (mapcar #'valsi-node-type (valsi-node-children root))))
+    (should (equal '("y") (valsi-memory-links root)))))
+
 ;;;; Index pointers (R1)
 
 (ert-deftest valsi-test-memory-pointer ()
@@ -90,6 +105,15 @@
   (let ((root (valsi-memory-test--tree
                "---\nname: x\ndescription: y\n---\n\nSee [[alpha]] and [[beta]].\n")))
     (should (equal '("alpha" "beta") (valsi-memory-links root)))))
+
+(ert-deftest valsi-test-memory-links-on-pointer-lines ()
+  "A [[link]] in a pointer's hook is a link node too (issue #4)."
+  (let ((root (valsi-memory-parse
+               "- [A](a.md) — related to [[b]]\n- plain [[c]]\n")))
+    (should (equal '((pointer "a.md") (link "b") (link "c"))
+                   (mapcar (lambda (n) (list (valsi-node-type n)
+                                             (valsi-node-prop n :target)))
+                           (valsi-node-children root))))))
 
 ;;;; Capabilities
 

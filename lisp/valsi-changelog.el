@@ -28,8 +28,22 @@
   "The six Keep a Changelog category headings.")
 
 (defconst valsi-changelog-release-re
-  "^##[ \t]+\\[?\\(Unreleased\\|v?[0-9]+\\(?:\\.[0-9]+\\)*[^]]*\\)\\]?\\(?:[ \t]*[-–][ \t]*\\([0-9]\\{4\\}-[0-9]\\{2\\}-[0-9]\\{2\\}\\|[^\n]*\\)\\)?"
-  "Release heading recognizer: ## [version] - date.")
+  (let ((ver (concat "\\(?:\\(?1:Unreleased\\)\\|v?\\(?1:[0-9]+\\(?:\\.[0-9]+\\)*"
+                     "\\(?:[-+][0-9A-Za-z.-]+\\)?\\)\\)"))
+        ;; group 2: ` - date' (any text, so lint can flag non-ISO dates)
+        ;; or `(date)'
+        (date (lambda (sep)
+                (concat "\\(?:" sep "[-–][ \t]*\\(?2:[0-9]\\{4\\}-[0-9]\\{2\\}"
+                        "-[0-9]\\{2\\}\\|[^\n]*\\)"
+                        "\\|[ \t]+(\\(?2:[^)\n]*\\))\\)"))))
+    ;; `[version]' (optionally linked) may be followed by anything; a bare
+    ;; version must end the line or precede a date, so `## 2 reasons' is
+    ;; not a release.
+    (concat "^##[ \t]+\\(?:\\[" ver "\\]\\(?:([^)\n]*)\\)?"
+            (funcall date "[ \t]*") "?"
+            "\\|" ver "\\(?:" (funcall date "[ \t]+") "\\|[ \t]*$\\)\\)"))
+  "Release heading recognizer: ## [version](link) - date.
+Also accepts a bare `## version - date' and `## version (date)'.")
 
 (defconst valsi-changelog-category-re
   "^###[ \t]+\\(Added\\|Changed\\|Deprecated\\|Removed\\|Fixed\\|Security\\)[ \t]*$"

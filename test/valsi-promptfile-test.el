@@ -57,6 +57,14 @@
       (should (valsi-node-prop name :known))
       (should-not (valsi-node-prop bogus :known)))))
 
+(ert-deftest valsi-test-promptfile-field-regions-disjoint ()
+  "Each field covers its own line, so siblings never overlap (issue #38)."
+  (let* ((root (valsi-promptfile-test--tree "---\ne:\ns:\n---" "x.md"))
+         (fields (valsi-node-of-type root 'field)))
+    (should (equal '((4 . 6) (7 . 9))
+                   (mapcar (lambda (f) (cons (valsi-node-beg f) (valsi-node-end f)))
+                           fields)))))
+
 ;;;; Eager / lazy disclosure split
 
 (ert-deftest valsi-test-promptfile-disclosure-split ()
