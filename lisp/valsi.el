@@ -215,6 +215,51 @@ offset->buffer-position translation here."
       (message "Valsi: `%s' not supported by the %s grammar"
                action (or valsi--grammar 'generic)))))
 
+(defvar execute-extended-command--last-typed)
+
+(defun valsi--grammar-command-p (command)
+  "Non-nil if COMMAND is advertised by the current buffer's grammar."
+  (and valsi--grammar command (symbolp command)
+       (rassq command (plist-get (valsi-registry-get valsi--grammar)
+                                 :commands))))
+
+(defun valsi--call-browse-editable (fn)
+  "Call FN with Browse's own read-only lifted in the current buffer.
+Browse makes the buffer read-only only to give letters their commands; a
+grammar command run deliberately may still edit, as `valsi-toggle' does.
+A buffer that was read-only before Valsi stays read-only."
+  (let ((buffer (current-buffer)))
+    (if (or (not (eq valsi--interaction-state 'browse))
+            valsi--original-read-only
+            (not buffer-read-only))
+        (funcall fn)
+      (unwind-protect
+          (progn (setq buffer-read-only nil)
+                 (funcall fn))
+        (when (buffer-live-p buffer)
+          (with-current-buffer buffer
+            (when (eq valsi--interaction-state 'browse)
+              (setq buffer-read-only t))))))))
+
+(defun valsi-browse-execute-extended-command (prefixarg &optional
+                                                         command-name typed)
+  "Like `execute-extended-command', but grammar commands may edit in Browse.
+Reading COMMAND-NAME, PREFIXARG and TYPED is unchanged.  When the command
+is one the artifact's grammar advertises (for example
+`valsi-decision-set-status'), the Browse state's read-only is lifted while
+it runs, so it no longer prompts and then fails with `buffer-read-only'."
+  (interactive
+   (let ((execute-extended-command--last-typed nil))
+     (list current-prefix-arg
+           (read-extended-command)
+           execute-extended-command--last-typed)))
+  (let ((run (lambda ()
+               (funcall-interactively #'execute-extended-command
+                                      prefixarg command-name typed))))
+    (if (valsi--grammar-command-p (intern-soft command-name))
+        (valsi--call-browse-editable run)
+      (funcall run))))
+
 (defmacro valsi--defaction (name action doc)
   "Define command NAME dispatching ACTION to the active grammar, with DOC."
   `(defun ,name ()
@@ -313,6 +358,8 @@ offset->buffer-position translation here."
     (define-key map (kbd "s") #'valsi-app-toggle-sidebar)
     (define-key map (kbd "a") #'valsi-agent)
     (define-key map (kbd "@") #'valsi-app-handoff)
+    (define-key map [remap execute-extended-command]
+                #'valsi-browse-execute-extended-command)
     map)
   "Direct, modal bindings active while an artifact is in Browse state.")
 

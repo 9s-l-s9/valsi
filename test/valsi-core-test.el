@@ -171,5 +171,44 @@
             (should (looking-at "valsi-core-scratchy\n"))))
       (when (buffer-live-p outline) (kill-buffer outline)))))
 
+;;;; #76: grammar commands run with M-x may edit in Browse
+
+(ert-deftest valsi-core-test-mx-grammar-command-edits-in-browse ()
+  "M-x of a grammar's editing command works in Browse, then Browse resumes."
+  (valsi-init)
+  (valsi-core-test--with-file
+   "adr/0001-a.md" "# 1. A\n\n## Status\n\nProposed\n"
+   (lambda ()
+     (valsi-artifact-minor-mode 1)
+     (should (eq valsi--grammar 'decision))
+     (should (eq valsi--interaction-state 'browse))
+     (should (eq (command-remapping 'execute-extended-command)
+                 #'valsi-browse-execute-extended-command))
+     (cl-letf (((symbol-function 'completing-read)
+                (lambda (&rest _) "Accepted")))
+       (valsi-browse-execute-extended-command nil "valsi-decision-set-status"))
+     (should (string-match-p "^Accepted$" (buffer-string)))
+     (should buffer-read-only)
+     (should (eq valsi--interaction-state 'browse))
+     ;; Commands the grammar does not advertise keep Browse read-only.
+     (should-error
+      (valsi-browse-execute-extended-command nil "delete-blank-lines")
+      :type 'buffer-read-only))))
+
+(ert-deftest valsi-core-test-mx-keeps-original-read-only ()
+  "A buffer read-only before Valsi stays read-only for grammar commands."
+  (valsi-init)
+  (valsi-core-test--with-file
+   "adr/0001-a.md" "# 1. A\n\n## Status\n\nProposed\n"
+   (lambda ()
+     (read-only-mode 1)
+     (valsi-artifact-minor-mode 1)
+     (cl-letf (((symbol-function 'completing-read)
+                (lambda (&rest _) "Accepted")))
+       (should-error
+        (valsi-browse-execute-extended-command nil "valsi-decision-set-status")
+        :type 'buffer-read-only))
+     (should (string-match-p "^Proposed$" (buffer-string))))))
+
 (provide 'valsi-core-test)
 ;;; valsi-core-test.el ends here
