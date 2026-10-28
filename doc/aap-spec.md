@@ -88,11 +88,15 @@ provisional v0 extension used by the Pi harness.
 
 ### `grammar/register`
 - **params**: `{ spec: GrammarDeclaration }` (see §6).
-- **result**: `{ id: GrammarId }`.
+- **result**: `{ id: GrammarId, failed: { uri, message }[] }`.
 - **effect (hot-reload)**: the server MUST re-resolve every currently-open
   document against the updated registry, with no reopen. A grammar registered
   now updates the capabilities of documents opened before it existed. *(This is
   the liveness guarantee; the conformance suite tests it directly.)*
+  Each document is re-resolved independently. A document that fails to parse
+  under the updated registry does not fail the request or stop the others: the
+  server closes it and lists it in `failed`, so it cannot block later
+  registrations. `failed` is `[]` when every document was re-resolved.
 
 ### `grammar/describe`
 - **params**: `{ id: GrammarId }`.

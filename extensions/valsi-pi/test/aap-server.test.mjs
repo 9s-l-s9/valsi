@@ -104,8 +104,43 @@ test("issue #80: the real server rejects a catastrophic regexp and stays respons
 	}
 });
 
+test("issue #81: grammar/register re-syncs every open document and reports failures", { skip }, async () => {
+	const client = realServer();
+	const spec = (id, uriSuffix) => ({
+		id,
+		match: { uriSuffix, score: 50 },
+		recognizers: [{ type: "x", regexp: "^\\(ab\\)*$" }],
+		capabilities: ["so-cap"],
+	});
+	try {
+		// The issue's repro: before #80 the long line overflowed the regexp
+		// stack and aborted the re-sync, leaving zz.so stale.
+		for (const [uri, text] of [
+			["aa.so", "hi\n"],
+			["big.so", `${"ab".repeat(400_000)}\n`],
+			["zz.so", "hi\n"],
+		]) {
+			await client.request("artifact/didOpen", { uri, text });
+		}
+		const registered = await client.request("grammar/register", {
+			spec: spec("so", ".so"),
+		});
+		assert.deepEqual(registered, { id: "so", failed: [] });
+		for (const uri of ["aa.so", "big.so", "zz.so"]) {
+			const caps = await client.request("artifact/capabilities", { uri });
+			assert.deepEqual(caps.capabilities, ["so-cap"], uri);
+		}
+		const again = await client.request("grammar/register", {
+			spec: spec("unrelated", ".zzz"),
+		});
+		assert.deepEqual(again, { id: "unrelated", failed: [] });
+	} finally {
+		client.close();
+	}
+});
+
 test("issue #79: the real server round-trips non-ASCII text in any locale", { skip }, async () => {
-	const uri = "café-\u{1F600}- .md";
+	const uri = "caf\u00e9-\u{1F600}-\u2028.md";
 	for (const env of [process.env, { ...process.env, LC_ALL: "C", LANG: "C" }]) {
 		const client = realServer({ env });
 		let raw = "";
@@ -115,13 +150,13 @@ test("issue #79: the real server round-trips non-ASCII text in any locale", { sk
 		try {
 			const opened = await client.request("artifact/didOpen", {
 				uri,
-				text: "# Café \u{1F600} x\n- [ ] T1 naïve\n",
+				text: "# Caf\u00e9 \u{1F600}\u2028x\n- [ ] T1 na\u00efve\n",
 			});
 			assert.equal(opened.uri, uri);
 			const symbols = await client.request("artifact/symbols", { uri });
-			assert.equal(symbols.children[0].props.title, "Café \u{1F600} x");
+			assert.equal(symbols.children[0].props.title, "Caf\u00e9 \u{1F600}\u2028x");
 			// Invalid UTF-8 would have been decoded to U+FFFD.
-			assert.ok(!raw.includes("�"));
+			assert.ok(!raw.includes("\uFFFD"));
 		} finally {
 			client.close();
 		}

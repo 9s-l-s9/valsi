@@ -20,7 +20,7 @@
 ;;
 ;; Methods:
 ;;   initialize                 -> capabilities (advertised methods)
-;;   grammar/register  {spec}   -> id     (hot-reload; re-resolves open docs)
+;;   grammar/register  {spec}   -> {id failed}  (hot-reload; re-syncs open docs)
 ;;   grammar/describe  {id}     -> plist
 ;;   grammar/list               -> ids
 ;;   grammar/detect    {uri text} -> id
@@ -74,7 +74,7 @@ This is the native in-process seam.  A wire transport wraps
     ('initialize
      (list :capabilities (mapcar #'symbol-name valsi-proto-methods)))
     ('grammar/register
-     (list :id (valsi-proto--register (plist-get params :spec))))
+     (valsi-proto--register (plist-get params :spec)))
     ('grammar/describe
      (let ((id (plist-get params :id)))
        (unless (and id (or (stringp id) (symbolp id)))
@@ -189,6 +189,7 @@ array; elsewhere nil stays nil, which `json-serialize' writes as {}."
 
 (defun valsi-proto--register (spec)
   "Register JSON-safe grammar declaration SPEC and hot-reload open documents.
+Return (:id ID :failed FAILURES) as `valsi-proto--resync-all' describes.
 A malformed SPEC is the client's error: signal `valsi-proto-invalid-params'."
   (let ((id (condition-case err
                 (if (and spec (listp spec))
@@ -196,10 +197,24 @@ A malformed SPEC is the client's error: signal `valsi-proto-invalid-params'."
                   (error ":spec must be a grammar declaration object"))
               (error (signal 'valsi-proto-invalid-params
                              (list (error-message-string err)))))))
-    (maphash
-     (lambda (uri doc) (valsi-proto--sync uri (valsi-proto-doc-text doc)))
-     valsi-proto--docs)
-    id))
+    (list :id id :failed (valsi-proto--resync-all))))
+
+(defun valsi-proto--resync-all ()
+  "Re-resolve every open document; return a vector of failures.
+Each document is re-synced on its own, so one that fails to parse (for
+example with \"Stack overflow in regexp matcher\" or excessive Lisp nesting)
+neither aborts the others nor blocks later registrations: it is closed, and
+reported as {uri, message} so the client can reopen or drop it."
+  (let (failed)
+    (dolist (uri (sort (valsi-proto-open-uris) #'string<))
+      (condition-case err
+          (valsi-proto--sync
+           uri (valsi-proto-doc-text (gethash uri valsi-proto--docs)))
+        (error
+         (remhash uri valsi-proto--docs)
+         (push (list :uri uri :message (error-message-string err))
+               failed))))
+    (vconcat (nreverse failed))))
 
 (defun valsi-proto--plan-context (uri task-id)
   "Return the plan context for TASK-ID in open document URI, or nil.

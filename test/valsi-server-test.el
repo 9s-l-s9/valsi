@@ -381,6 +381,61 @@
     (valsi-registry-unregister 'bounded)
     (valsi-proto-reset)))
 
+(ert-deftest valsi-test-server-register-resyncs-each-document ()
+  "Issue #81: one failing document neither aborts nor blocks registration."
+  (valsi-server-init)
+  (valsi-proto-reset)
+  (unwind-protect
+      (let ((open (lambda (uri text)
+                    (list :jsonrpc "2.0" :id uri :method "artifact/didOpen"
+                          :params (list :uri uri :text text))))
+            (spec (lambda (id suffix)
+                    (list :id id :match (list :uriSuffix suffix :score 50)
+                          :recognizers (vector (list :type "x"
+                                                     :regexp "^hi"))
+                          :capabilities ["so-cap"]))))
+        (valsi-server-test--exchange
+         (funcall open "aa.so" "hi\n") (funcall open "big.boom" "hi\n")
+         (funcall open "nest.boom" "nest\n") (funcall open "zz.so" "hi\n"))
+        ;; A grammar that now fails on the already open .boom documents.
+        (valsi-registry-register
+         (list :id 'boom81 :name "boom"
+               :match (lambda (uri _text)
+                        (if (string-suffix-p ".boom" (or uri "")) 100 0))
+               :parse (lambda (content)
+                        (if (string-prefix-p "nest" content)
+                            (signal 'excessive-lisp-nesting '(1601))
+                          (error "Stack overflow in regexp matcher")))))
+        (let* ((responses
+                (valsi-server-test--exchange
+                 (list :jsonrpc "2.0" :id "r" :method "grammar/register"
+                       :params (list :spec (funcall spec "so81" ".so")))
+                 (list :jsonrpc "2.0" :id "c" :method "artifact/capabilities"
+                       :params (list :uri "zz.so"))
+                 (list :jsonrpc "2.0" :id "r2" :method "grammar/register"
+                       :params (list :spec (funcall spec "zzz81" ".zzz")))))
+               (result (plist-get (car responses) :result))
+               (failed (append (plist-get result :failed) nil)))
+          (should (equal '(nil nil nil) (valsi-server-test--codes responses)))
+          (should (equal "so81" (plist-get result :id)))
+          (should (equal '("big.boom" "nest.boom")
+                         (mapcar (lambda (f) (plist-get f :uri)) failed)))
+          (should (string-match-p "Stack overflow"
+                                  (plist-get (car failed) :message)))
+          ;; Documents after the failing ones were re-resolved.
+          (should (equal ["so-cap"]
+                         (plist-get (plist-get (nth 1 responses) :result)
+                                    :capabilities)))
+          (should (eq 'so81 (valsi-proto-doc-grammar
+                             (gethash "aa.so" valsi-proto--docs))))
+          ;; Failed documents are closed and no longer block registration.
+          (should (equal '("aa.so" "zz.so")
+                         (sort (valsi-proto-open-uris) #'string<)))
+          (should (equal [] (plist-get (plist-get (nth 2 responses) :result)
+                                       :failed)))))
+    (dolist (id '(boom81 so81 zzz81)) (valsi-registry-unregister id))
+    (valsi-proto-reset)))
+
 (defun valsi-server-test--emacs-program ()
   "Return the running Emacs binary for a real-stdio test, or nil."
   (or (let ((self (expand-file-name invocation-name invocation-directory)))
