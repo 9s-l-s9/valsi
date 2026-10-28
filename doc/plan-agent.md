@@ -59,6 +59,14 @@ Changes are **keyed by task id**, so the diff is stable under reordering and
 robust to the agent rewriting whole regions. Each row is accepted or rejected
 independently (`t`); `RET` applies only the accepted ones (`valsi-plan-apply-changes`).
 
+The diff covers **id-bearing task lines only**. Headings, prose, step and
+verify lines under a task, and tasks without an id are neither compared nor
+applied, and an added task is appended at the end of the file rather than at
+its position in the proposal. Accept-all therefore applies every task-level
+change; it does not reproduce the agent's file byte for byte. If the target
+buffer changed after the review opened, `RET` refuses and asks for a fresh
+review instead of overwriting the newer edits.
+
 Two invariants back the UI:
 
 - **Reject-all restores the file byte-identically** — applying no changes returns

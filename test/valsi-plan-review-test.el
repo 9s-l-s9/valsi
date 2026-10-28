@@ -65,7 +65,7 @@
                     (with-current-buffer target (buffer-string)))))))
 
 (ert-deftest valsi-test-plan-review-accept-all-yields-agent-version ()
-  "Accept-all applies every change: edit, removal, and addition."
+  "Accept-all applies every task-level change: edit, removal, and addition."
   (valsi-plan-review-test--with-review
    (valsi-plan-review-reject-all)
    (valsi-plan-review-accept-all)
@@ -90,6 +90,49 @@
        (should (string-match-p "- \\[ \\] 1\\.1" (buffer-string)))
        (should-not (string-match-p "1\\.2" (buffer-string)))
        (should (string-match-p "1\\.4" (buffer-string)))))))
+
+(ert-deftest valsi-test-plan-review-toggle-keeps-point-on-row ()
+  "Toggling a row leaves point on that row, so a second toggle undoes it."
+  (valsi-plan-review-test--with-review
+   (dotimes (i (length valsi-plan-review--changes))
+     (goto-char (point-min))
+     (forward-line (+ 2 i))
+     (valsi-plan-review-toggle)
+     (should (= (+ 3 i) (line-number-at-pos)))
+     (should-not (cdr (nth i valsi-plan-review--changes)))
+     (valsi-plan-review-toggle)
+     (should (= (+ 3 i) (line-number-at-pos)))
+     (should (cl-every #'cdr valsi-plan-review--changes)))))
+
+(ert-deftest valsi-test-plan-review-apply-refuses-stale-target ()
+  "Applying after the target changed refuses and keeps the newer edits."
+  (valsi-plan-review-test--with-review
+   (let ((target valsi-plan-review--target))
+     (with-current-buffer target
+       (goto-char (point-max))
+       (insert "- [ ] 1.5 Edited meanwhile\n"))
+     (let ((edited (with-current-buffer target (buffer-string))))
+       (should-error (valsi-plan-review-apply) :type 'user-error)
+       (should (equal edited (with-current-buffer target (buffer-string))))))))
+
+(ert-deftest valsi-test-plan-review-reject-all-leaves-buffer-unmodified ()
+  "Applying with every change rejected does not mark the target modified."
+  (valsi-plan-review-test--with-review
+   (let ((target valsi-plan-review--target))
+     (with-current-buffer target (set-buffer-modified-p nil))
+     (valsi-plan-review-reject-all)
+     (valsi-plan-review-apply)
+     (should-not (buffer-modified-p target)))))
+
+(ert-deftest valsi-test-plan-review-diff-is-task-level ()
+  "Only id-bearing task lines are diffed; added tasks append at the end."
+  (should-not (valsi-plan-diff "- [ ] 1 a\n- [ ] foo\n  - step\n"
+                               "- [ ] 1 a\n- [ ] foo\n  - step2\n"))
+  (let* ((old "- [ ] 1 a\n- [ ] 3 c\n")
+         (new "- [ ] 1 a\n- [ ] 2 b\n- [ ] 3 c\n")
+         (changes (valsi-plan-diff old new)))
+    (should (equal "- [ ] 1 a\n- [ ] 3 c\n- [ ] 2 b\n"
+                   (valsi-plan-apply-changes old changes)))))
 
 (ert-deftest valsi-test-plan-review-no-changes-no-buffer ()
   "An identical proposal opens no review buffer."

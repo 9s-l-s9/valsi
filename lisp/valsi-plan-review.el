@@ -12,7 +12,10 @@
 ;;
 ;; The diff is keyed by task id, so it is stable under reordering and robust to
 ;; the agent rewriting whole regions.  Reject-all restores the file
-;; byte-identically (the core invariant); accept-all yields the agent's version.
+;; byte-identically (the core invariant).  Accept-all applies every id-bearing
+;; task line from the agent's version; it is not a full-file replacement.
+;; Headings, prose, step lines, and un-ided tasks are not compared and keep
+;; their current text, and added tasks are appended at the end of the file.
 
 ;;; Code:
 
@@ -79,8 +82,9 @@ ignored (their dialects are positional and handled by `renumber')."
 
 (defun valsi-plan-apply-changes (old-content changes)
   "Apply accepted line-level edits to OLD-CONTENT and return the result.
-Each entry in CHANGES is keyed by id.  Return OLD-CONTENT byte-identically
-when CHANGES is empty (reject-all)."
+Each entry in CHANGES is keyed by id.  Modified and removed changes
+touch only the task line itself; added tasks are appended at the end.
+Return OLD-CONTENT byte-identically when CHANGES is empty (reject-all)."
   (with-temp-buffer
     (insert old-content)
     (dolist (ch changes)
@@ -183,8 +187,9 @@ node, then apply.  With no changes, reports so and does nothing."
     (when (and (>= i 0) (< i (length valsi-plan-review--changes)))
       (let ((row (nth i valsi-plan-review--changes)))
         (setcdr row (not (cdr row))))
+      ;; Refresh leaves point on row 0; move down to the toggled row.
       (valsi-plan-review--refresh)
-      (forward-line (+ 2 i)))))
+      (forward-line i))))
 
 (defun valsi-plan-review-accept-all ()
   "Mark every change accepted."
@@ -199,18 +204,27 @@ node, then apply.  With no changes, reports so and does nothing."
   (valsi-plan-review--refresh))
 
 (defun valsi-plan-review-apply ()
-  "Apply accepted edits to the target buffer and close the review."
+  "Apply accepted edits to the target buffer and close the review.
+Refuse when the target buffer changed after the review opened, since the
+changes were computed against the earlier snapshot."
   (interactive)
   (let* ((accepted (delq nil (mapcar (lambda (row) (and (cdr row) (car row)))
                                      valsi-plan-review--changes)))
-         (result (valsi-plan-apply-changes valsi-plan-review--old accepted))
+         (old valsi-plan-review--old)
+         (result (valsi-plan-apply-changes old accepted))
          (target valsi-plan-review--target))
     (when (buffer-live-p target)
       (with-current-buffer target
-        (let ((pt (point)))
-          (erase-buffer)
-          (insert result)
-          (goto-char (min pt (point-max))))))
+        ;; A stale snapshot would silently discard the newer edits.
+        (unless (string= old (buffer-string))
+          (user-error "Valsi review: %s changed since the review opened; \
+re-run the review" (buffer-name)))
+        ;; Reject-all leaves the buffer untouched, not merely equal.
+        (unless (string= result old)
+          (let ((pt (point)))
+            (erase-buffer)
+            (insert result)
+            (goto-char (min pt (point-max)))))))
     (quit-window)
     (message "Valsi review: applied %d change(s)" (length accepted))))
 
