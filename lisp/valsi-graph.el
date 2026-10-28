@@ -24,6 +24,7 @@
 (require 'cl-lib)
 (require 'valsi-view)
 (require 'valsi-parse)
+(require 'valsi-instruction)
 
 (declare-function project-current "project")
 (declare-function project-root "project")
@@ -84,14 +85,12 @@ stay distinct; the bare file name otherwise."
 ;;;; Built-in edge sources
 
 (defun valsi-graph--edges-instruction (file)
-  "Extract @import edges from FILE."
-  (let (edges (base (valsi-graph--source-name file)))
-    (with-temp-buffer
-      (insert-file-contents file)
-      (goto-char (point-min))
-      (while (re-search-forward "^[ \t]*@\\([^ \t\n]+\\)" nil t)
-        (push (list base "import" (match-string 1)) edges)))
-    (nreverse edges)))
+  "Extract @import edges from FILE.
+Uses the instruction grammar's import scan, so inline imports count and
+@mentions that are not path-like do not."
+  (let ((base (valsi-graph--source-name file)))
+    (mapcar (lambda (target) (list base "import" target))
+            (valsi-instruction--imports-of-file file))))
 
 (defun valsi-graph--edges-memory (file)
   "Extract [[wiki]] and index-pointer edges from FILE."

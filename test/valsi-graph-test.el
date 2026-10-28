@@ -31,6 +31,16 @@
                       edges))
       (should (= 2 (length edges))))))
 
+(ert-deftest valsi-test-graph-instruction-shared-import-scan ()
+  "Graph import edges follow the instruction grammar's import scan (#60)."
+  (valsi-graph-test--with-file
+      "# rules\nSee @docs/style.md for style.\n@alice reviews this.\nRun `@not/code.md` now.\n@./shared.md\n" f
+    (let ((edges (valsi-graph--edges-instruction f))
+          (base (file-name-nondirectory f)))
+      (should (equal (list (list base "import" "docs/style.md")
+                           (list base "import" "./shared.md"))
+                     edges)))))
+
 (ert-deftest valsi-test-graph-memory ()
   "[[wiki]] links and index pointers become edges."
   (valsi-graph-test--with-file
