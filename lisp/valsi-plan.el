@@ -186,7 +186,8 @@ By id sort-key prefix when both have keys, else by indent."
 
 (defun valsi-plan--state-index (root)
   "Return effective states and leaf counts for every node below ROOT.
-Each value has :state, :done, :total and :active fields.  Visit children before
+Each value has :state, :done, :total and :active fields.  Cancelled leaves
+are excluded from the counts.  Visit children before
 parents so each subtree contributes once, without recursive recomputation."
   (let ((index (make-hash-table :test #'eq))
         (pending (list root))
@@ -203,8 +204,10 @@ parents so each subtree contributes once, without recursive recomputation."
             (cl-incf total (plist-get stats :total))
             (cl-incf active (plist-get stats :active))))
         (if (and (eq (valsi-node-type node) 'task) (zerop total))
+            ;; A cancelled leaf leaves the denominator rather than
+            ;; counting as unfinished work.
             (setq state (valsi-node-prop node :state)
-                  total 1
+                  total (if (eq state 'cancelled) 0 1)
                   done (if (eq state 'done) 1 0)
                   active (if (eq state 'in-progress) 1 0))
           (setq state (cond ((zerop total) nil)

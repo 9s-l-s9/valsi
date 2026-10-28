@@ -79,5 +79,15 @@
                (lambda (&rest _) (error "Prompted"))))
       (should-error (valsi-plan-block) :type 'user-error))))
 
+(ert-deftest valsi-plan-commands-test-cancelled-excluded ()
+  "Cancelled leaves leave progress and interior state alone (#32)."
+  (should (equal '(1 2 0) (valsi-plan--leaf-stats
+                           (valsi-plan-parse "- [x] A\n- [c] B\n- [ ] C\n"))))
+  (let ((root (valsi-plan-parse
+               "- [x] T001 P\n  - [x] T001.1 a\n  - [c] T001.2 b\n")))
+    (should (eq 'done (valsi-plan-effective-state
+                       (car (valsi-node-of-type root 'task)))))
+    (should-not (valsi-plan--lint-issues root))))
+
 (provide 'valsi-plan-commands-test)
 ;;; valsi-plan-commands-test.el ends here
