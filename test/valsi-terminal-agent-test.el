@@ -103,5 +103,77 @@
         (should (member (string-replace "%" "%%" label) header-line-format))
         (should-not (member label header-line-format))))))
 
+(ert-deftest valsi-terminal-agent-test-stop-reads-named-agent ()
+  "Interactive stop targets the chosen named agent, stopped or live (#39)."
+  (valsi-terminal-agent-test--with-root
+    (let ((reviewer (save-window-excursion (valsi-agent "reviewer" 'pi)))
+          candidates default)
+      (cl-letf (((symbol-function 'yes-or-no-p) (lambda (&rest _) t))
+                ((symbol-function 'completing-read)
+                 (lambda (_prompt collection &optional _pred _req _init _hist def &rest _)
+                   (setq candidates collection default def)
+                   "reviewer")))
+        ;; Inside the reviewer's terminal, it is the proposed default.
+        (with-current-buffer (valsi-terminal-agent-instance-buffer reviewer)
+          (call-interactively #'valsi-terminal-agent-stop))
+        (should (equal '("reviewer") candidates))
+        (should (equal "reviewer" default))
+        (should-not (valsi-terminal-agent-list root))
+        ;; A stopped agent is still offered and dismissed.
+        (let ((again (save-window-excursion (valsi-agent "reviewer" 'pi))))
+          (delete-process (get-buffer-process (valsi-terminal-agent-instance-buffer again))))
+        (should (valsi-terminal-agent-list root))
+        (call-interactively #'valsi-terminal-agent-stop)
+        (should-not (valsi-terminal-agent-list root))
+        (should-error (call-interactively #'valsi-terminal-agent-stop)
+                      :type 'user-error)))))
+
+(require 'valsi-projects-test)
+
+(defun valsi-terminal-agent-test--agent-row (root name)
+  "Move to agent NAME's row of project ROOT in the current overview."
+  (goto-char (point-min))
+  (let ((match (text-property-search-forward
+                'valsi-row-id (format "agent:%s:%s" root name) #'equal)))
+    (should match)
+    (goto-char (prop-match-beginning match))))
+
+(ert-deftest valsi-terminal-agent-test-projects-row-agent-keys ()
+  "Projects a and k act on the agent row at point, not on primary (#39)."
+  (valsi-projects-test--with-projects
+    (cl-letf (((symbol-function 'valsi-terminal-agent--eat) #'ignore)
+              ((symbol-function 'valsi-terminal-agent--ensure-program)
+               (lambda (program _) program))
+              ((symbol-function 'yes-or-no-p) (lambda (&rest _) t))
+              ((symbol-function 'eat-make)
+               (lambda (name &rest _)
+                 (let ((buffer (generate-new-buffer name)))
+                   (make-pipe-process :name name :buffer buffer :noquery t)
+                   buffer))))
+      (let ((reviewer (valsi-terminal-agent--start a "reviewer" 'claude)))
+        (should (eq 'valsi-projects-stop-agent
+                    (lookup-key valsi-projects-mode-map (kbd "k"))))
+        (valsi-projects)
+        (let ((kill-buffer-query-functions nil))
+          (kill-buffer (valsi-terminal-agent-instance-buffer reviewer)))
+        (valsi-terminal-agent-test--agent-row a "reviewer")
+        ;; The stopped row explains how to act on it.
+        (should-error (valsi-projects-activate) :type 'user-error)
+        ;; a restarts this row's agent with its backend, not primary.
+        (save-window-excursion (valsi-projects-open-agent))
+        (should-not (valsi-terminal-agent-get a "primary"))
+        (let ((restarted (valsi-terminal-agent-get a "reviewer")))
+          (should restarted)
+          (should (eq 'claude (valsi-terminal-agent-instance-backend restarted))))
+        (with-current-buffer "*Valsi Projects*"
+          (valsi-projects-test--row a)
+          (should-error (valsi-projects-remove) :type 'user-error)
+          (valsi-terminal-agent-test--agent-row a "reviewer")
+          (valsi-projects-stop-agent)
+          (should-not (valsi-terminal-agent-list a))
+          (valsi-projects-test--row a)
+          (valsi-projects-remove)
+          (should-not (member a (valsi-project-roots))))))))
+
 (provide 'valsi-terminal-agent-test)
 ;;; valsi-terminal-agent-test.el ends here

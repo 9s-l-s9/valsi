@@ -86,12 +86,34 @@
     (valsi-project-switch root)
     (let ((default-directory root)) (valsi))))
 
+(defun valsi-projects--selected-agent (root)
+  "Return the registered agent on the current row of project ROOT, or nil."
+  (when-let* ((name (get-text-property (line-beginning-position) 'valsi-agent-name)))
+    (seq-find (lambda (instance) (equal name (valsi-terminal-agent-instance-name instance)))
+              (valsi-terminal-agent-list root))))
+
 (defun valsi-projects-open-agent ()
-  "Open or start the selected project's agent."
+  "Open or start the agent on the current row, else the project's primary agent."
   (interactive)
-  (let ((root (valsi-projects--selected-root)))
+  (let* ((root (valsi-projects--selected-root))
+         (instance (valsi-projects--selected-agent root)))
     (valsi-project-switch root)
-    (let ((default-directory root)) (valsi-agent))))
+    (let ((default-directory root))
+      (if instance
+          (valsi-agent (valsi-terminal-agent-instance-name instance)
+                       (valsi-terminal-agent-instance-backend instance))
+        (valsi-agent)))))
+
+(defun valsi-projects-stop-agent ()
+  "Stop or dismiss the agent on the current row, or one read from the project."
+  (interactive)
+  (let* ((root (valsi-projects--selected-root))
+         (instance (valsi-projects--selected-agent root)))
+    (valsi-terminal-agent-stop
+     (if instance
+         (valsi-terminal-agent-instance-name instance)
+       (valsi-terminal-agent--read-registered root "Stop agent: "))
+     root)))
 
 (defun valsi-projects-new-agent ()
   "Start a named agent in the selected project."
@@ -115,7 +137,8 @@
   (let ((root (button-get button 'valsi-root))
         (buffer (button-get button 'valsi-buffer)))
     (unless (buffer-live-p buffer)
-      (user-error "Terminal is closed; use a to open an agent"))
+      (user-error "Agent %s is stopped; a restarts it, k dismisses it"
+                  (button-get button 'valsi-agent-name)))
     (valsi-project-switch root)
     (switch-to-buffer buffer)))
 
@@ -252,6 +275,7 @@ A project with a running agent must be stopped explicitly before removal."
            (insert-text-button (valsi-terminal-agent-instance-name instance)
                                'follow-link t 'valsi-root root
                                'valsi-buffer (valsi-terminal-agent-instance-buffer instance)
+                               'valsi-agent-name (valsi-terminal-agent-instance-name instance)
                                'action #'valsi-projects--visit-agent)
            (insert " · " (propertize (valsi-terminal-agent-status-label instance)
                                       'face (if (valsi-terminal-agent-attention-p instance)
@@ -264,7 +288,8 @@ A project with a running agent must be stopped explicitly before removal."
              (insert " · " task))
            (insert "\n")
            (add-text-properties row (point)
-                                `(valsi-row-id ,(format "agent:%s:%s" root (valsi-terminal-agent-instance-name instance)))))))
+                                `(valsi-row-id ,(format "agent:%s:%s" root (valsi-terminal-agent-instance-name instance))
+                                  valsi-agent-name ,(valsi-terminal-agent-instance-name instance))))))
      (let ((counts
             (format "%s · %d attention · %d running%s%s"
                     (if (and project (valsi-app-live-refresh--project-initialized project))
@@ -333,6 +358,7 @@ A project with a running agent must be stopped explicitly before removal."
     ("c" "project hub" valsi-projects-open-hub)
     ("a" "agent terminal" valsi-projects-open-agent)
     ("N" "new named agent" valsi-projects-new-agent)
+    ("k" "stop agent" valsi-projects-stop-agent)
     ("w" "switch project" valsi-project-switch)]
    ["Projects"
     ("+" "add" valsi-projects-add)
@@ -349,7 +375,7 @@ A project with a running agent must be stopped explicitly before removal."
     (dolist (binding '(("n" . valsi-projects-next) ("p" . valsi-projects-previous)
                        ("RET" . valsi-projects-activate) ("TAB" . valsi-view-toggle-section)
                        ("c" . valsi-projects-open-hub) ("a" . valsi-projects-open-agent)
-                       ("N" . valsi-projects-new-agent) ("+" . valsi-projects-add) ("-" . valsi-projects-remove)
+                       ("N" . valsi-projects-new-agent) ("k" . valsi-projects-stop-agent) ("+" . valsi-projects-add) ("-" . valsi-projects-remove)
                        ("g" . valsi-projects-refresh) ("/" . valsi-projects-filter)
                        ("w" . valsi-project-switch) ("P" . valsi-projects)
                        ("?" . valsi-projects-menu) ("SPC" . valsi-projects-menu)

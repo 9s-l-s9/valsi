@@ -271,6 +271,7 @@ Deliberately small: the CLI owns every printable key."
     ("P" "projects" valsi-projects)
     ("w" "switch project" valsi-project-switch)
     ("s" "record task status" valsi-terminal-agent-set-status)
+    ("k" "stop agent" valsi-terminal-agent-stop)
     ("c" "project hub" valsi)
     ("a" "artifact index" valsi-app-focus-artifacts)
     ("f" "focus agent" valsi-app-focus-agent)
@@ -479,10 +480,30 @@ NAME defaults to \"primary\" and BACKEND to
     (delete-other-windows)
     (switch-to-buffer (valsi-terminal-agent-instance-buffer instance))))
 
-(defun valsi-terminal-agent-stop (&optional name)
-  "Stop project agent NAME after confirmation."
-  (interactive)
-  (let* ((root (valsi-terminal-agent-project-root))
+(defun valsi-terminal-agent--read-registered (root prompt)
+  "Read the name of a registered agent at ROOT, running or stopped, with PROMPT.
+The current terminal's agent, else \"primary\", is the default."
+  (let* ((instances (valsi-terminal-agent-list root))
+         (names (mapcar #'valsi-terminal-agent-instance-name instances))
+         (current (seq-find (lambda (instance)
+                              (eq (current-buffer)
+                                  (valsi-terminal-agent-instance-buffer instance)))
+                            instances)))
+    (unless names (user-error "No Valsi agents in this project"))
+    (completing-read prompt names nil t nil nil
+                     (cond (current (valsi-terminal-agent-instance-name current))
+                           ((member "primary" names) "primary")))))
+
+;;;###autoload
+(defun valsi-terminal-agent-stop (&optional name root)
+  "Stop project agent NAME after confirmation.
+A stopped agent is dismissed from the project.  NAME defaults to
+\"primary\" and ROOT to the current project.  Interactively, read NAME
+among the project's running and stopped agents."
+  (interactive
+   (list (valsi-terminal-agent--read-registered
+          (valsi-terminal-agent-project-root) "Stop agent: ")))
+  (let* ((root (or root (valsi-terminal-agent-project-root)))
          (name (or name "primary"))
          (key (valsi-terminal-agent--key root name))
          (instance (gethash key valsi-terminal-agent--instances)))
