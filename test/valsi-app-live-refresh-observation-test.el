@@ -29,10 +29,11 @@
        (delete-directory ,root t))))
 
 (defun valsi-app-live-refresh-observation-test--hub (root)
-  "Subscribe a fresh hub buffer to ROOT without filesystem watches."
-  (cl-letf (((symbol-function 'valsi-app-live-refresh--watch-directory) #'ignore))
-    (valsi-app-live-refresh-subscribe
-     (generate-new-buffer " *valsi-observe-hub*") root #'ignore)))
+  "Subscribe and return a fresh hub buffer for ROOT without watches."
+  (let ((hub (generate-new-buffer " *valsi-observe-hub*")))
+    (cl-letf (((symbol-function 'valsi-app-live-refresh--watch-directory) #'ignore))
+      (valsi-app-live-refresh-subscribe hub root #'ignore))
+    hub))
 
 (defun valsi-app-live-refresh-observation-test--pending-p (root)
   "Return non-nil when ROOT has a scheduled refresh."
@@ -59,6 +60,34 @@
         (text-mode)
         (insert "z")
         (should (valsi-app-live-refresh-observation-test--pending-p root))))))
+
+(ert-deftest valsi-app-live-refresh-observation-serves-nested-projects ()
+  "Regression for #47: a file indexed by nested projects refreshes both hubs."
+  (valsi-app-live-refresh-observation-test--with-root outer
+    (let* ((inner (file-name-as-directory (expand-file-name "sub" outer)))
+           (file (expand-file-name "PLAN.md" inner))
+           (outer-project (valsi-app-live-refresh--project outer))
+           (inner-project (valsi-app-live-refresh--project inner))
+           buffer)
+      (make-directory inner)
+      (with-temp-file file (insert "# Plan\n"))
+      (setq buffer (find-file-noselect file))
+      (valsi-app-live-refresh-observation-test--hub outer)
+      (let ((inner-hub (valsi-app-live-refresh-observation-test--hub inner)))
+        (valsi-app-live-refresh--observe-buffer file outer)
+        (valsi-app-live-refresh--observe-buffer file inner)
+        (with-current-buffer buffer (insert "x"))
+        (should (valsi-app-live-refresh-observation-test--pending-p outer))
+        (should (valsi-app-live-refresh-observation-test--pending-p inner))
+        ;; Closing the inner hub must keep the outer project's observation.
+        (valsi-app-live-refresh-unsubscribe inner-hub inner)
+        (valsi-app-live-refresh--cancel-work outer-project)
+        (valsi-app-live-refresh--cancel-work inner-project)
+        (with-current-buffer buffer
+          (should (equal (list outer) valsi-app-live-refresh--buffer-roots))
+          (insert "y"))
+        (should (valsi-app-live-refresh-observation-test--pending-p outer))
+        (should-not (valsi-app-live-refresh-observation-test--pending-p inner))))))
 
 (provide 'valsi-app-live-refresh-observation-test)
 ;;; valsi-app-live-refresh-observation-test.el ends here

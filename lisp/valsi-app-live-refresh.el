@@ -70,15 +70,16 @@ A single file operation, parser, or project backend call can take longer."
   "Edited files during an incremental dispatch, or nil for a full scan.
 Disk notifications and explicit refreshes always request a full scan.")
 
-(defvar-local valsi-app-live-refresh--buffer-root nil
-  "Canonical project root whose hub observes this artifact buffer.")
+(defvar-local valsi-app-live-refresh--buffer-roots nil
+  "Canonical project roots whose hubs observe this artifact buffer.
+Nested working projects can index the same file.")
 
 (defvar-local valsi-app-live-refresh--buffer-tick nil
   "Last observed text modification tick; fontification does not change it.")
 
 ;; Observation must survive `revert-buffer' and major-mode changes, which
 ;; call `kill-all-local-variables'.
-(put 'valsi-app-live-refresh--buffer-root 'permanent-local t)
+(put 'valsi-app-live-refresh--buffer-roots 'permanent-local t)
 (put 'valsi-app-live-refresh--buffer-tick 'permanent-local t)
 
 (defvar valsi-app-live-refresh--find-file-hook-installed nil
@@ -135,33 +136,32 @@ Disk notifications and explicit refreshes always request a full scan.")
 
 (defun valsi-app-live-refresh--buffer-after-change (&rest _)
   "Schedule refresh after an observed artifact buffer edit."
-  (when (and valsi-app-live-refresh--buffer-root
+  (when (and valsi-app-live-refresh--buffer-roots
              (not (equal valsi-app-live-refresh--buffer-tick
                          (buffer-chars-modified-tick))))
     (setq valsi-app-live-refresh--buffer-tick (buffer-chars-modified-tick))
-    (valsi-app-live-refresh-schedule valsi-app-live-refresh--buffer-root
-                                      buffer-file-name)))
+    (dolist (root valsi-app-live-refresh--buffer-roots)
+      (valsi-app-live-refresh-schedule root buffer-file-name))))
 
 (defun valsi-app-live-refresh--buffer-after-save ()
   "Record an observed save and schedule affected hubs."
-  (when valsi-app-live-refresh--buffer-root
-    (let* ((project
-            (valsi-app-live-refresh--project
-             valsi-app-live-refresh--buffer-root))
-           (file (and buffer-file-name (file-truename buffer-file-name))))
-      ;; A save performed by Emacs is already incorporated into the
-      ;; authoritative baseline.  It must not be reported as an external
-      ;; "changed on disk" event.
-      (when file
-        (puthash file (valsi-app-live-refresh--signature file)
-                 (valsi-app-live-refresh--project-signatures project)))
-      (valsi-app-live-refresh-schedule valsi-app-live-refresh--buffer-root))))
+  (when valsi-app-live-refresh--buffer-roots
+    (let* ((file (and buffer-file-name (file-truename buffer-file-name)))
+           (signature (and file (valsi-app-live-refresh--signature file))))
+      (dolist (root valsi-app-live-refresh--buffer-roots)
+        ;; A save performed by Emacs is already incorporated into the
+        ;; authoritative baseline.  It must not be reported as an external
+        ;; "changed on disk" event.
+        (when file
+          (puthash file signature
+                   (valsi-app-live-refresh--project-signatures
+                    (valsi-app-live-refresh--project root))))
+        (valsi-app-live-refresh-schedule root)))))
 
 (defun valsi-app-live-refresh--buffer-killed ()
   "Refresh an observed artifact when its visiting buffer is closed."
-  (when valsi-app-live-refresh--buffer-root
-    (valsi-app-live-refresh-schedule valsi-app-live-refresh--buffer-root
-                                     buffer-file-name)))
+  (dolist (root valsi-app-live-refresh--buffer-roots)
+    (valsi-app-live-refresh-schedule root buffer-file-name)))
 
 (defun valsi-app-live-refresh--add-buffer-hooks ()
   "Install the current buffer's artifact observation hooks."
@@ -199,7 +199,9 @@ Disk notifications and explicit refreshes always request a full scan.")
   "Observe edits and saves in FILE's existing buffer for ROOT."
   (when-let* ((buffer (valsi-app-live-refresh--file-buffer file)))
     (with-current-buffer buffer
-      (setq-local valsi-app-live-refresh--buffer-root root)
+      (setq-local valsi-app-live-refresh--buffer-roots
+                  (cl-adjoin root valsi-app-live-refresh--buffer-roots
+                             :test #'equal))
       (setq-local valsi-app-live-refresh--buffer-tick (buffer-chars-modified-tick))
       (valsi-app-live-refresh--add-buffer-hooks))))
 
@@ -207,10 +209,13 @@ Disk notifications and explicit refreshes always request a full scan.")
   "Detach artifact buffer hooks for ROOT when observation ends."
   (dolist (buffer (buffer-list))
     (with-current-buffer buffer
-      (when (equal valsi-app-live-refresh--buffer-root root)
-        (valsi-app-live-refresh--remove-buffer-hooks)
-        (setq valsi-app-live-refresh--buffer-root nil
-              valsi-app-live-refresh--buffer-tick nil)))))
+      (when (member root valsi-app-live-refresh--buffer-roots)
+        (setq valsi-app-live-refresh--buffer-roots
+              (remove root valsi-app-live-refresh--buffer-roots))
+        ;; Other nested projects may still observe this buffer.
+        (unless valsi-app-live-refresh--buffer-roots
+          (valsi-app-live-refresh--remove-buffer-hooks)
+          (setq valsi-app-live-refresh--buffer-tick nil))))))
 
 (defun valsi-app-live-refresh--find-file ()
   "Observe a newly visited file when an active project already indexes it."
