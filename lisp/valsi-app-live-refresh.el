@@ -116,8 +116,10 @@ Nested working projects can index the same file.")
           (file-attribute-type attributes))))
 
 (defun valsi-app-live-refresh--file-buffer (file)
-  "Return the live file-visiting buffer for FILE, if any."
-  (let ((buffer (get-file-buffer file)))
+  "Return the live file-visiting buffer for FILE, if any.
+Unlike `get-file-buffer', this also finds a buffer visiting FILE through a
+symbolic link or another name."
+  (let ((buffer (find-buffer-visiting file)))
     (and (buffer-live-p buffer) buffer)))
 
 (defun valsi-app-live-refresh--disk-diverged-p (buffer)

@@ -10,6 +10,7 @@
 (require 'ert)
 (require 'cl-lib)
 (require 'valsi-app-live-refresh)
+(require 'valsi-app)
 
 (defmacro valsi-app-live-refresh-observation-test--with-root (root &rest body)
   "Run BODY with a temporary canonical ROOT, resetting live refresh after."
@@ -88,6 +89,30 @@
           (insert "y"))
         (should (valsi-app-live-refresh-observation-test--pending-p outer))
         (should-not (valsi-app-live-refresh-observation-test--pending-p inner))))))
+
+(ert-deftest valsi-app-live-refresh-observation-finds-symlinked-buffers ()
+  "Regression for #48: unsaved edits through a symlinked path are modified."
+  (valsi-app-live-refresh-observation-test--with-root base
+    (let* ((root (file-name-as-directory (expand-file-name "a" base)))
+           (alias (expand-file-name "alias" base))
+           (file (expand-file-name "PLAN.md" root))
+           buffer)
+      (make-directory root)
+      (make-symbolic-link root alias)
+      (with-temp-file file (insert "# Plan\n"))
+      (setq buffer (find-file-noselect (expand-file-name "PLAN.md" alias)))
+      (with-current-buffer buffer
+        (goto-char (point-max))
+        (insert "unsaved\n"))
+      (should (eq buffer (valsi-app-live-refresh--file-buffer file)))
+      (should
+       (equal '("modified")
+              (mapcar (lambda (entry) (plist-get entry :state))
+                      (valsi-app-live-refresh-reconcile
+                       root (list (list :file file :grammar 'plan))))))
+      (should (equal "modified" (valsi-app--file-state file)))
+      (should (string-match-p "unsaved" (valsi-app--file-text file)))
+      (should (eq buffer (plist-get (valsi-app--file-cache-key file) :buffer))))))
 
 (provide 'valsi-app-live-refresh-observation-test)
 ;;; valsi-app-live-refresh-observation-test.el ends here
