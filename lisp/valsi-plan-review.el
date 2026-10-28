@@ -200,18 +200,27 @@ node, then apply.  With no changes, reports so and does nothing."
   (valsi-plan-review--refresh))
 
 (defun valsi-plan-review-apply ()
-  "Apply accepted edits to the target buffer and close the review."
+  "Apply accepted edits to the target buffer and close the review.
+Refuse when the target buffer changed after the review opened, since the
+changes were computed against the earlier snapshot."
   (interactive)
   (let* ((accepted (delq nil (mapcar (lambda (row) (and (cdr row) (car row)))
                                      valsi-plan-review--changes)))
-         (result (valsi-plan-apply-changes valsi-plan-review--old accepted))
+         (old valsi-plan-review--old)
+         (result (valsi-plan-apply-changes old accepted))
          (target valsi-plan-review--target))
     (when (buffer-live-p target)
       (with-current-buffer target
-        (let ((pt (point)))
-          (erase-buffer)
-          (insert result)
-          (goto-char (min pt (point-max))))))
+        ;; A stale snapshot would silently discard the newer edits.
+        (unless (string= old (buffer-string))
+          (user-error "Valsi review: %s changed since the review opened; \
+re-run the review" (buffer-name)))
+        ;; Reject-all leaves the buffer untouched, not merely equal.
+        (unless (string= result old)
+          (let ((pt (point)))
+            (erase-buffer)
+            (insert result)
+            (goto-char (min pt (point-max)))))))
     (quit-window)
     (message "Valsi review: applied %d change(s)" (length accepted))))
 

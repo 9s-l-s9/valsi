@@ -104,6 +104,26 @@
      (should (= (+ 3 i) (line-number-at-pos)))
      (should (cl-every #'cdr valsi-plan-review--changes)))))
 
+(ert-deftest valsi-test-plan-review-apply-refuses-stale-target ()
+  "Applying after the target changed refuses and keeps the newer edits."
+  (valsi-plan-review-test--with-review
+   (let ((target valsi-plan-review--target))
+     (with-current-buffer target
+       (goto-char (point-max))
+       (insert "- [ ] 1.5 Edited meanwhile\n"))
+     (let ((edited (with-current-buffer target (buffer-string))))
+       (should-error (valsi-plan-review-apply) :type 'user-error)
+       (should (equal edited (with-current-buffer target (buffer-string))))))))
+
+(ert-deftest valsi-test-plan-review-reject-all-leaves-buffer-unmodified ()
+  "Applying with every change rejected does not mark the target modified."
+  (valsi-plan-review-test--with-review
+   (let ((target valsi-plan-review--target))
+     (with-current-buffer target (set-buffer-modified-p nil))
+     (valsi-plan-review-reject-all)
+     (valsi-plan-review-apply)
+     (should-not (buffer-modified-p target)))))
+
 (ert-deftest valsi-test-plan-review-no-changes-no-buffer ()
   "An identical proposal opens no review buffer."
   (with-temp-buffer
