@@ -6,7 +6,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { AAPClient } from "./aap-client.mjs";
+import { AAPClient, aapConnection } from "./aap-client.mjs";
 
 const extensionDirectory = dirname(fileURLToPath(import.meta.url));
 const installedLispDirectory = resolve(extensionDirectory, "..");
@@ -26,24 +26,23 @@ function result(value: unknown) {
 
 /** Register the deliberately small read-only Pi→AAP artifact seam. */
 export function registerAAPTools(pi: ExtensionAPI) {
-	let client: AAPClient | undefined;
-	const connection = () => {
-		client ??= new AAPClient(process.env.Valsi_AAP_EMACS ?? "emacs", [
-			"-Q",
-			"--batch",
-			"-L",
-			lispDirectory,
-			"-l",
-			"valsi-server",
-			"-f",
-			"valsi-server-stdio",
-		]);
-		return client;
-	};
+	// Respawn the headless server when it exited; didOpen is sent per call.
+	const connection = aapConnection(
+		() =>
+			new AAPClient(process.env.Valsi_AAP_EMACS ?? "emacs", [
+				"-Q",
+				"--batch",
+				"-L",
+				lispDirectory,
+				"-l",
+				"valsi-server",
+				"-f",
+				"valsi-server-stdio",
+			]),
+	);
 
 	pi.on("session_shutdown", async () => {
-		client?.close();
-		client = undefined;
+		connection.close();
 	});
 
 	pi.registerTool({
