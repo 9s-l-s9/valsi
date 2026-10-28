@@ -141,6 +141,29 @@
       (valsi-projects)
       (should (equal (list a) (valsi-project-roots))))))
 
+(ert-deftest valsi-projects-dedicated-window-stays-with-its-project ()
+  "A dedicated selected window never leaks into Projects or a new project (#89)."
+  (valsi-projects-test--with-projects
+    (let ((names (lambda ()
+                   (mapcar (lambda (window) (buffer-name (window-buffer window)))
+                           (window-list nil 'nomini)))))
+      (valsi-project-switch a)
+      (delete-other-windows)
+      (switch-to-buffer (find-file-noselect fa))
+      (set-window-dedicated-p (selected-window) t)
+      (valsi-projects)
+      (should (equal '("*Valsi Projects*") (funcall names)))
+      (with-current-buffer "*Valsi Projects*" (valsi-projects-quit))
+      ;; Leaving Projects restores the dedicated window unchanged.
+      (should (equal '("PLAN.md") (funcall names)))
+      (should (window-dedicated-p (selected-window)))
+      (valsi-project-switch b)
+      (should (equal (list (buffer-name (valsi-app--buffer b nil))) (funcall names)))
+      (valsi-project-switch a)
+      (should (window-dedicated-p (get-buffer-window (get-file-buffer fa))))
+      (valsi-project-switch b)
+      (should (equal (list (buffer-name (valsi-app--buffer b nil))) (funcall names))))))
+
 ;; Batch Emacs cannot create a minibuffer-only frame, so these stub the
 ;; frame primitives with symbols standing in for frames and windows (#88).
 

@@ -134,6 +134,15 @@ deleted keeps the buffer the selected window showed before."
                    (window-list nil 'nomini))
          (selected-window)))))
 
+(defun valsi-projects--show-alone (buffer)
+  "Show BUFFER as the only window of the selected frame.
+The selected window loses any dedication: it belonged to the layout
+being replaced, which keeps it in its saved state."
+  (valsi-app-hide-sidebars)
+  (delete-other-windows)
+  (set-window-dedicated-p nil nil)
+  (switch-to-buffer buffer))
+
 ;;;###autoload
 (defun valsi-project-switch (root)
   "Resume project ROOT's windows, or open its hub on the first visit."
@@ -163,9 +172,7 @@ deleted keeps the buffer the selected window showed before."
           (error (setq saved nil)))
       (setq saved nil))
     (unless saved
-      (valsi-app-hide-sidebars)
-      (delete-other-windows)
-      (switch-to-buffer (valsi-app--buffer root nil)))
+      (valsi-projects--show-alone (valsi-app--buffer root nil)))
     (set-frame-parameter nil 'valsi-project-current root))
   (valsi-app--window-buffer-changed (selected-frame)))
 
@@ -514,9 +521,7 @@ A project with a running agent must be stopped explicitly before removal."
       (unless (derived-mode-p 'valsi-projects-mode) (valsi-projects-mode))
       (valsi-projects--sync))
     (valsi-projects--main-window)
-    (valsi-app-hide-sidebars)
-    (delete-other-windows)
-    (switch-to-buffer buffer)))
+    (valsi-projects--show-alone buffer)))
 
 (add-hook 'valsi-project-change-hook #'valsi-projects--changed)
 
