@@ -482,8 +482,21 @@ Only this line's checkbox changes, even on an interior task; use
           (setq max (max max (string-to-number (match-string 1 id)))))))
     max))
 
+(defun valsi-plan--subtree-line-end (root)
+  "Return the end of the last line of the ROOT task subtree at point.
+Off a task line, return the end of the current line."
+  (let ((task (valsi-plan--task-at-line (valsi-node-of-type root 'task))))
+    (if (not task)
+        (line-end-position)
+      (save-excursion
+        (goto-char (cdr (valsi-plan--task-region task)))
+        (when (and (bolp) (> (point) (point-min)))
+          (backward-char))
+        (point)))))
+
 (defun valsi-plan-insert-task (desc)
   "Insert a new open task after point, numbered in the buffer's dialect.
+On a task line the new task follows that task's whole subtree.
 DESC is the task description.  Speckit buffers get the next Tnnn id, kiro
 buffers the next integer id; other dialects get no id."
   (interactive "sTask description: ")
@@ -493,7 +506,7 @@ buffers the next integer id; other dialects get no id."
                    (buffer-substring-no-properties
                     (point) (progn (skip-chars-forward " \t") (point)))))
          (id (valsi-plan--dialect-next-id root)))
-    (end-of-line)
+    (goto-char (valsi-plan--subtree-line-end root))
     (insert (format "\n%s- [ ] %s%s" indent (if id (concat id " ") "") desc))
     (message "Inserted %s" (or id "task"))))
 
@@ -683,10 +696,12 @@ Refuses on non-speckit dialects (positional ids are meaningful there)."
       (message "Completed %d task(s) with children" n))))
 
 (defun valsi-plan-split-task ()
-  "Split the task at point in two: text after point becomes a new task below."
+  "Split the task at point in two: text after point becomes a new task below.
+The new task follows the original's subtree, so its children stay put."
   (interactive)
   (let* ((root (valsi-plan--buffer-tree))
-         (id (valsi-plan--dialect-next-id root)))
+         (id (valsi-plan--dialect-next-id root))
+         (end (copy-marker (valsi-plan--subtree-line-end root))))
     (save-excursion (beginning-of-line)
                     (unless (looking-at valsi-parse-checkbox-re)
                       (user-error "No task on this line")))
@@ -698,7 +713,9 @@ Refuses on non-speckit dialects (positional ids are meaningful there)."
                  (buffer-substring-no-properties (point) (line-end-position)))))
       (atomic-change-group
         (delete-region (point) (line-end-position))
+        (goto-char end)
         (insert (format "\n%s- [ ] %s%s" indent (if id (concat id " ") "") rest)))
+      (set-marker end nil)
       (message "Split into %s" (or id "a new task")))))
 
 (defun valsi-plan-promote-step ()

@@ -101,5 +101,22 @@
                                   root temporary-file-directory))))
     (should (equal '("nope/missing.el") (valsi-plan--task-files task)))))
 
+(ert-deftest valsi-plan-commands-test-insert-split-after-subtree ()
+  "Insert and split on a parent place the new task after its subtree (#34)."
+  (with-temp-buffer
+    (insert "- [ ] T001 a\n  - [ ] T001.1 b\n- [ ] T002 c\n")
+    (goto-char (point-min))
+    (valsi-plan-insert-task "new")
+    (should (equal (concat "- [ ] T001 a\n  - [ ] T001.1 b\n"
+                           "- [ ] T003 new\n- [ ] T002 c\n")
+                   (buffer-string))))
+  (with-temp-buffer
+    (insert "- [ ] T001 a b\n  - [ ] T001.1 c")
+    (goto-char (point-min))
+    (search-forward "a ")
+    (valsi-plan-split-task)
+    (should (equal "- [ ] T001 a \n  - [ ] T001.1 c\n- [ ] T002 b"
+                   (buffer-string)))))
+
 (provide 'valsi-plan-commands-test)
 ;;; valsi-plan-commands-test.el ends here
