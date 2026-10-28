@@ -111,5 +111,45 @@
     (valsi-artifact-minor-mode -1)
     (should-not (local-variable-p 'header-line-format))))
 
+;;;; #74: font-lock follows the resolved grammar
+
+(defun valsi-core-test--grammar-keywords ()
+  "Return the keywords the current buffer's grammar declares."
+  (let ((kw (plist-get (valsi-registry-get valsi--grammar) :font-lock)))
+    (if (functionp kw) (funcall kw (current-buffer)) kw)))
+
+(ert-deftest valsi-core-test-font-lock-follows-grammar-change ()
+  "Re-detection after an edit installs the new grammar's keywords."
+  (valsi-init)
+  (valsi-core-test--with-file
+   "notes.md" "# Notes\n\nplain text\n"
+   (lambda ()
+     (valsi-artifact-minor-mode 1)
+     (let ((before valsi--grammar))
+       (let ((inhibit-read-only t))
+         (goto-char (point-max))
+         (insert "\n- [ ] T001 a\n- [ ] T002 b\n"))
+       (valsi-refresh)
+       (should (eq valsi--grammar 'plan))
+       (should-not (eq before 'plan))
+       (should (equal valsi-view--installed-keywords
+                      (valsi-core-test--grammar-keywords)))))))
+
+(ert-deftest valsi-core-test-font-lock-follows-grammar-reload ()
+  "Re-registering a grammar refreshes keywords in its open buffers."
+  (valsi-init)
+  (let* ((spec (valsi-registry-get 'plan))
+         (keywords '(("T001" . 'bold))))
+    (unwind-protect
+        (valsi-core-test--with-file
+         "PLAN.md" valsi-core-test--plan
+         (lambda ()
+           (valsi-artifact-minor-mode 1)
+           (should (eq valsi--grammar 'plan))
+           (valsi-registry-register
+            (plist-put (copy-sequence spec) :font-lock keywords))
+           (should (equal valsi-view--installed-keywords keywords))))
+      (valsi-registry-register spec))))
+
 (provide 'valsi-core-test)
 ;;; valsi-core-test.el ends here

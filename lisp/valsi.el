@@ -100,6 +100,10 @@ Nil means stale; `valsi-tree' refetches it from the server via the proto layer."
 
 (defvar valsi--interaction-state)
 (defvar valsi--original-read-only)
+(defvar valsi-artifact-minor-mode)
+
+(defvar-local valsi--font-lock-key nil
+  "The grammar id and registry generation whose keywords are installed.")
 
 (defcustom valsi-idle-delay 0.15
   "Idle seconds before updating semantic context after an artifact edit."
@@ -154,6 +158,11 @@ Records the resolved grammar + capabilities.  Marks the local tree stale."
     (setq valsi--capabilities (plist-get resp :capabilities))
     (setq valsi--tree nil)
     (setq valsi--synced-version (valsi--version))
+    ;; Re-detection or a grammar reload changes which keywords apply.
+    (when (and valsi-artifact-minor-mode
+               (not (equal valsi--font-lock-key
+                           (list valsi--grammar valsi-registry-generation))))
+      (valsi--install-font-lock))
     resp))
 
 (defun valsi-tree ()
@@ -276,8 +285,6 @@ offset->buffer-position translation here."
   "Read-only state before Valsi enabled in this buffer.")
 (put 'valsi--original-read-only 'permanent-local t)
 
-(defvar valsi-artifact-minor-mode)
-
 (defvar valsi-browse-mode-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "n") #'valsi-next)
@@ -388,8 +395,20 @@ See `valsi-enter-browse-hook'.")
   "Install the active grammar's font-lock keywords."
   (let* ((spec (valsi-registry-get valsi--grammar))
          (kw (plist-get spec :font-lock)))
+    (setq valsi--font-lock-key (list valsi--grammar valsi-registry-generation))
     (valsi-view-set-font-lock
      (if (functionp kw) (funcall kw (current-buffer)) kw))))
+
+(defun valsi--grammar-registered (id)
+  "Reinstall font-lock in every artifact buffer showing grammar ID.
+Runs on `valsi-registry-hook', so a (re)registered grammar's keywords take
+effect in open buffers immediately.  Re-detection follows on the next sync."
+  (dolist (buffer (buffer-list))
+    (with-current-buffer buffer
+      (when (and valsi-artifact-minor-mode (eq valsi--grammar id))
+        (valsi--install-font-lock)))))
+
+(add-hook 'valsi-registry-hook #'valsi--grammar-registered)
 
 (defun valsi--update-sidebar-context ()
   "Keep the visible project sidebar contextual to the selected artifact."
@@ -453,6 +472,7 @@ a keymap (\\{valsi-artifact-mode-map})."
     (valsi--close-document)
     (setq valsi--tree nil valsi--synced-version nil)
     (valsi-view-set-font-lock nil)
+    (setq valsi--font-lock-key nil)
     (when (eq header-line-format valsi--header-line-format)
       (if (car valsi--saved-header-line)
           (setq-local header-line-format (cdr valsi--saved-header-line))
