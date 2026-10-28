@@ -164,6 +164,25 @@
       (valsi-project-switch b)
       (should (equal (list (buffer-name (valsi-app--buffer b nil))) (funcall names))))))
 
+(ert-deftest valsi-projects-switch-clears-stale-origin ()
+  "Leaving Projects by switching projects forgets its origin (#90)."
+  (valsi-projects-test--with-projects
+    (valsi-project-register a)
+    (valsi-project-switch b)
+    (delete-other-windows)
+    (switch-to-buffer (find-file-noselect fb))
+    (valsi-projects)
+    (should (frame-parameter nil 'valsi-projects-origin))
+    (with-current-buffer "*Valsi Projects*"
+      (valsi-projects-test--row a)
+      (valsi-projects-activate))
+    (should-not (frame-parameter nil 'valsi-projects-origin))
+    (switch-to-buffer "*Valsi Projects*")
+    (valsi-projects-quit)
+    ;; Without an origin q only quits the window; B's windows stay away.
+    (should-not (get-buffer-window (get-file-buffer fb)))
+    (should (equal a (frame-parameter nil 'valsi-project-current)))))
+
 ;; Batch Emacs cannot create a minibuffer-only frame, so these stub the
 ;; frame primitives with symbols standing in for frames and windows (#88).
 

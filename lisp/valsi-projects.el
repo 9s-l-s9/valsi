@@ -173,7 +173,9 @@ being replaced, which keeps it in its saved state."
       (setq saved nil))
     (unless saved
       (valsi-projects--show-alone (valsi-app--buffer root nil)))
-    (set-frame-parameter nil 'valsi-project-current root))
+    (set-frame-parameter nil 'valsi-project-current root)
+    ;; Switching leaves Projects; a later q must not restore its stale origin.
+    (set-frame-parameter nil 'valsi-projects-origin nil))
   (valsi-app--window-buffer-changed (selected-frame)))
 
 (defun valsi-projects--selected-root ()
