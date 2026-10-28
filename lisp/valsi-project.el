@@ -65,27 +65,35 @@
       (run-hooks 'valsi-project-change-hook))
     root))
 
-(defun valsi-project--load ()
-  "Read saved project declarations once, without evaluating their contents."
-  (unless valsi-project--loaded
-    (setq valsi-project--loaded t)
+(defun valsi-project--read ()
+  "Return the roots declared in `valsi-project-file', signaling if invalid.
+An empty file declares no roots."
+  (let* ((text (with-temp-buffer
+                 (insert-file-contents valsi-project-file)
+                 (buffer-string)))
+         (data (if (string-blank-p text)
+                   (list :version 1 :roots nil)
+                 (car (read-from-string text)))))
+    (unless (and (listp data) (eq (plist-get data :version) 1)
+                 (proper-list-p (plist-get data :roots))
+                 (seq-every-p
+                  (lambda (root)
+                    (and (stringp root) (file-name-absolute-p root)))
+                  (plist-get data :roots)))
+      (error "Invalid project declarations"))
+    ;; Stored roots are already canonical.  Loading must not connect to
+    ;; remote hosts or require a missing mount to be available.
+    (delete-dups (mapcar #'file-name-as-directory (plist-get data :roots)))))
+
+(defun valsi-project--load (&optional reload)
+  "Read saved project declarations once, without evaluating their contents.
+With RELOAD, read them again so a repaired file is accepted."
+  (when (or reload (not valsi-project--loaded))
+    (setq valsi-project--loaded t
+          valsi-project--load-error nil)
     (when (and valsi-project-file (file-exists-p valsi-project-file))
       (condition-case err
-          (with-temp-buffer
-            (insert-file-contents valsi-project-file)
-            (let ((data (read (current-buffer))))
-              (unless (and (listp data) (eq (plist-get data :version) 1)
-                           (proper-list-p (plist-get data :roots))
-                           (seq-every-p
-                            (lambda (root)
-                              (and (stringp root) (file-name-absolute-p root)))
-                            (plist-get data :roots)))
-                (error "Invalid project declarations"))
-              ;; Stored roots are already canonical.  Loading must not connect
-              ;; to remote hosts or require a missing mount to be available.
-              (setq valsi-project--saved-roots
-                    (delete-dups (mapcar #'file-name-as-directory
-                                         (plist-get data :roots))))))
+          (setq valsi-project--saved-roots (valsi-project--read))
         (error
          (setq valsi-project--load-error (error-message-string err))
          (message "Valsi projects: %s" valsi-project--load-error))))))
@@ -98,6 +106,9 @@
 (defun valsi-project--save (roots)
   "Atomically save project ROOTS before changing remembered membership."
   (when valsi-project-file
+    ;; The file may have been repaired since it failed to load.
+    (when valsi-project--load-error
+      (valsi-project--load t))
     (when valsi-project--load-error
       (user-error "Repair %s before saving projects: %s"
                   valsi-project-file valsi-project--load-error))
