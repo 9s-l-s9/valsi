@@ -64,7 +64,9 @@ This is the native in-process seam.  A wire transport wraps
     ('grammar/register
      (list :id (valsi-proto--register (plist-get params :spec))))
     ('grammar/describe
-     (valsi-registry-describe (plist-get params :id)))
+     (let ((id (plist-get params :id)))
+       ;; Wire ids arrive as strings; the registry is keyed by symbols.
+       (valsi-registry-describe (if (stringp id) (intern id) id))))
     ('grammar/list
      (list :grammars (valsi-registry-all)))
     ('grammar/detect
@@ -96,9 +98,9 @@ JSON-RPC transport; the in-process client continues to use
   (let* ((method-symbol (if (symbolp method) method (intern method)))
          (response (valsi-proto-request method-symbol params)))
     (cond
-     ((and (memq method-symbol '(artifact/symbols artifact/planContext))
-           (null response))
-      :null)
+     ;; An absent result (no tree, unknown grammar, no task) is JSON null,
+     ;; never the empty object `json-serialize' would make of nil.
+     ((null response) :null)
      ((eq method-symbol 'artifact/planContext)
       (valsi-proto--json-plan-context response))
      (t (valsi-proto--jsonify response)))))
@@ -114,8 +116,14 @@ JSON-RPC transport; the in-process client continues to use
                        (vconcat (or (plist-get context key) nil)))))
     out))
 
+(defconst valsi-proto--json-array-keys
+  '(:capabilities :grammars :commands :children)
+  "Response keys whose value is always a JSON array, even when empty.")
+
 (defun valsi-proto--jsonify (value)
-  "Recursively convert native protocol VALUE to JSON-ready data."
+  "Recursively convert native protocol VALUE to JSON-ready data.
+A nil value under one of `valsi-proto--json-array-keys' becomes the empty
+array; elsewhere nil stays nil, which `json-serialize' writes as {}."
   (cond
    ((valsi-node-p value) (valsi-proto--jsonify (valsi-node-to-plist value)))
    ((null value) nil)
@@ -128,7 +136,11 @@ JSON-RPC transport; the in-process client continues to use
     (let (out)
       (while value
         (setq out (plist-put out (car value)
-                             (valsi-proto--jsonify (cadr value))))
+                             (if (and (null (cadr value))
+                                      (memq (car value)
+                                            valsi-proto--json-array-keys))
+                                 []
+                               (valsi-proto--jsonify (cadr value)))))
         (setq value (cddr value)))
       out))
    ((listp value) (vconcat (mapcar #'valsi-proto--jsonify value)))

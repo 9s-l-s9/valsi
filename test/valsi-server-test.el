@@ -166,5 +166,49 @@
                    (plist-get (plist-get response :result)
                               :capabilities))))))))
 
+;;;; Regression tests for reported wire bugs
+
+(defun valsi-server-test--exchange (&rest records)
+  "Feed each of RECORDS (a plist or raw JSON string); return the responses."
+  (pcase-let ((`(,server . ,output) (valsi-server-test--server)))
+    (dolist (record records)
+      (valsi-server-consume
+       server (concat (if (stringp record) record (json-serialize record))
+                      "\n")))
+    (valsi-server-test--records (car output))))
+
+(defun valsi-server-test--codes (responses)
+  "Return the error code of each of RESPONSES, or nil for a result."
+  (mapcar (lambda (r) (plist-get (plist-get r :error) :code)) responses))
+
+(ert-deftest valsi-test-server-empty-results-are-arrays-or-null ()
+  "Issue #5: nil never reaches the wire as {} for an array or absent result."
+  (valsi-server-init)
+  (valsi-proto-reset)
+  (unwind-protect
+      (let* ((responses
+              (valsi-server-test--exchange
+               (list :jsonrpc "2.0" :id 1 :method "grammar/register"
+                     :params (list :spec (list :id "issue5x"
+                                               :match (list :uriSuffix ".x")
+                                               :recognizers [])))
+               (list :jsonrpc "2.0" :id 2 :method "artifact/didOpen"
+                     :params (list :uri "a.x" :text "zz"))
+               (list :jsonrpc "2.0" :id 3 :method "artifact/capabilities"
+                     :params (list :uri "zzz"))
+               (list :jsonrpc "2.0" :id 4 :method "grammar/describe"
+                     :params (list :id "nope"))
+               (list :jsonrpc "2.0" :id 5 :method "grammar/describe"
+                     :params (list :id "issue5x"))))
+             (results (mapcar (lambda (r) (plist-get r :result)) responses)))
+        (should (equal "issue5x" (plist-get (nth 1 results) :grammar)))
+        (should (equal [] (plist-get (nth 1 results) :capabilities)))
+        (should (equal [] (plist-get (nth 2 results) :capabilities)))
+        (should (eq :null (nth 3 results)))
+        (should (equal "issue5x" (plist-get (nth 4 results) :id)))
+        (should (equal [] (plist-get (nth 4 results) :commands))))
+    (valsi-registry-unregister 'issue5x)
+    (valsi-proto-reset)))
+
 (provide 'valsi-server-test)
 ;;; valsi-server-test.el ends here
