@@ -30,10 +30,23 @@
         (setq best group)))
     (and best (valsi-node-prop best :title))))
 
+(defun valsi-plan--own-nodes (task type)
+  "Return TASK's descendants of TYPE, not descending into nested tasks.
+A child task's steps and metadata belong to that child's own context."
+  (let (out)
+    (cl-labels ((walk (node)
+                  (dolist (child (valsi-node-children node))
+                    (unless (eq (valsi-node-type child) 'task)
+                      (when (eq (valsi-node-type child) type)
+                        (push child out))
+                      (walk child)))))
+      (walk task))
+    (nreverse out)))
+
 (defun valsi-plan--task-files (task)
   "Return manifest file paths referenced by TASK and its metadata."
   (let ((refs (copy-sequence (valsi-node-prop task :pathrefs))))
-    (dolist (meta (valsi-node-of-type task 'meta))
+    (dolist (meta (valsi-plan--own-nodes task 'meta))
       (setq refs
             (append refs
                     (valsi-parse-pathrefs (valsi-node-prop meta :text "")))))
@@ -47,7 +60,7 @@
           (lambda (meta)
             (and (eq (valsi-node-prop meta :label) 'verify)
                  (valsi-node-prop meta :text)))
-          (valsi-node-of-type task 'meta)))
+          (valsi-plan--own-nodes task 'meta)))
    "\n"))
 
 (defun valsi-plan--verify-command (task)
@@ -59,14 +72,20 @@
 (defun valsi-plan-context-bundle (root task)
   "Return the agent context bundle plist for TASK in ROOT."
   (list :id (valsi-node-prop task :id)
-        :desc (valsi-node-prop task :desc)
+        :desc (let ((desc (valsi-node-prop task :desc)))
+                ;; The id has its own field; keep tags, drop the id token.
+                (if (and desc (valsi-node-prop task :id)
+                         (string-match valsi-plan--leading-id-re desc))
+                    (concat (match-string 1 desc)
+                            (substring desc (match-end 0)))
+                  desc))
         :state (valsi-plan-effective-state task)
         :group (valsi-plan--task-group-title root task)
         :files (valsi-plan--task-files task)
         :deps (valsi-node-prop task :deps)
         :traces (valsi-node-prop task :traces)
         :steps (mapcar (lambda (step) (valsi-node-prop step :text))
-                       (valsi-node-of-type task 'step))
+                       (valsi-plan--own-nodes task 'step))
         :verify (valsi-plan--task-verify task)))
 
 (defun valsi-plan-bundle->prompt (bundle)

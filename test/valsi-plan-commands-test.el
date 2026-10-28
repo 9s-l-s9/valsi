@@ -118,5 +118,25 @@
     (should (equal "- [ ] T001 a \n  - [ ] T001.1 c\n- [ ] T002 b"
                    (buffer-string)))))
 
+(ert-deftest valsi-plan-commands-test-bundle-own-context ()
+  "An interior task's bundle excludes its children's context (#35)."
+  (let* ((root (valsi-plan-parse
+                (concat "- [ ] T001 Parent `src/a.el`\n"
+                        "  **Verify:** `make parent`\n"
+                        "  - parent step\n"
+                        "  - [ ] T001.1 Child `src/b.el`\n"
+                        "    **Verify:** `make child`\n"
+                        "    **Files:** `src/c.el`\n"
+                        "    - child step\n")))
+         (bundle (valsi-plan-context-bundle
+                  root (car (valsi-node-of-type root 'task)))))
+    (should (equal '("src/a.el") (plist-get bundle :files)))
+    (should-not (string-match-p "make child" (plist-get bundle :verify)))
+    (should (string-match-p "make parent" (plist-get bundle :verify)))
+    (should (equal '("parent step") (plist-get bundle :steps)))
+    (should (equal "Parent `src/a.el`" (plist-get bundle :desc)))
+    (should (string-prefix-p "Implement task T001: Parent"
+                             (valsi-plan-bundle->prompt bundle)))))
+
 (provide 'valsi-plan-commands-test)
 ;;; valsi-plan-commands-test.el ends here
