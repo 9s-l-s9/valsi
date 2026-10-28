@@ -2,9 +2,11 @@
 
 // End-to-end tests against the REAL headless Emacs server, spawned with
 // Node's default `child_process.spawn' exactly as aap.ts does.  Skipped when
-// no Emacs is available.
+// no Emacs is available or that Emacs lacks native JSON, which the stdio
+// server requires (Emacs 30, or Emacs 29 built with libjansson).
 
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { accessSync, constants } from "node:fs";
 import { delimiter, dirname, join, resolve } from "node:path";
 import test from "node:test";
@@ -42,8 +44,38 @@ function findEmacs() {
 	return undefined;
 }
 
+// Exits 0 only when native JSON works, like the ERT `json-available-p' skips.
+const jsonProbe = [
+	"-Q",
+	"--batch",
+	"--eval",
+	"(kill-emacs (if (and (fboundp 'json-available-p) (json-available-p)) 0 1))",
+];
+
+function realServerSkip(emacs, run = spawnSync) {
+	if (!emacs) return "no emacs found";
+	const probe = run(emacs, jsonProbe, { stdio: "ignore", timeout: 30_000 });
+	if (probe.error) return `cannot run ${emacs}: ${probe.error.message}`;
+	if (probe.status !== 0) return `${emacs} lacks native JSON (json-available-p)`;
+	return false;
+}
+
 const emacs = findEmacs();
-const skip = emacs ? false : "no emacs found";
+const skip = realServerSkip(emacs);
+
+test("issue #87: the real-server tests skip without native JSON", () => {
+	const calls = [];
+	const runner = (status, error) => (file, args) => {
+		calls.push([file, args]);
+		return { status, error };
+	};
+	assert.equal(realServerSkip(undefined, runner(0)), "no emacs found");
+	assert.equal(calls.length, 0);
+	assert.equal(realServerSkip("/bin/emacs", runner(0)), false);
+	assert.deepEqual(calls[0], ["/bin/emacs", jsonProbe]);
+	assert.match(realServerSkip("/bin/emacs", runner(1)), /lacks native JSON/);
+	assert.match(realServerSkip("/bin/emacs", runner(null, new Error("ENOENT"))), /cannot run/);
+});
 
 function realServer(options = {}) {
 	return new AAPClient(
