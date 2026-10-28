@@ -81,19 +81,34 @@ is JSON-serializable and is the center of every AAP message.
 
 ### AAP method groups
 
-1. **Lifecycle / sync** — `initialize` (capability negotiation), `artifact/didOpen`,
-   `artifact/didChange` (full-text v0 sync), `didClose`.
-2. **Queries** — `artifact/symbols`, `nav/definition`, `nav/references`, `hover`,
-   `graph/resolve`.
-3. **Diagnostics** — server→client push `artifact/publishDiagnostics` (severities
-   + code-action fixes).
-4. **Edits** — node-diff / WorkspaceEdit-analog with per-node accept/reject review;
-   structure ops return edits, never mutate blindly.
-5. **Grammar capability (adaptable core)** — `grammar/register`, `grammar/reload`
-   (hot, no restart), `grammar/describe`. The **degradation ladder is expressed as
-   per-document capability advertisement**: the server reports which requests a
-   document supports given the structure its grammar actually resolved — a grammar
-   advertising what it can answer, not server incompleteness.
+The implemented surface is exactly `valsi-proto-methods` (advertised from
+`initialize`, normatively specified in `doc/aap-spec.md` §4):
+
+1. **Lifecycle / sync** — `initialize` (method advertisement),
+   `artifact/didOpen`, `artifact/didChange` (full-text v0 sync),
+   `artifact/didClose`.
+2. **Grammar capability (adaptable core)** — `grammar/register` (also the hot
+   reload: re-registering an id replaces it, no restart), `grammar/describe`,
+   `grammar/list`, `grammar/detect`.
+3. **Queries** — `artifact/symbols` (the node tree) and `artifact/capabilities`.
+   The **degradation ladder is expressed as per-document capability
+   advertisement**: the server reports which requests a document supports given
+   the structure its grammar actually resolved — a grammar advertising what it
+   can answer, not server incompleteness.
+4. **Reference extension** — `artifact/planContext` (provisional plan-task
+   context bundle; not part of the required set).
+
+Planned, not implemented or advertised (non-normative until specified):
+
+- **Navigation queries** — `nav/definition`, `nav/references`, `hover`,
+  `graph/resolve`.  Cross-artifact links are currently answered in-process by
+  `valsi-graph`, not through an AAP request.
+- **Diagnostics** — server→client push `artifact/publishDiagnostics`
+  (severities + code-action fixes).
+- **Edits** — `artifact/applyEdit`, a node-diff / WorkspaceEdit analog with
+  per-node accept/reject review; structure ops return edits, never mutate
+  blindly.  Today the node-diff review is client-side (`doc/aap-spec.md` §8).
+- **`grammar/reload`** as a distinct method; `grammar/register` covers it.
 
 The spec is *extracted* from this running server (`doc/aap-spec.md`),
 once two grammar genres prove adaptability — not designed up front.

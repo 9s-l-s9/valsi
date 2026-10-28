@@ -5,8 +5,9 @@
 
 ;;; Commentary:
 
-;; The grammar-plugin registry -- the AAP `grammar/register' / `grammar/reload'
-;; / `grammar/describe' surface, realized in-process.  Each grammar declares:
+;; The grammar-plugin registry -- the AAP `grammar/register' (which also
+;; hot-reloads) / `grammar/describe' surface, realized in-process.  Each
+;; grammar declares:
 ;;
 ;;   :id          symbol, unique
 ;;   :name        human label

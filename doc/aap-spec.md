@@ -242,8 +242,9 @@ the "control over delegation" invariant. The reference client computes this
 client-side (`valsi-plan-diff` / `valsi-plan-apply-changes`): added / removed /
 modified nodes, each independently acceptable, with the guarantee that rejecting
 all changes restores the document byte-identically. v0 documents this shape as
-**informative**; promoting an `artifact/applyEdit` request into the normative
-method set is deferred to v1 once a second grammar exercises it.
+**informative**; an `artifact/applyEdit` request is planned but not implemented
+or advertised, and promoting it into the normative method set is deferred to v1
+once a second grammar exercises it.
 
 ## 9. Conformance
 

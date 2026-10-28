@@ -1043,5 +1043,16 @@ interior-state contradictions."
   (should-error (valsi-terminal-agent--ensure-program nil 'custom)
                 :type 'user-error))
 
+(ert-deftest valsi-test-docs-list-implemented-aap-methods ()
+  "Architecture and spec docs name every method in `valsi-proto-methods'.
+Regression for issue #25: the docs drifted from the implemented surface."
+  (dolist (doc '("doc/architecture.md" "doc/aap-spec.md"))
+    (let ((text (with-temp-buffer
+                  (insert-file-contents
+                   (expand-file-name (concat "../" doc) valsi-test--dir))
+                  (buffer-string))))
+      (dolist (method valsi-proto-methods)
+        (should (string-search (format "`%s`" method) text))))))
+
 (provide 'valsi-test)
 ;;; valsi-test.el ends here
