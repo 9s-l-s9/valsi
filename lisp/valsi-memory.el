@@ -124,11 +124,12 @@
                                                               :required))
                                            t)))))
         (valsi-node-add-child root fm)))
-    ;; index pointers (R1) + wiki links (R5)
+    ;; index pointers (R1) + wiki links (R5); a pointer's hook may carry
+    ;; links too, so the link scan runs on every line.
     (dolist (line (valsi-parse-lines (current-buffer)))
-      (let ((text (valsi-line-text line)))
-        (cond
-         ((string-match valsi-memory-pointer-re text)
+      (let ((text (valsi-line-text line))
+            (start 0))
+        (when (string-match valsi-memory-pointer-re text)
           (valsi-node-add-child
            root (valsi-node-create
                  :type 'pointer
@@ -137,17 +138,15 @@
                  :props (list :title (match-string 1 text)
                               :target (match-string 2 text)
                               :hook (or (match-string 3 text) "")))))
-         ((string-match valsi-memory-link-re text)
-          (let ((start 0))
-            (while (string-match valsi-memory-link-re text start)
-              (valsi-node-add-child
-               root (valsi-node-create
-                     :type 'link
-                     :beg (+ (valsi-line-beg line) (match-beginning 1))
-                     :end (+ (valsi-line-beg line) (match-end 1))
-                     :recognizer 'valsi-memory-link
-                     :props (list :target (match-string 1 text))))
-              (setq start (match-end 0))))))))
+        (while (string-match valsi-memory-link-re text start)
+          (valsi-node-add-child
+           root (valsi-node-create
+                 :type 'link
+                 :beg (+ (valsi-line-beg line) (match-beginning 1))
+                 :end (+ (valsi-line-beg line) (match-end 1))
+                 :recognizer 'valsi-memory-link
+                 :props (list :target (match-string 1 text))))
+          (setq start (match-end 0)))))
     root))
 
 ;;;; Accessors (pure over the tree)

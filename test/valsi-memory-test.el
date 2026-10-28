@@ -91,6 +91,15 @@
                "---\nname: x\ndescription: y\n---\n\nSee [[alpha]] and [[beta]].\n")))
     (should (equal '("alpha" "beta") (valsi-memory-links root)))))
 
+(ert-deftest valsi-test-memory-links-on-pointer-lines ()
+  "A [[link]] in a pointer's hook is a link node too (issue #4)."
+  (let ((root (valsi-memory-parse
+               "- [A](a.md) — related to [[b]]\n- plain [[c]]\n")))
+    (should (equal '((pointer "a.md") (link "b") (link "c"))
+                   (mapcar (lambda (n) (list (valsi-node-type n)
+                                             (valsi-node-prop n :target)))
+                           (valsi-node-children root))))))
+
 ;;;; Capabilities
 
 (ert-deftest valsi-test-memory-capabilities-index ()
