@@ -283,32 +283,58 @@ the first section, else the first line of the `## Status' section."
         (message "Valsi ADR: complete")
       (message "Valsi ADR: %s" (mapconcat #'identity (nreverse issues) "; ")))))
 
+(defconst valsi-decision-dir-re "/\\(?:adr\\|decisions?\\)/\\'"
+  "A directory name that holds ADRs.")
+
+(defconst valsi-decision-dirs
+  '("doc/adr" "docs/adr" "adr" "doc/decisions" "docs/decisions" "decisions")
+  "Project-relative ADR directories, in order of preference.")
+
 (defun valsi-decision--dir ()
-  "Return the ADR directory, preferring doc/adr under the project."
-  (let ((root (or (and (fboundp 'project-current) (project-current)
+  "Return the ADR directory.
+Prefer the visited file's own directory when it is an ADR directory, then
+the first of `valsi-decision-dirs' under the project, then the visited
+file's directory."
+  (let ((own (and buffer-file-name (file-name-directory buffer-file-name)))
+        (root (or (and (fboundp 'project-current) (project-current)
                        (project-root (project-current)))
                   default-directory)))
-    (cl-find-if #'file-directory-p
-                (list (expand-file-name "doc/adr" root)
-                      (expand-file-name "docs/adr" root)
-                      (expand-file-name "adr" root)
-                      (and buffer-file-name
-                           (file-name-directory buffer-file-name))))))
+    (if (and own (string-match-p valsi-decision-dir-re own))
+        own
+      (cl-find-if #'file-directory-p
+                  (append (mapcar (lambda (d) (expand-file-name d root))
+                                  valsi-decision-dirs)
+                          (list own))))))
+
+(defun valsi-decision--adr-p (file root)
+  "Return non-nil when FILE, parsed as ROOT, looks like an ADR.
+README, index, and template files are not; a numbered file name, a
+status, or a canonical section is enough."
+  (let ((name (file-name-nondirectory file)))
+    (and (not (string-match-p "\\`\\(?:readme\\|index\\)\\.\\|template"
+                              (downcase name)))
+         (or (string-match-p "\\`[0-9]+" name)
+             (valsi-node-prop root :status)
+             (cl-some (lambda (s) (valsi-decision--canonical-section
+                                   (valsi-node-prop s :title)))
+                      (valsi-node-of-type root 'section))))))
 
 (defun valsi-decision--dashboard-entries ()
   "Return one tabulated row per ADR file in the ADR directory."
   (let ((dir (valsi-decision--dir)))
     (when dir
-      (mapcar
-       (lambda (file)
-         (let ((root (valsi-decision-parse
-                      (with-temp-buffer (insert-file-contents file)
-                                        (buffer-string)))))
-           (list file
-                 (vector (file-name-nondirectory file)
-                         (or (valsi-node-prop root :title) "?")
-                         (or (valsi-node-prop root :status) "-")))))
-       (directory-files dir t "\\.md\\'")))))
+      (delq nil
+            (mapcar
+             (lambda (file)
+               (let ((root (valsi-decision-parse
+                            (with-temp-buffer (insert-file-contents file)
+                                              (buffer-string)))))
+                 (when (valsi-decision--adr-p file root)
+                   (list file
+                         (vector (file-name-nondirectory file)
+                                 (or (valsi-node-prop root :title) "?")
+                                 (or (valsi-node-prop root :status) "-"))))))
+             (directory-files dir t "\\.md\\'"))))))
 
 (defun valsi-decision-dashboard ()
   "Show every ADR in the project's decision directory as a table."

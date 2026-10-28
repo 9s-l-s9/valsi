@@ -267,7 +267,13 @@ frontmatter or inline value is replaced in place, keeping its quotes and a
 lowercase spelling), a
 lint that reports a missing or non-standard status and missing canonical
 sections, and a dashboard listing every ADR in the decision directory with its
-title and status; @key{RET} on a row visits the record.
+title and status; @key{RET} on a row visits the record.  The decision
+directory is the visited file's own directory when it is named @file{adr/},
+@file{decision/}, or @file{decisions/}; otherwise the first existing of
+@file{doc/adr/}, @file{docs/adr/}, @file{adr/}, @file{doc/decisions/},
+@file{docs/decisions/}, and @file{decisions/} under the project.  README,
+index, and template files are left out, as is any file with neither a
+numbered name, a status, nor a canonical section.
 
 @node Overview family
 @chapter Overview family

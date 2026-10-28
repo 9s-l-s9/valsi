@@ -247,6 +247,45 @@
                   (valsi-decision-parse "# X\n\n* **Status:** proposed\n")
                   :status))))
 
+;; Regression tests for issue #67.
+
+(defun valsi-family-test--dashboard-files (project visited)
+  "Return the dashboard file names for VISITED inside PROJECT."
+  (with-temp-buffer
+    (setq buffer-file-name visited
+          default-directory (file-name-directory visited))
+    (cl-letf (((symbol-function 'project-current) (lambda (&rest _) 'p))
+              ((symbol-function 'project-root) (lambda (_) project)))
+      (mapcar (lambda (e) (file-relative-name (car e) project))
+              (valsi-decision--dashboard-entries)))))
+
+(ert-deftest valsi-test-decision-dashboard-directory ()
+  "The visited ADR directory wins; decisions/ counts; README is skipped."
+  (let* ((d (file-name-as-directory (make-temp-file "valsi-dec" t)))
+         (adr (expand-file-name "doc/adr" d))
+         (dec (expand-file-name "docs/decisions" d)))
+    (unwind-protect
+        (progn
+          (make-directory adr t)
+          (make-directory dec t)
+          (with-temp-file (expand-file-name "0001-a.md" adr)
+            (insert "# 1. A\n\n## Status\n\nAccepted\n"))
+          (with-temp-file (expand-file-name "README.md" adr)
+            (insert "# ADR index\n"))
+          (with-temp-file (expand-file-name "use-x.md" dec)
+            (insert "# B\n\n## Status\n\nProposed\n"))
+          (should (equal '("docs/decisions/use-x.md")
+                         (valsi-family-test--dashboard-files
+                          d (expand-file-name "use-x.md" dec))))
+          (should (equal '("doc/adr/0001-a.md")
+                         (valsi-family-test--dashboard-files
+                          d (expand-file-name "notes.md" d))))
+          (delete-directory (expand-file-name "doc" d) t)
+          (should (equal '("docs/decisions/use-x.md")
+                         (valsi-family-test--dashboard-files
+                          d (expand-file-name "notes.md" d)))))
+      (delete-directory d t))))
+
 ;;;; Overview
 
 (defconst valsi-family-test--readme
