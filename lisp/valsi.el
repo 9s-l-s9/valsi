@@ -123,6 +123,17 @@ Nil means stale; `valsi-tree' refetches it from the server via the proto layer."
     (valsi--request 'artifact/didClose (list :uri valsi--open-uri))
     (setq valsi--open-uri nil)))
 
+(defun valsi--forget-cloned-document ()
+  "Detach a cloned buffer from the document of the buffer it was cloned from.
+`clone-indirect-buffer' and `clone-buffer' copy every buffer-local
+variable, so without this the clone would close its origin's document on
+its first edit or when it is killed.  The clone opens its own on demand."
+  (setq valsi--open-uri nil
+        valsi--synced-version nil
+        valsi--tree nil
+        ;; The copied timer refreshes the origin buffer, which owns it.
+        valsi--refresh-timer nil))
+
 (defun valsi--sync (&optional open)
   "Push the buffer's content to the server (didChange, or didOpen when OPEN).
 Records the resolved grammar + capabilities.  Marks the local tree stale."
@@ -415,6 +426,9 @@ a keymap (\\{valsi-artifact-mode-map})."
         (add-hook 'post-command-hook #'valsi--update-sidebar-context nil t)
         (add-hook 'kill-buffer-hook #'valsi--cancel-refresh nil t)
         (add-hook 'kill-buffer-hook #'valsi--close-document nil t)
+        (add-hook 'clone-indirect-buffer-hook #'valsi--forget-cloned-document
+                  nil t)
+        (add-hook 'clone-buffer-hook #'valsi--forget-cloned-document nil t)
         ;; No explicit sidebar display here: chrome is reconciled with the
         ;; displayed buffers by `valsi-app--sync-chrome' on the window hooks,
         ;; which fire once this buffer is actually shown.
@@ -429,6 +443,8 @@ a keymap (\\{valsi-artifact-mode-map})."
     (remove-hook 'post-command-hook #'valsi--update-sidebar-context t)
     (remove-hook 'kill-buffer-hook #'valsi--cancel-refresh t)
     (remove-hook 'kill-buffer-hook #'valsi--close-document t)
+    (remove-hook 'clone-indirect-buffer-hook #'valsi--forget-cloned-document t)
+    (remove-hook 'clone-buffer-hook #'valsi--forget-cloned-document t)
     (valsi--cancel-refresh)
     (valsi-browse-mode -1)
     (setq valsi--interaction-state nil)
