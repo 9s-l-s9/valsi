@@ -129,6 +129,11 @@
 (defun valsi-project-forget (root)
   "Remove ROOT from the working set without touching its files or buffers."
   (valsi-project--load)
+  ;; Known roots match as given, so a remote or missing root is not resolved;
+  ;; other spellings resolve to the identity `valsi-project-remember' stored.
+  (setq root (file-name-as-directory root))
+  (unless (member root (valsi-project-roots))
+    (setq root (valsi-project-canonical-root root)))
   (let ((roots (delete root (copy-sequence valsi-project--saved-roots))))
     (valsi-project--save roots)
     (setq valsi-project--saved-roots roots
