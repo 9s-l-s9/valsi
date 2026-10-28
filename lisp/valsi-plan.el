@@ -766,12 +766,21 @@ Refuses a move that would place a task on the wrong side of a dependency."
              (task-text (buffer-substring (car tr) (cdr tr))))
         (atomic-change-group
           (if (eq dir 'up)
-              (progn (delete-region (car tr) (cdr tr))
-                     (goto-char (car sr))
-                     (insert task-text))
+              (if (string-suffix-p "\n" task-text)
+                  (progn (delete-region (car tr) (cdr tr))
+                         (goto-char (car sr))
+                         (insert task-text))
+                ;; Last line without a final newline: take the preceding
+                ;; newline along so the swapped lines stay separate.
+                (delete-region (1- (car tr)) (cdr tr))
+                (goto-char (car sr))
+                (insert task-text "\n"))
             ;; down: insert after the sibling, then delete the original.
             (goto-char (cdr sr))
-            (save-excursion (insert task-text))
+            (save-excursion
+              (if (eq (char-before) ?\n)
+                  (insert task-text)
+                (insert "\n" (string-remove-suffix "\n" task-text))))
             (delete-region (car tr) (cdr tr))))
         (goto-char (car sr))
         (beginning-of-line))

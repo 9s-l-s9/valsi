@@ -22,5 +22,17 @@
     (valsi-plan-insert-task "x")
     (should (equal "- [ ] foo\n- [ ] x\n" (buffer-string)))))
 
+(ert-deftest valsi-plan-commands-test-move-at-eof ()
+  "Moving the last task of a file without a final newline keeps lines apart (#12)."
+  (with-temp-buffer
+    (insert "- [ ] a\n- [ ] b")
+    (valsi-plan-move-task-up)
+    (should (equal "- [ ] b\n- [ ] a" (buffer-string))))
+  (with-temp-buffer
+    (insert "- [ ] a\n- [ ] b")
+    (goto-char (point-min))
+    (valsi-plan-move-task-down)
+    (should (equal "- [ ] b\n- [ ] a" (buffer-string)))))
+
 (provide 'valsi-plan-commands-test)
 ;;; valsi-plan-commands-test.el ends here
