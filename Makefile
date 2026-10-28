@@ -11,7 +11,7 @@ MAKEINFO ?= makeinfo
 # Load order matters (dependencies first).
 SRC = lisp/valsi-project.el lisp/valsi-node.el lisp/valsi-parse.el lisp/valsi-view.el \
       lisp/valsi-registry.el lisp/valsi-proto.el lisp/valsi-server.el \
-      lisp/valsi-harness.el lisp/valsi-pi.el lisp/valsi-plan.el \
+      lisp/valsi-plan.el \
       lisp/valsi-instruction.el lisp/valsi-promptfile.el lisp/valsi-memory.el \
       lisp/valsi-changelog.el lisp/valsi-decision.el lisp/valsi-overview.el \
       lisp/valsi-graph.el \
@@ -19,7 +19,11 @@ SRC = lisp/valsi-project.el lisp/valsi-node.el lisp/valsi-parse.el lisp/valsi-vi
       lisp/valsi-app-live-refresh.el lisp/valsi-app.el lisp/valsi-projects.el \
       lisp/valsi-plan-review.el lisp/valsi-plan-agent.el \
       lisp/valsi.el
-ELC = $(SRC:.el=.elc)
+# Historical Pi RPC harness: outside the product load graph and not shipped
+# (recipes/valsi and valsi.scm both exclude it), but still compiled with
+# warnings as errors because test/valsi-pi-test.el exercises it.
+TEST_SUPPORT = lisp/valsi-harness.el lisp/valsi-pi.el
+ELC = $(SRC:.el=.elc) $(TEST_SUPPORT:.el=.elc)
 TESTS = $(sort $(wildcard test/*-test.el))
 
 BATCH = $(EMACS) -Q --batch -L lisp -L test -L test/conformance
@@ -54,7 +58,7 @@ ensure-emacs:
 
 compile: ensure-emacs clean
 	$(BATCH) --eval "(setq byte-compile-error-on-warn t)" \
-	  -f batch-byte-compile $(SRC)
+	  -f batch-byte-compile $(SRC) $(TEST_SUPPORT)
 
 %.elc: %.el
 	$(BATCH) -f batch-byte-compile $<
@@ -94,6 +98,12 @@ verify-meta: ensure-emacs
 	    || { echo "verify-meta: recipes/valsi :repo != $$slug"; ok=0; }; \
 	  grep -q "^## \[$$v\]" CHANGELOG.md \
 	    || { echo "verify-meta: CHANGELOG.md has no ## [$$v] entry"; ok=0; }; \
+	  for f in $(TEST_SUPPORT); do \
+	    grep -q "\"$$f\"" recipes/valsi \
+	      || { echo "verify-meta: recipes/valsi does not :exclude $$f"; ok=0; }; \
+	    grep -q "\"$$(basename $$f)\"" valsi.scm \
+	      || { echo "verify-meta: valsi.scm does not delete $$f"; ok=0; }; \
+	  done; \
 	  grep -q '"name": "valsi-pi"' extensions/valsi-pi/package.json \
 	    || { echo "verify-meta: extension package.json name != valsi-pi"; ok=0; }; \
 	  if git remote get-url origin >/dev/null 2>&1; then \
