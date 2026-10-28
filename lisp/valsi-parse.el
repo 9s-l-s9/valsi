@@ -177,8 +177,11 @@ KIND is one of `parallel', `story', `label'.  Also matches bare US1."
       (setq start (match-end 0)))
     (nreverse refs)))
 
-(defconst valsi-parse-req-re "_Requirements:[ \t]*\\([^_]*\\)_"
-  "Kiro requirements trace recognizer (R6a).")
+(defconst valsi-parse-req-re
+  "_Requirements:[ \t]*\\(.*?\\)_\\(?:[^[:alnum:]_]\\|$\\)"
+  "Kiro requirements trace recognizer (R6a).
+The closing underscore is the first one not followed by a word character,
+so ids that contain underscores (FR_2, REQ_1_2) are kept whole.")
 
 (defun valsi-parse-requirements (text)
   "Return a list of requirement ids if TEXT is an R6a trace line."

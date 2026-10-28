@@ -23,6 +23,7 @@
 
 (require 'cl-lib)
 (require 'valsi-view)
+(require 'valsi-parse)
 
 (declare-function project-current "project")
 (declare-function project-root "project")
@@ -97,7 +98,7 @@ Idempotent: registering the same function twice is a no-op.  Returns FN."
       (while (re-search-forward "`\\([^`\n]*?/[^`\n]*?\\)`" nil t)
         (push (list base "path" (match-string 1)) edges))
       (goto-char (point-min))
-      (while (re-search-forward "_Requirements:[ \t]*\\([0-9., ]+\\)_" nil t)
+      (while (re-search-forward valsi-parse-req-re nil t)
         (push (list base "trace" (string-trim (match-string 1))) edges)))
     (nreverse edges)))
 
