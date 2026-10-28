@@ -183,8 +183,9 @@ node, then apply.  With no changes, reports so and does nothing."
     (when (and (>= i 0) (< i (length valsi-plan-review--changes)))
       (let ((row (nth i valsi-plan-review--changes)))
         (setcdr row (not (cdr row))))
+      ;; Refresh leaves point on row 0; move down to the toggled row.
       (valsi-plan-review--refresh)
-      (forward-line (+ 2 i)))))
+      (forward-line i))))
 
 (defun valsi-plan-review-accept-all ()
   "Mark every change accepted."

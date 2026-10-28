@@ -91,6 +91,19 @@
        (should-not (string-match-p "1\\.2" (buffer-string)))
        (should (string-match-p "1\\.4" (buffer-string)))))))
 
+(ert-deftest valsi-test-plan-review-toggle-keeps-point-on-row ()
+  "Toggling a row leaves point on that row, so a second toggle undoes it."
+  (valsi-plan-review-test--with-review
+   (dotimes (i (length valsi-plan-review--changes))
+     (goto-char (point-min))
+     (forward-line (+ 2 i))
+     (valsi-plan-review-toggle)
+     (should (= (+ 3 i) (line-number-at-pos)))
+     (should-not (cdr (nth i valsi-plan-review--changes)))
+     (valsi-plan-review-toggle)
+     (should (= (+ 3 i) (line-number-at-pos)))
+     (should (cl-every #'cdr valsi-plan-review--changes)))))
+
 (ert-deftest valsi-test-plan-review-no-changes-no-buffer ()
   "An identical proposal opens no review buffer."
   (with-temp-buffer
