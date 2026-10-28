@@ -46,5 +46,20 @@
       (valsi-plan-demote-task)
       (should (equal (cdr case) (buffer-string))))))
 
+(ert-deftest valsi-plan-commands-test-occur-unknown ()
+  "Occur on the `unknown' state lists only unrecognized checkboxes (#19)."
+  (let (pattern)
+    (with-temp-buffer
+      (insert "- [x] a\n- [ ] b\n- [?] c\n")
+      (cl-letf (((symbol-function 'completing-read) (lambda (&rest _) "unknown"))
+                ((symbol-function 'occur) (lambda (re &rest _) (setq pattern re))))
+        (valsi-plan-occur-state))
+      (goto-char (point-min))
+      (should (equal '("- [?] c")
+                     (cl-loop while (re-search-forward pattern nil t)
+                              collect (buffer-substring
+                                       (line-beginning-position)
+                                       (line-end-position))))))))
+
 (provide 'valsi-plan-commands-test)
 ;;; valsi-plan-commands-test.el ends here

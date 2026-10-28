@@ -385,7 +385,9 @@ A plan with no dialect evidence at all is `plain' (no ids are minted)."
                                  nil t))
          (char (pcase state
                  ("open" " ") ("done" "[xX]")
-                 ("in-progress" "[-~/]") (_ "."))))
+                 ("in-progress" "[-~/]")
+                 ;; Every char `valsi-parse-state-char' does not recognize.
+                 (_ "[^xX ~/cC-]"))))
     (occur (format "^[ \t]*-[ \t]+\\[%s\\][ \t]" char))))
 
 (defun valsi-plan-next-actionable ()
