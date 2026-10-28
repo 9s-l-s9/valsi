@@ -80,6 +80,30 @@ test("issue #78: the real server answers a client spawned with a socketpair stdi
 	}
 });
 
+test("issue #80: the real server rejects a catastrophic regexp and stays responsive", { skip }, async () => {
+	const client = realServer({ timeoutMs: 15_000 });
+	try {
+		await assert.rejects(
+			client.request("grammar/register", {
+				spec: {
+					id: "evil",
+					match: { textRegexp: "\\(a*\\)*b", score: 1000 },
+					recognizers: [{ type: "x", regexp: "^x" }],
+				},
+			}),
+			/AAP -32602/,
+		);
+		const opened = await client.request("artifact/didOpen", {
+			uri: "f.md",
+			text: `${"a".repeat(40)}\n`,
+		});
+		assert.notEqual(opened.grammar, "evil");
+		assert.ok((await client.request("initialize")).capabilities.length > 0);
+	} finally {
+		client.close();
+	}
+});
+
 test("issue #79: the real server round-trips non-ASCII text in any locale", { skip }, async () => {
 	const uri = "café-\u{1F600}- .md";
 	for (const env of [process.env, { ...process.env, LC_ALL: "C", LANG: "C" }]) {

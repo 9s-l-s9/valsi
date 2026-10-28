@@ -19,6 +19,13 @@ function fakeProcess(onWrite = () => {}) {
 		},
 		end() {},
 	};
+	child.signalCode = null;
+	child.kills = [];
+	child.kill = (signal) => {
+		child.kills.push(signal);
+		child.signalCode = signal;
+		child.emit("exit", null, signal);
+	};
 	return child;
 }
 
@@ -134,4 +141,45 @@ test("a pre-aborted signal rejects at once and settled requests detach their lis
 		removed.push([type, listener]);
 	assert.equal(await client.request("y", {}, live.signal), 1);
 	assert.deepEqual(removed, added);
+});
+
+test("issue #80: a timed-out request kills the wedged server", async () => {
+	const child = fakeProcess();
+	const client = new AAPClient("unused", [], {
+		spawn: () => child,
+		timeoutMs: 5,
+	});
+	const first = client.request("x");
+	const queued = client.request("queued");
+	await assert.rejects(first, /timed out/);
+	await assert.rejects(queued, /exited \(SIGKILL\)/);
+	assert.deepEqual(child.kills, ["SIGKILL"]);
+	assert.equal(client.running, false);
+});
+
+test("issue #80: close() kills a server that ignores EOF after the grace period", async () => {
+	const child = fakeProcess();
+	let ended = false;
+	child.stdin.end = () => {
+		ended = true;
+	};
+	const client = new AAPClient("unused", [], {
+		spawn: () => child,
+		closeGraceMs: 10,
+	});
+	client.close();
+	assert.equal(ended, true);
+	assert.deepEqual(child.kills, []);
+	await new Promise((resolve) => setTimeout(resolve, 40));
+	assert.deepEqual(child.kills, ["SIGKILL"]);
+
+	// A server that exits on EOF is not killed.
+	const polite = fakeProcess();
+	polite.stdin.end = () => {
+		polite.exitCode = 0;
+		polite.emit("exit", 0, null);
+	};
+	new AAPClient("unused", [], { spawn: () => polite, closeGraceMs: 10 }).close();
+	await new Promise((resolve) => setTimeout(resolve, 40));
+	assert.deepEqual(polite.kills, []);
 });

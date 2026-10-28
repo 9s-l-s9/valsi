@@ -290,6 +290,97 @@
                                      :id)))
     (should (equal grammars (valsi-registry-all)))))
 
+(ert-deftest valsi-test-server-rejects-catastrophic-regexps ()
+  "Issue #80: wire grammars cannot register exponential regexps."
+  (valsi-server-init)
+  (valsi-proto-reset)
+  (let* ((grammars (valsi-registry-all))
+         (evil '("\\(a*\\)*b" "\\(a+\\)+$" "\\(a\\|aa\\)*b" "\\(?:a*\\)+"
+                 "\\(a*\\)\\{2,\\}" "\\(\\(a\\)*\\)*" "\\(x\\)\\1"))
+         (id 0)
+         (requests
+          (cl-loop
+           for re in evil
+           append
+           (list (list :jsonrpc "2.0" :id (cl-incf id)
+                       :method "grammar/register"
+                       :params (list :spec (list :id "evil"
+                                                 :match (list :textRegexp re)
+                                                 :recognizers [])))
+                 (list :jsonrpc "2.0" :id (cl-incf id)
+                       :method "grammar/register"
+                       :params (list :spec (list :id "evil"
+                                                 :match (list :uriRegexp re)
+                                                 :recognizers [])))
+                 (list :jsonrpc "2.0" :id (cl-incf id)
+                       :method "grammar/register"
+                       :params
+                       (list :spec
+                             (list :id "evil"
+                                   :match (list :uriSuffix ".evil")
+                                   :recognizers
+                                   (vector (list :type "x" :regexp re))))))))
+         (responses
+          (apply #'valsi-server-test--exchange
+                 (append requests
+                         (list (list :jsonrpc "2.0" :id "after"
+                                     :method "initialize"))))))
+    (should (equal (append (make-list (* 3 (length evil)) -32602) '(nil))
+                   (valsi-server-test--codes responses)))
+    (should (string-match-p "rejected"
+                            (plist-get (plist-get (car responses) :error)
+                                       :data)))
+    (should (equal grammars (valsi-registry-all)))
+    ;; Ordinary regexps are still accepted.
+    (dolist (re '("^\\(#+\\) \\(.*\\)$" "\\(foo\\)?bar" "[(*]+"
+                  "^- \\[\\([ x]\\)\\] \\(T[0-9]+\\) \\(.*\\)$"
+                  "[]*]+\\(x\\)*" "[[:alpha:]*]+\\(y\\)+"))
+      (should-not (valsi-registry--regexp-risk re)))))
+
+(ert-deftest valsi-test-server-declarative-match-input-is-bounded ()
+  "Issue #80: declared regexps only see bounded input."
+  (valsi-server-init)
+  (valsi-proto-reset)
+  (unwind-protect
+      (let* ((limit valsi-registry-declarative-match-limit)
+             (late (concat (make-string limit ?\s) "MAGIC\n"))
+             (long-line (concat "ITEM " (make-string limit ?x) "\n"))
+             (responses
+              (valsi-server-test--exchange
+               (list :jsonrpc "2.0" :id 1 :method "grammar/register"
+                     :params
+                     (list :spec
+                           (list :id "bounded"
+                                 :match (list :textRegexp "MAGIC"
+                                              :uriRegexp "\\.bnd\\'"
+                                              :score 1000)
+                                 :recognizers
+                                 (vector (list :type "item"
+                                               :regexp "^ITEM")))))
+               (list :jsonrpc "2.0" :id 2 :method "grammar/detect"
+                     :params (list :uri "a.txt" :text "MAGIC\n"))
+               (list :jsonrpc "2.0" :id 3 :method "grammar/detect"
+                     :params (list :uri "a.txt" :text late))
+               (list :jsonrpc "2.0" :id 4 :method "grammar/detect"
+                     :params (list :uri (concat (make-string limit ?u)
+                                                ".bnd")
+                                   :text ""))
+               (list :jsonrpc "2.0" :id 5 :method "artifact/didOpen"
+                     :params (list :uri "b.bnd"
+                                   :text (concat "ITEM short\n" long-line)))
+               (list :jsonrpc "2.0" :id 6 :method "artifact/symbols"
+                     :params (list :uri "b.bnd")))))
+        (cl-flet ((detected (n)
+                    (plist-get (plist-get (nth n responses) :result) :id)))
+          (should (equal "bounded" (detected 1)))
+          (should-not (equal "bounded" (detected 2)))
+          (should-not (equal "bounded" (detected 3))))
+        ;; The over-long line resolves less detail; it is not an error.
+        (should (= 1 (length (plist-get (plist-get (nth 5 responses) :result)
+                                        :children)))))
+    (valsi-registry-unregister 'bounded)
+    (valsi-proto-reset)))
+
 (defun valsi-server-test--emacs-program ()
   "Return the running Emacs binary for a real-stdio test, or nil."
   (or (let ((self (expand-file-name invocation-name invocation-directory)))

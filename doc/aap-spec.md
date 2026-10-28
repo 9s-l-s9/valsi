@@ -224,6 +224,19 @@ directly; executable functions never cross the protocol boundary. `evidence`
 records the honesty of the mapping so clients can calibrate trust. The
 `generic` grammar remains the universal fallback.
 
+Declared regexps run inside the single-threaded server, and Emacs cannot
+interrupt a running regexp match, so the reference server bounds them instead
+of timing them out. Registration answers `-32602` for a regexp with a back
+reference or a repeated group (`*`, `+`, or an interval) that itself contains
+a quantifier or an alternative, such as `\(a*\)*b` or `\(a\|aa\)*b`: the
+exponential backtracking class. Matching input is capped at 4000 characters
+(`valsi-registry-declarative-match-limit`): `textRegexp` sees only that prefix
+of the text, a longer URI never matches `uriRegexp`, and recognizers skip
+longer lines, which then resolve less detail. Polynomial patterns therefore
+stay bounded. Clients should still treat a request timeout as a wedged server
+and kill it; the Pi `AAPClient` does so, and `close()` kills a server that has
+not exited shortly after stdin closes.
+
 ## 7. Capabilities (the ladder)
 
 `capabilities` is a set of opaque capability tokens the server advertises per
