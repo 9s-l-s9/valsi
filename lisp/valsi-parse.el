@@ -61,14 +61,22 @@ This is the seam a wire transport (or a non-Emacs server) plugs into."
 
 ;;;; Generic markdown recognizers
 
-(defconst valsi-parse-heading-re "^\\(#+\\)[ \t]+\\(.*\\)$"
-  "ATX heading recognizer.")
+(defconst valsi-parse-heading-re "^\\(#\\{1,6\\}\\)[ \t]+\\(.*\\)$"
+  "ATX heading recognizer (CommonMark allows at most six hashes).")
+
+(defconst valsi-parse-heading-close-re "\\(?:\\`\\|[ \t]+\\)#+[ \t]*\\'"
+  "Optional closing hash sequence of an ATX heading title.")
 
 (defun valsi-parse-heading (text)
-  "If TEXT is an ATX heading return (LEVEL . TITLE), else nil."
+  "If TEXT is an ATX heading return (LEVEL . TITLE), else nil.
+A closing sequence of hashes (\"## Foo ##\") is not part of TITLE."
   (when (string-match valsi-parse-heading-re text)
-    (cons (length (match-string 1 text))
-          (string-trim (match-string 2 text)))))
+    (let ((level (length (match-string 1 text)))
+          (title (match-string 2 text)))
+      (cons level
+            (string-trim
+             (replace-regexp-in-string valsi-parse-heading-close-re ""
+                                       title t t))))))
 
 (defconst valsi-parse-checkbox-re
   "^\\([ \t]*\\)-[ \t]+\\[\\(.\\)\\][ \t]+\\(.*\\)$"

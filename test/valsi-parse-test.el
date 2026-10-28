@@ -47,5 +47,17 @@
   (should (equal '(("wip" . label))
                  (valsi-parse-tags "1.2 [wip] Set up see [RFC1]"))))
 
+;;;; ATX headings (#10)
+
+(ert-deftest valsi-parse-test-heading-commonmark ()
+  "Headings take at most six hashes and drop a closing hash sequence."
+  (should (null (valsi-parse-heading "####### x")))
+  (should (equal '(6 . "x") (valsi-parse-heading "###### x")))
+  (should (equal '(2 . "Foo") (valsi-parse-heading "## Foo ##")))
+  (should (equal '(2 . "Foo") (valsi-parse-heading "## Foo #####   ")))
+  (should (equal '(2 . "Foo#") (valsi-parse-heading "## Foo#")))
+  (should (equal '(1 . "C# notes") (valsi-parse-heading "# C# notes")))
+  (should (equal '(2 . "") (valsi-parse-heading "## ##"))))
+
 (provide 'valsi-parse-test)
 ;;; valsi-parse-test.el ends here
