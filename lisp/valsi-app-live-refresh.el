@@ -70,11 +70,19 @@ A single file operation, parser, or project backend call can take longer."
   "Edited files during an incremental dispatch, or nil for a full scan.
 Disk notifications and explicit refreshes always request a full scan.")
 
-(defvar-local valsi-app-live-refresh--buffer-root nil
-  "Canonical project root whose hub observes this artifact buffer.")
+(defvar-local valsi-app-live-refresh--buffer-roots nil
+  "Canonical project roots whose hubs observe this artifact buffer.
+Nested working projects can index the same file.")
 
 (defvar-local valsi-app-live-refresh--buffer-tick nil
   "Last observed text modification tick; fontification does not change it.")
+
+;; Observation must survive `revert-buffer' and major-mode changes, which
+;; call `kill-all-local-variables'.
+(put 'valsi-app-live-refresh--buffer-roots 'permanent-local t)
+(put 'valsi-app-live-refresh--buffer-tick 'permanent-local t)
+
+(defvar valsi-app-excluded-directory-names)
 
 (defvar valsi-app-live-refresh--find-file-hook-installed nil
   "Non-nil when live-refresh discovery is installed in `find-file-hook'.")
@@ -110,8 +118,10 @@ Disk notifications and explicit refreshes always request a full scan.")
           (file-attribute-type attributes))))
 
 (defun valsi-app-live-refresh--file-buffer (file)
-  "Return the live file-visiting buffer for FILE, if any."
-  (let ((buffer (get-file-buffer file)))
+  "Return the live file-visiting buffer for FILE, if any.
+Unlike `get-file-buffer', this also finds a buffer visiting FILE through a
+symbolic link or another name."
+  (let ((buffer (find-buffer-visiting file)))
     (and (buffer-live-p buffer) buffer)))
 
 (defun valsi-app-live-refresh--disk-diverged-p (buffer)
@@ -130,60 +140,86 @@ Disk notifications and explicit refreshes always request a full scan.")
 
 (defun valsi-app-live-refresh--buffer-after-change (&rest _)
   "Schedule refresh after an observed artifact buffer edit."
-  (when (and valsi-app-live-refresh--buffer-root
+  (when (and valsi-app-live-refresh--buffer-roots
              (not (equal valsi-app-live-refresh--buffer-tick
                          (buffer-chars-modified-tick))))
     (setq valsi-app-live-refresh--buffer-tick (buffer-chars-modified-tick))
-    (valsi-app-live-refresh-schedule valsi-app-live-refresh--buffer-root
-                                      buffer-file-name)))
+    (dolist (root valsi-app-live-refresh--buffer-roots)
+      (valsi-app-live-refresh-schedule root buffer-file-name))))
 
 (defun valsi-app-live-refresh--buffer-after-save ()
   "Record an observed save and schedule affected hubs."
-  (when valsi-app-live-refresh--buffer-root
-    (let* ((project
-            (valsi-app-live-refresh--project
-             valsi-app-live-refresh--buffer-root))
-           (file (and buffer-file-name (file-truename buffer-file-name))))
-      ;; A save performed by Emacs is already incorporated into the
-      ;; authoritative baseline.  It must not be reported as an external
-      ;; "changed on disk" event.
-      (when file
-        (puthash file (valsi-app-live-refresh--signature file)
-                 (valsi-app-live-refresh--project-signatures project)))
-      (valsi-app-live-refresh-schedule valsi-app-live-refresh--buffer-root))))
+  (when valsi-app-live-refresh--buffer-roots
+    (let* ((file (and buffer-file-name (file-truename buffer-file-name)))
+           (signature (and file (valsi-app-live-refresh--signature file))))
+      (dolist (root valsi-app-live-refresh--buffer-roots)
+        ;; A save performed by Emacs is already incorporated into the
+        ;; authoritative baseline.  It must not be reported as an external
+        ;; "changed on disk" event.
+        (when file
+          (puthash file signature
+                   (valsi-app-live-refresh--project-signatures
+                    (valsi-app-live-refresh--project root))))
+        (valsi-app-live-refresh-schedule root)))))
 
 (defun valsi-app-live-refresh--buffer-killed ()
   "Refresh an observed artifact when its visiting buffer is closed."
-  (when valsi-app-live-refresh--buffer-root
-    (valsi-app-live-refresh-schedule valsi-app-live-refresh--buffer-root
-                                     buffer-file-name)))
+  (dolist (root valsi-app-live-refresh--buffer-roots)
+    (valsi-app-live-refresh-schedule root buffer-file-name)))
+
+(defun valsi-app-live-refresh--add-buffer-hooks ()
+  "Install the current buffer's artifact observation hooks."
+  (add-hook 'after-change-functions
+            #'valsi-app-live-refresh--buffer-after-change nil t)
+  (add-hook 'after-save-hook
+            #'valsi-app-live-refresh--buffer-after-save nil t)
+  (add-hook 'kill-buffer-hook
+            #'valsi-app-live-refresh--buffer-killed nil t)
+  (add-hook 'after-change-major-mode-hook
+            #'valsi-app-live-refresh--add-buffer-hooks nil t))
+
+(defun valsi-app-live-refresh--remove-buffer-hooks ()
+  "Remove the current buffer's artifact observation hooks."
+  (remove-hook 'after-change-functions
+               #'valsi-app-live-refresh--buffer-after-change t)
+  (remove-hook 'after-save-hook
+               #'valsi-app-live-refresh--buffer-after-save t)
+  (remove-hook 'kill-buffer-hook
+               #'valsi-app-live-refresh--buffer-killed t)
+  (remove-hook 'after-change-major-mode-hook
+               #'valsi-app-live-refresh--add-buffer-hooks t))
+
+;; The hooks are permanent so that `kill-all-local-variables' keeps them.
+;; Re-adding them after a major-mode change also re-binds the C-level
+;; `after-change-functions', which otherwise keeps its global value until
+;; Lisp code next reads the variable.
+(dolist (hook-function '(valsi-app-live-refresh--buffer-after-change
+                         valsi-app-live-refresh--buffer-after-save
+                         valsi-app-live-refresh--buffer-killed
+                         valsi-app-live-refresh--add-buffer-hooks))
+  (put hook-function 'permanent-local-hook t))
 
 (defun valsi-app-live-refresh--observe-buffer (file root)
   "Observe edits and saves in FILE's existing buffer for ROOT."
   (when-let* ((buffer (valsi-app-live-refresh--file-buffer file)))
     (with-current-buffer buffer
-      (setq-local valsi-app-live-refresh--buffer-root root)
+      (setq-local valsi-app-live-refresh--buffer-roots
+                  (cl-adjoin root valsi-app-live-refresh--buffer-roots
+                             :test #'equal))
       (setq-local valsi-app-live-refresh--buffer-tick (buffer-chars-modified-tick))
-      (add-hook 'after-change-functions
-                #'valsi-app-live-refresh--buffer-after-change nil t)
-      (add-hook 'after-save-hook
-                #'valsi-app-live-refresh--buffer-after-save nil t)
-      (add-hook 'kill-buffer-hook
-                #'valsi-app-live-refresh--buffer-killed nil t))))
+      (valsi-app-live-refresh--add-buffer-hooks))))
 
 (defun valsi-app-live-refresh--unobserve (root)
   "Detach artifact buffer hooks for ROOT when observation ends."
   (dolist (buffer (buffer-list))
     (with-current-buffer buffer
-      (when (equal valsi-app-live-refresh--buffer-root root)
-        (remove-hook 'after-change-functions
-                     #'valsi-app-live-refresh--buffer-after-change t)
-        (remove-hook 'after-save-hook
-                     #'valsi-app-live-refresh--buffer-after-save t)
-        (remove-hook 'kill-buffer-hook
-                     #'valsi-app-live-refresh--buffer-killed t)
-        (setq valsi-app-live-refresh--buffer-root nil
-              valsi-app-live-refresh--buffer-tick nil)))))
+      (when (member root valsi-app-live-refresh--buffer-roots)
+        (setq valsi-app-live-refresh--buffer-roots
+              (remove root valsi-app-live-refresh--buffer-roots))
+        ;; Other nested projects may still observe this buffer.
+        (unless valsi-app-live-refresh--buffer-roots
+          (valsi-app-live-refresh--remove-buffer-hooks)
+          (setq valsi-app-live-refresh--buffer-tick nil))))))
 
 (defun valsi-app-live-refresh--find-file ()
   "Observe a newly visited file when an active project already indexes it."
@@ -401,27 +437,59 @@ IMMEDIATE skips the idle debounce for an explicit user refresh."
                valsi-app-live-refresh-delay nil
                #'valsi-app-live-refresh--dispatch project token))))))
 
-(defun valsi-app-live-refresh--notify (root _event)
-  "Schedule ROOT reconciliation for a filesystem notification."
+(defun valsi-app-live-refresh--notify (root event)
+  "Schedule ROOT reconciliation for a filesystem notification EVENT."
   (when-let* ((project (gethash root valsi-app-live-refresh--projects)))
+    ;; A deleted or renamed directory stops its watch.  Forget it so a
+    ;; recreated directory is watched again.
+    (when (eq (nth 1 event) 'stopped)
+      (setf (valsi-app-live-refresh--project-watches project)
+            (seq-remove (lambda (watch) (equal (cdr watch) (car event)))
+                        (valsi-app-live-refresh--project-watches project))))
     (when (valsi-app-live-refresh--project-subscribers project)
+      ;; Watch a new subdirectory, so files added there later are noticed
+      ;; even though it holds no known artifact yet.
+      (pcase event
+        ((or `(,_ created ,file) `(,_ renamed ,_ ,file))
+         (when (and (file-directory-p file) (not (file-symlink-p file)))
+           (valsi-app-live-refresh--watch-tree project file))))
       (valsi-app-live-refresh-schedule root))))
 
 (defun valsi-app-live-refresh--watch-directory (project directory)
-  "Add a filesystem watch for PROJECT DIRECTORY when supported."
-  (unless (or (file-remote-p directory)
-              (assoc directory
-                     (valsi-app-live-refresh--project-watches project)))
-    (condition-case nil
-        (let ((descriptor
-               (file-notify-add-watch
-                directory '(change attribute-change)
-                (apply-partially #'valsi-app-live-refresh--notify
-                                 (valsi-app-live-refresh--project-root project)))))
-          (push (cons directory descriptor)
-                (valsi-app-live-refresh--project-watches project)))
-      (file-notify-error nil)
-      (file-error nil))))
+  "Add a filesystem watch for PROJECT DIRECTORY when supported.
+A stopped watch, for example of a deleted directory, is replaced."
+  (let ((watch (assoc directory
+                      (valsi-app-live-refresh--project-watches project))))
+    (when (and watch (not (file-notify-valid-p (cdr watch))))
+      (ignore-errors (file-notify-rm-watch (cdr watch)))
+      (setf (valsi-app-live-refresh--project-watches project)
+            (delq watch (valsi-app-live-refresh--project-watches project))
+            watch nil))
+    (unless (or watch (file-remote-p directory))
+      (condition-case nil
+          (let ((descriptor
+                 (file-notify-add-watch
+                  directory '(change attribute-change)
+                  (apply-partially #'valsi-app-live-refresh--notify
+                                   (valsi-app-live-refresh--project-root project)))))
+            (push (cons directory descriptor)
+                  (valsi-app-live-refresh--project-watches project)))
+        (file-notify-error nil)
+        (file-error nil)))))
+
+(defun valsi-app-live-refresh--watch-tree (project directory)
+  "Watch PROJECT DIRECTORY and its subdirectories.
+Directories named in `valsi-app-excluded-directory-names' and symbolic links
+are skipped."
+  (let ((directory (file-name-as-directory directory)))
+    (unless (member (file-name-nondirectory (directory-file-name directory))
+                    (bound-and-true-p valsi-app-excluded-directory-names))
+      (valsi-app-live-refresh--watch-directory project directory)
+      (dolist (child (ignore-errors
+                       (directory-files
+                        directory t directory-files-no-dot-files-regexp t)))
+        (when (and (file-directory-p child) (not (file-symlink-p child)))
+          (valsi-app-live-refresh--watch-tree project child))))))
 
 (defun valsi-app-live-refresh--ensure-watches (project)
   "Ensure PROJECT root and known artifact directories are watched."

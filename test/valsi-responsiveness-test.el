@@ -397,7 +397,7 @@
             (valsi-app-live-refresh-unsubscribe hub root)
             (should-not (valsi-app-live-refresh--project-timer project))
             (with-current-buffer buffer
-              (should-not valsi-app-live-refresh--buffer-root)
+              (should-not valsi-app-live-refresh--buffer-roots)
               (insert "more"))
             (should-not (valsi-app-live-refresh--project-timer project))))
       (when (buffer-live-p buffer)

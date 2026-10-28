@@ -209,7 +209,7 @@ When COMPACT is non-nil, return the artifact-index name."
 
 (defun valsi-app--file-text (file)
   "Return current text used to classify FILE."
-  (if-let* ((buffer (get-file-buffer file)))
+  (if-let* ((buffer (valsi-app-live-refresh--file-buffer file)))
       (with-current-buffer buffer
         (save-restriction
           (widen)
@@ -220,7 +220,7 @@ When COMPACT is non-nil, return the artifact-index name."
 
 (defun valsi-app--file-state (file)
   "Return compact Emacs-visible state for FILE."
-  (if-let* ((buffer (get-file-buffer file)))
+  (if-let* ((buffer (valsi-app-live-refresh--file-buffer file)))
       (if (buffer-modified-p buffer) "modified" "open")
     "clean"))
 
@@ -271,7 +271,7 @@ WARNINGS is a cached count of structural plan findings, when available."
 
 (defun valsi-app--file-cache-key (file)
   "Return the disk, buffer, and grammar revision used to analyze FILE."
-  (let ((buffer (get-file-buffer file)))
+  (let ((buffer (valsi-app-live-refresh--file-buffer file)))
     (list :signature (valsi-app-live-refresh--signature file) :buffer buffer
           :tick (and buffer (buffer-chars-modified-tick buffer))
           :generation valsi-registry-generation :limit valsi-app-max-file-bytes)))
@@ -641,7 +641,7 @@ CHANGED-FILES identifies edits that may be analyzed incrementally."
   "Return actionable reason label for ENTRY, or nil.
 Diagnostics and semantic staleness count only for an open artifact."
   (let* ((state (plist-get entry :state))
-         (open (get-file-buffer (plist-get entry :file)))
+         (open (valsi-app-live-refresh--file-buffer (plist-get entry :file)))
          (warnings (or (plist-get entry :warnings) 0))
          (stale (or (plist-get entry :stale) 0)))
     (cond
