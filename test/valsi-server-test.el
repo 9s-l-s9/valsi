@@ -241,5 +241,20 @@
         (should (equal '("u") (valsi-proto-open-uris))))
     (valsi-proto-reset)))
 
+(ert-deftest valsi-test-server-lone-surrogate-is-parse-error ()
+  "Issue #28: an undecodable surrogate escape answers -32700, not -32600."
+  (valsi-proto-reset)
+  (let ((responses
+         (valsi-server-test--exchange
+          (concat "{\"jsonrpc\":\"2.0\",\"id\":10,"
+                  "\"method\":\"artifact/didOpen\","
+                  "\"params\":{\"uri\":\"file:///b.md\","
+                  "\"text\":\"\\ud83d\"}}")
+          ;; A decodable record that is not an object stays -32600.
+          "[1,2]")))
+    (should (equal '(-32700 -32600) (valsi-server-test--codes responses)))
+    (should (eq :null (plist-get (car responses) :id)))
+    (should-not (valsi-proto-open-uris))))
+
 (provide 'valsi-server-test)
 ;;; valsi-server-test.el ends here
