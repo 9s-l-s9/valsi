@@ -184,16 +184,44 @@ spans and non-path-like @mentions are skipped."
           (push (cons target (cons at (+ at 1 (length target)))) spans))))
     (nreverse spans)))
 
+(defun valsi-instruction--buffer-imports ()
+  "Return the @imports of the current buffer as (TARGET BEG . END) lists.
+BEG and END are buffer positions of the `@target' text.  Lines of fenced
+code blocks are skipped, as `valsi-parse-lines' does for the parser."
+  (mapcan (lambda (line)
+            (let ((beg (valsi-line-beg line)))
+              (mapcar (lambda (span)
+                        (cons (car span)
+                              (cons (+ beg (cadr span)) (+ beg (cddr span)))))
+                      (valsi-instruction--import-spans (valsi-line-text line)))))
+          (valsi-parse-lines)))
+
+(defvar-local valsi-instruction--fence-cache nil
+  "Cons of (TICK . TABLE): line starts of fenced lines at modification TICK.")
+
+(defun valsi-instruction--fenced-line-p (pos)
+  "Return non-nil when the line at POS is part of a fenced code block."
+  (let ((tick (buffer-chars-modified-tick)))
+    (unless (eql tick (car valsi-instruction--fence-cache))
+      (let ((table (make-hash-table)))
+        (dolist (line (valsi-parse-lines nil t))
+          (when (valsi-line-fenced line)
+            (puthash (valsi-line-beg line) t table)))
+        (setq valsi-instruction--fence-cache (cons tick table))))
+    (gethash (save-excursion (goto-char pos) (line-beginning-position))
+             (cdr valsi-instruction--fence-cache))))
+
 (defun valsi-instruction--import-matcher (limit)
   "Font-lock matcher: find the next @import before LIMIT.
-Sets match group 1 to the import target."
+Sets match group 1 to the import target.  Fenced code is skipped."
   (let (found)
     (while (and (not found) (< (point) limit))
       (let* ((bol (line-beginning-position))
              (eol (min limit (line-end-position)))
-             (span (cl-find-if (lambda (s) (>= (+ bol (cadr s)) (point)))
-                               (valsi-instruction--import-spans
-                                (buffer-substring-no-properties bol eol)))))
+             (span (unless (valsi-instruction--fenced-line-p bol)
+                     (cl-find-if (lambda (s) (>= (+ bol (cadr s)) (point)))
+                                 (valsi-instruction--import-spans
+                                  (buffer-substring-no-properties bol eol))))))
         (if span
             (let ((beg (+ bol (cadr span))) (end (+ bol (cddr span))))
               (set-match-data (list beg end (1+ beg) end))
@@ -357,9 +385,7 @@ Also reports the frontmatter glob predicate when the file is glob-scoped."
   (when (file-readable-p file)
     (with-temp-buffer
       (insert-file-contents file)
-      (mapcar #'car
-              (valsi-instruction--import-spans
-               (buffer-substring-no-properties (point-min) (point-max)))))))
+      (mapcar #'car (valsi-instruction--buffer-imports)))))
 
 (defun valsi-instruction--resolve-import (target base-dir)
   "Resolve import TARGET against BASE-DIR (handles ~ and relative paths)."
@@ -398,9 +424,10 @@ Also reports the frontmatter glob predicate when the file is glob-scoped."
   "Follow the @import or [[link]] at point to its file."
   (interactive)
   (let* ((col (- (point) (line-beginning-position)))
-         (spans (valsi-instruction--import-spans
-                 (buffer-substring-no-properties
-                  (line-beginning-position) (line-end-position))))
+         (spans (unless (valsi-instruction--fenced-line-p (point))
+                  (valsi-instruction--import-spans
+                   (buffer-substring-no-properties
+                    (line-beginning-position) (line-end-position)))))
          (span (or (cl-find-if (lambda (s) (<= (cadr s) col (cddr s))) spans)
                    (car spans))))
     (save-excursion

@@ -73,6 +73,49 @@
         (push (match-string-no-properties 1) found))
       (should (equal '("a.md" "b/c") (nreverse found))))))
 
+;;;; Fenced code is not an import (#18, #60)
+
+(defconst valsi-instruction-fixes-test--fenced
+  (concat "See @docs/a.md first.\n"
+          "```python\n@app.route(\"/x\")\ndef x(): pass\n```\n"
+          "~~~\n@other/thing.md\n~~~\n"
+          "Then @docs/b.md.\n")
+  "Instruction text with decorators and @paths inside fenced code blocks.")
+
+(ert-deftest valsi-test-instruction-import-skips-fenced-code ()
+  "Parser, file scan, project graph, font-lock and follow skip fences."
+  (let* ((content valsi-instruction-fixes-test--fenced)
+         (dir (make-temp-file "valsi-instr" t))
+         (file (expand-file-name "AGENTS.md" dir)))
+    (unwind-protect
+        (progn
+          (should (equal '("docs/a.md" "docs/b.md")
+                         (mapcar (lambda (n) (valsi-node-prop n :target))
+                                 (valsi-node-of-type
+                                  (valsi-instruction-parse content) 'import))))
+          (with-temp-file file (insert content))
+          (should (equal '("docs/a.md" "docs/b.md")
+                         (valsi-instruction--imports-of-file file)))
+          (require 'valsi-graph)
+          (should (equal '("docs/a.md" "docs/b.md")
+                         (mapcar #'caddr (valsi-graph--edges-instruction file))))
+          (with-temp-buffer
+            (insert content)
+            (goto-char (point-min))
+            (let (found)
+              (while (valsi-instruction--import-matcher (point-max))
+                (push (match-string-no-properties 1) found))
+              (should (equal '("docs/a.md" "docs/b.md") (nreverse found))))
+            (goto-char (point-min))
+            (search-forward "@other")
+            (let (visited)
+              (cl-letf (((symbol-function 'find-file-other-window)
+                         (lambda (f) (setq visited f)))
+                        ((symbol-function 'file-exists-p) (lambda (_) t)))
+                (valsi-instruction-follow))
+              (should-not visited))))
+      (delete-directory dir t))))
+
 ;;;; #61 -- scaffold creates parent directories and strips suffixes
 
 (ert-deftest valsi-test-instruction-scaffold-missing-parent-and-title ()
