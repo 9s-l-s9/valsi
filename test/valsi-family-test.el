@@ -118,6 +118,30 @@
     (should (string-match-p "1\\.0\\.0: unknown category \"Misc\"" report))
     (should-not (string-match-p "unknown category \"Added\"" report))))
 
+(ert-deftest valsi-test-changelog-lint-semver-prerelease-and-duplicates ()
+  "Lint orders pre-releases per SemVer and flags duplicates (issue #69)."
+  (should (string-match-p
+           "1\\.0\\.0 out of order"
+           (valsi-family-test--changelog-lint
+            "## [1.0.0-rc.1] - 2020-01-01\n- a\n## [1.0.0] - 2020-02-01\n- b\n")))
+  (should (string-match-p
+           "1\\.0\\.0-rc\\.2 out of order"
+           (valsi-family-test--changelog-lint
+            "## [1.0.0-rc.1] - 2020-01-01\n- a\n## [1.0.0-rc.2] - 2020-02-01\n- b\n")))
+  (should (string-match-p
+           "1\\.0\\.0: duplicate version"
+           (valsi-family-test--changelog-lint
+            "## [1.0.0] - 2020-02-01\n- a\n## [1.0.0] - 2020-01-01\n- b\n")))
+  (should-not (valsi-family-test--changelog-lint
+               (concat "## [1.0.0] - 2020-03-01\n- a\n"
+                       "## [1.0.0-rc.10] - 2020-02-01\n- b\n"
+                       "## [1.0.0-rc.2] - 2020-01-15\n- c\n"
+                       "## [1.0.0-beta] - 2020-01-10\n- d\n"
+                       "## [1.0.0-alpha.beta] - 2020-01-05\n- e\n"
+                       "## [1.0.0-alpha.1] - 2020-01-02\n- f\n"
+                       "## [1.0.0-alpha] - 2020-01-01\n- g\n"
+                       "## [0.9.0] - 2019-01-01\n- h\n"))))
+
 ;;;; Decision (ADR)
 
 (defconst valsi-family-test--adr

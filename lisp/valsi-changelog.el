@@ -10,8 +10,8 @@
 ;; Evidence tier: standardized (keepachangelog.com + SemVer).  Recognizes the
 ;; `## [version] - date' release headings (and `## [Unreleased]'), the six
 ;; fixed category headings, and entry bullets.  Provides release navigation, a
-;; releases dashboard, and a lint (descending SemVer order, ISO dates, empty or
-;; unknown categories).
+;; releases dashboard, and a lint (descending SemVer order, duplicate versions,
+;; ISO dates, empty or unknown categories).
 
 ;;; Code:
 
@@ -115,6 +115,43 @@ Also accepts a bare `## version - date' and `## version (date)'.")
     (,valsi-changelog-category-re 1 'valsi-story-face))
   "Font-lock keywords for changelog buffers.")
 
+;;;; SemVer precedence
+
+(defun valsi-changelog--prerelease-compare (a b)
+  "Compare dot-separated pre-release identifier lists A and B.
+Return -1, 0 or 1 per SemVer 2.0: numeric identifiers compare
+numerically and sort below alphanumeric ones; a shorter list that is a
+prefix of the longer one sorts lower."
+  (cond ((and (null a) (null b)) 0)
+        ((null a) -1)
+        ((null b) 1)
+        (t (let* ((x (car a)) (y (car b))
+                  (xn (string-match-p "\\`[0-9]+\\'" x))
+                  (yn (string-match-p "\\`[0-9]+\\'" y)))
+             (cond ((and xn yn (/= (string-to-number x) (string-to-number y)))
+                    (if (< (string-to-number x) (string-to-number y)) -1 1))
+                   ((and xn (not yn)) -1)
+                   ((and yn (not xn)) 1)
+                   ((and (not xn) (string< x y)) -1)
+                   ((and (not xn) (string< y x)) 1)
+                   (t (valsi-changelog--prerelease-compare (cdr a) (cdr b))))))))
+
+(defun valsi-changelog-version-compare (a b)
+  "Compare version strings A and B by SemVer precedence; return -1, 0 or 1.
+A version with a pre-release sorts below the same version without one;
+build metadata is ignored."
+  (let* ((split (lambda (v)
+                  (let* ((v (car (split-string v "\\+")))
+                         (i (string-search "-" v)))
+                    (cons (valsi-parse-sort-key (if i (substring v 0 i) v))
+                          (and i (split-string (substring v (1+ i)) "\\." t))))))
+         (pa (funcall split a)) (pb (funcall split b)))
+    (cond ((valsi-parse-sort-key< (car pa) (car pb)) -1)
+          ((valsi-parse-sort-key< (car pb) (car pa)) 1)
+          ((and (cdr pa) (null (cdr pb))) -1)
+          ((and (cdr pb) (null (cdr pa))) 1)
+          (t (valsi-changelog--prerelease-compare (cdr pa) (cdr pb))))))
+
 ;;;; Commands
 
 (defun valsi-changelog-next-release ()
@@ -166,23 +203,28 @@ Also accepts a bare `## version - date' and `## version (date)'.")
    #'valsi-changelog--dashboard-entries))
 
 (defun valsi-changelog-lint ()
-  "Lint the changelog: SemVer order, ISO dates, empty/unknown categories."
+  "Lint the changelog: SemVer order, duplicates, ISO dates, categories."
   (interactive)
   (let* ((root (valsi-tree))
          (releases (valsi-node-of-type root 'release))
          (issues nil)
-         (prev-key nil))
+         (prev-ver nil))
     (dolist (rel releases)
       (let* ((ver (valsi-node-prop rel :version))
              (date (valsi-node-prop rel :date))
              (unreleased (valsi-node-prop rel :unreleased))
-             (key (valsi-parse-sort-key ver)))
+             (key (valsi-parse-sort-key ver))
+             (cmp (and prev-ver key (valsi-changelog-version-compare
+                                     prev-ver ver))))
         (unless unreleased
           (when (and date (not (string-match-p "\\`[0-9]\\{4\\}-[0-9]\\{2\\}-[0-9]\\{2\\}\\'" date)))
             (push (format "%s: non-ISO date %S" ver date) issues))
-          (when (and prev-key key (valsi-parse-sort-key< prev-key key))
-            (push (format "%s out of order (should be newest-first)" ver) issues))
-          (when key (setq prev-key key)))
+          (pcase cmp
+            (-1 (push (format "%s out of order (should be newest-first)" ver)
+                      issues))
+            (0 (push (format "%s: duplicate version (same as %s)" ver prev-ver)
+                     issues)))
+          (when key (setq prev-ver ver)))
         (dolist (cat (valsi-node-of-type rel 'category))
           (let ((name (valsi-node-prop cat :name)))
             (unless (member name valsi-changelog-categories)
