@@ -51,22 +51,40 @@ Idempotent: registering the same function twice is a no-op.  Returns FN."
            (project-root (project-current)))
       default-directory))
 
+(defvar valsi-graph-ignored-directories
+  '(".git" ".hg" ".svn" ".bzr" "_darcs" ".jj" "node_modules" "references")
+  "Directory names the artifact scan never descends into.
+Nested repositories and Git worktrees (directories holding a `.git'
+entry) are skipped as well, so their copies do not duplicate edges.")
+
+(defvar valsi-graph--root nil
+  "Project root bound by `valsi-graph--collect' for edge-source names.")
+
+(defun valsi-graph--descend-p (dir)
+  "Return non-nil when the artifact scan should descend into DIR."
+  (not (or (member (file-name-nondirectory (directory-file-name dir))
+                   valsi-graph-ignored-directories)
+           (file-exists-p (expand-file-name ".git" dir)))))
+
 (defun valsi-graph--artifact-files ()
-  "Return candidate artifact files under the project root."
-  (let ((root (valsi-graph--project-root)) files)
-    (dolist (pat '("*.md" "**/*.md"))
-      (ignore-errors
-        (setq files (append files
-                            (file-expand-wildcards
-                             (expand-file-name pat root) t)))))
-    (cl-remove-if (lambda (f) (string-match-p "/\\(references\\|node_modules\\)/" f))
-                  (delete-dups files))))
+  "Return candidate artifact files under the project root, recursively."
+  (ignore-errors
+    (directory-files-recursively (valsi-graph--project-root) "\\.md\\'"
+                                 nil #'valsi-graph--descend-p)))
+
+(defun valsi-graph--source-name (file)
+  "Return the edge SRC for FILE.
+Relative to the project root during a collect, so two README.md files
+stay distinct; the bare file name otherwise."
+  (if valsi-graph--root
+      (file-relative-name file valsi-graph--root)
+    (file-name-nondirectory file)))
 
 ;;;; Built-in edge sources
 
 (defun valsi-graph--edges-instruction (file)
   "Extract @import edges from FILE."
-  (let (edges (base (file-name-nondirectory file)))
+  (let (edges (base (valsi-graph--source-name file)))
     (with-temp-buffer
       (insert-file-contents file)
       (goto-char (point-min))
@@ -76,7 +94,7 @@ Idempotent: registering the same function twice is a no-op.  Returns FN."
 
 (defun valsi-graph--edges-memory (file)
   "Extract [[wiki]] and index-pointer edges from FILE."
-  (let (edges (base (file-name-nondirectory file)))
+  (let (edges (base (valsi-graph--source-name file)))
     (with-temp-buffer
       (insert-file-contents file)
       (goto-char (point-min))
@@ -90,7 +108,7 @@ Idempotent: registering the same function twice is a no-op.  Returns FN."
 
 (defun valsi-graph--edges-plan (file)
   "Extract trace/path-ref edges from a plan FILE."
-  (let (edges (base (file-name-nondirectory file)))
+  (let (edges (base (valsi-graph--source-name file)))
     (with-temp-buffer
       (insert-file-contents file)
       (goto-char (point-min))
@@ -108,7 +126,7 @@ Idempotent: registering the same function twice is a no-op.  Returns FN."
 (defun valsi-graph--edges-phase (file)
   "Extract phase-successor edges (## Sprint/Phase ordering) from FILE.
 Consecutive phase headings yield one \"A → B\" successor edge each."
-  (let (titles (base (file-name-nondirectory file)))
+  (let (titles (base (valsi-graph--source-name file)))
     (with-temp-buffer
       (insert-file-contents file)
       (goto-char (point-min))
@@ -124,7 +142,7 @@ Consecutive phase headings yield one \"A → B\" successor edge each."
 (defun valsi-graph--collect ()
   "Return all edges as (FILE SRC KIND TARGET) across the project.
 FILE is the absolute path the edge came from (for navigation)."
-  (let (all)
+  (let ((valsi-graph--root (valsi-graph--project-root)) all)
     (dolist (file (valsi-graph--artifact-files))
       (dolist (src valsi-graph-edge-sources)
         (ignore-errors
@@ -154,7 +172,7 @@ The row id is the absolute source file, so RET can visit it."
   (interactive)
   (valsi-view-tabulated
    "*Valsi cross-artifact graph*"
-   [("Source" 30 t) ("Kind" 8 t) ("Target" 54 t)]
+   [("Source" 36 t) ("Kind" 8 t) ("Target" 48 t)]
    (valsi-graph--entries)
    #'valsi-graph--entries
    '("Source" . nil))
