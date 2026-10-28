@@ -37,8 +37,7 @@
       (setq refs
             (append refs
                     (valsi-parse-pathrefs (valsi-node-prop meta :text "")))))
-    (delete-dups
-     (mapcar (lambda (path) (car (split-string path ":"))) refs))))
+    (delete-dups (delq nil (mapcar #'valsi-plan--pathref-file refs)))))
 
 (defun valsi-plan--task-verify (task)
   "Return the concatenated text of TASK's Verify metadata."

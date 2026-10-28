@@ -11,6 +11,7 @@
 (require 'ert)
 (require 'cl-lib)
 (require 'valsi-plan)
+(require 'valsi-plan-agent)
 
 (ert-deftest valsi-plan-commands-test-plain-dialect ()
   "A plain task list is not speckit, so inserting mints no Tnnn id (#11)."
@@ -88,6 +89,17 @@
     (should (eq 'done (valsi-plan-effective-state
                        (car (valsi-node-of-type root 'task)))))
     (should-not (valsi-plan--lint-issues root))))
+
+(ert-deftest valsi-plan-commands-test-pathref-skips-urls-globs ()
+  "URLs and globs in backticks are not treated as manifest files (#33)."
+  (let* ((root (valsi-plan-parse
+                (concat "- [x] T001 see `https://example.com/foo`, `src/*.el`"
+                        " and `nope/missing.el:12`\n")))
+         (task (car (valsi-node-of-type root 'task))))
+    (should (equal '("T001: done but manifest file missing: nope/missing.el")
+                   (mapcar #'cdr (valsi-plan--missing-file-findings
+                                  root temporary-file-directory))))
+    (should (equal '("nope/missing.el") (valsi-plan--task-files task)))))
 
 (provide 'valsi-plan-commands-test)
 ;;; valsi-plan-commands-test.el ends here

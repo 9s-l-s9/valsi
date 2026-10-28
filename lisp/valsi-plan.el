@@ -853,6 +853,13 @@ build on this; the buffer/filesystem checks are layered on top there."
   "Return the structural lint messages for ROOT as a list of strings."
   (mapcar #'cdr (valsi-plan--lint-collect root)))
 
+(defun valsi-plan--pathref-file (ref)
+  "Return the file named by path-ref REF without its :LINE suffix.
+Return nil when REF is a URL or a glob rather than a single file."
+  (unless (or (string-match-p "\\`[a-zA-Z][a-zA-Z0-9+.-]*://" ref)
+              (string-match-p "[*?[]" ref))
+    (car (split-string ref ":"))))
+
 (defun valsi-plan--missing-file-findings (root &optional dir)
   "Return (NODE . MESSAGE) findings for done tasks whose manifest files are gone.
 ROOT is the plan tree.  DIR (default `default-directory') resolves relative
@@ -863,8 +870,9 @@ path-refs."
     (dolist (tk (valsi-node-of-type root 'task))
       (when (eq (plist-get (gethash tk states) :state) 'done)
         (dolist (pr (valsi-node-prop tk :pathrefs))
-          (let ((file (car (split-string pr ":"))))
-            (unless (file-exists-p (expand-file-name file dir))
+          (let ((file (valsi-plan--pathref-file pr)))
+            (unless (or (null file)
+                        (file-exists-p (expand-file-name file dir)))
               (push (cons tk (format "%s: done but manifest file missing: %s"
                                      (or (valsi-node-prop tk :id) "?") file))
                     found))))))
@@ -1067,9 +1075,9 @@ A pair is stale when its task's path-ref target is newer than the plan."
     (when plan-mtime
       (dolist (tk (valsi-node-of-type root 'task))
         (dolist (pr (valsi-node-prop tk :pathrefs))
-          (let* ((file (car (split-string pr ":")))
-                 (abs (expand-file-name file dir)))
-            (when (and (file-exists-p abs)
+          (let* ((file (valsi-plan--pathref-file pr))
+                 (abs (and file (expand-file-name file dir))))
+            (when (and abs (file-exists-p abs)
                        (time-less-p plan-mtime
                                     (file-attribute-modification-time
                                      (file-attributes abs))))
