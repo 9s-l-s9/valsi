@@ -83,5 +83,30 @@
       (valsi-project-forget a)
       (should (equal (list b c) (valsi-project-state-test--saved file))))))
 
+(ert-deftest valsi-project-state-session-only-forget-skips-file ()
+  "Forgetting a session-only root never needs or writes the state file (#53)."
+  (valsi-project-state-test--with-state
+    (valsi-project-register a)
+    (valsi-project-forget a)
+    (should-not (valsi-project-roots))
+    (should-not (file-exists-p file))
+    (with-temp-file file (insert "garbage ("))
+    (valsi-project-register a)
+    (valsi-project-forget a)
+    (should-not (valsi-project-roots))
+    (should (equal "garbage (" (valsi-project-state-test--contents file)))))
+
+(ert-deftest valsi-project-state-unwritable-remember-keeps-session ()
+  "An unsaveable root still joins the session, with a user error (#53)."
+  (valsi-project-state-test--with-state
+    (let* ((read-only (expand-file-name "ro" base))
+           (valsi-project-file (expand-file-name "projects.eld" read-only)))
+      (make-directory read-only)
+      (set-file-modes read-only #o500)
+      (skip-unless (not (file-writable-p valsi-project-file)))
+      (should-error (valsi-project-remember a) :type 'user-error)
+      (should (equal (list a) (valsi-project-roots)))
+      (should-not valsi-project--saved-roots))))
+
 (provide 'valsi-project-state-test)
 ;;; valsi-project-state-test.el ends here

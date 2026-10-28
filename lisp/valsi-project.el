@@ -117,26 +117,30 @@ made since they were loaded are kept, and returns the roots to save."
     (let* ((roots (funcall function valsi-project--saved-roots))
            (directory (file-name-directory (expand-file-name valsi-project-file)))
            temporary)
-      (make-directory directory t)
-      (unwind-protect
-          (progn
-            (setq temporary (make-temp-file (expand-file-name ".valsi-projects-" directory)))
-            (with-temp-file temporary
-              (let ((print-length nil) (print-level nil))
-                (prin1 (list :version 1 :roots roots) (current-buffer))
-                (insert "\n")))
-            (rename-file temporary valsi-project-file t))
-        (when (and temporary (file-exists-p temporary))
-          (delete-file temporary)))
+      (condition-case err
+          (unwind-protect
+              (progn
+                (make-directory directory t)
+                (setq temporary (make-temp-file (expand-file-name ".valsi-projects-" directory)))
+                (with-temp-file temporary
+                  (let ((print-length nil) (print-level nil))
+                    (prin1 (list :version 1 :roots roots) (current-buffer))
+                    (insert "\n")))
+                (rename-file temporary valsi-project-file t))
+            (when (and temporary (file-exists-p temporary))
+              (delete-file temporary)))
+        (file-error
+         (user-error "Cannot save projects to %s: %s"
+                     valsi-project-file (error-message-string err))))
       (setq valsi-project--saved-roots roots))))
 
 (defun valsi-project-remember (root)
   "Remember ROOT across sessions and include it in the working set."
   (valsi-project--load)
-  (let ((root (valsi-project-canonical-root root)))
+  (let ((root (valsi-project-register root)))
+    ;; The session keeps the root even when it cannot be persisted.
     (valsi-project--save
      (lambda (roots) (delete-dups (append roots (list root)))))
-    (valsi-project-register root)
     (run-hooks 'valsi-project-change-hook)
     root))
 
@@ -148,7 +152,9 @@ made since they were loaded are kept, and returns the roots to save."
   (setq root (file-name-as-directory root))
   (unless (member root (valsi-project-roots))
     (setq root (valsi-project-canonical-root root)))
-  (valsi-project--save (lambda (roots) (delete root (copy-sequence roots))))
+  ;; A session-only root never touches the state file.
+  (when (member root valsi-project--saved-roots)
+    (valsi-project--save (lambda (roots) (delete root (copy-sequence roots)))))
   (setq valsi-project--roots (delete root valsi-project--roots))
   (run-hooks 'valsi-project-change-hook))
 
