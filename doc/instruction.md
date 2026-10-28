@@ -29,6 +29,11 @@ alwaysApply: false
 ---
 ```
 
+Globs may also be written inline as a flow array (`globs: ["a", "b"]`) or as
+Cursor's comma-separated string (`globs: "*.ts,*.tsx"`); commas inside
+`{ts,tsx}` brace patterns do not split. Trailing `# comments` are ignored and
+a quoted `alwaysApply: "true"` counts as true.
+
 `M-x valsi-instruction-effective-at-point` (also `info`/`effective` on the `C-c n`
 menu) reports the nearest-wins **heading path** at point, and — when the file is
 glob-scoped — the glob predicate the whole file applies to. This is the genre's

@@ -61,33 +61,75 @@ inline code.")
         (substring s 1 -1)
       s)))
 
+(defun valsi-instruction--split-top (s sep)
+  "Split S at each SEP char outside quotes and brackets/braces.
+With SEP `?#', only a `#' at the start or after whitespace splits, as a
+YAML comment does."
+  (let ((parts nil) (quote-char nil) (depth 0) (start 0) (i 0) (n (length s)))
+    (while (< i n)
+      (let ((c (aref s i)))
+        (cond
+         (quote-char (when (eq c quote-char) (setq quote-char nil)))
+         ((and (memq c '(?\" ?'))
+               (or (= i 0) (memq (aref s (1- i)) '(?\s ?\t ?, ?\[ ?{))))
+          ;; Only a quote that opens a token; an apostrophe is text.
+          (setq quote-char c))
+         ((memq c '(?\[ ?{)) (cl-incf depth))
+         ((memq c '(?\] ?})) (setq depth (max 0 (1- depth))))
+         ((and (eq c sep) (= depth 0)
+               (or (not (eq sep ?#)) (= i 0)
+                   (memq (aref s (1- i)) '(?\s ?\t))))
+          (push (substring s start i) parts)
+          (setq start (1+ i)))))
+      (cl-incf i))
+    (nreverse (cons (substring s start) parts))))
+
+(defun valsi-instruction--yaml-value (v)
+  "Return frontmatter value V without a trailing `# comment', trimmed."
+  (string-trim (car (valsi-instruction--split-top v ?#))))
+
+(defun valsi-instruction--glob-values (v)
+  "Return the globs in inline value V (comment already stripped).
+Accepts a flow array `[\"a\", \"b\"]', a quoted or bare scalar, and a
+comma-separated glob string `\"*.ts,*.tsx\"'.  Commas inside `{...}'
+brace patterns do not split."
+  (let ((inner (if (string-match "\\`\\[\\(.*\\)\\]\\'" v)
+                   (match-string 1 v)
+                 (valsi-instruction--unquote v))))
+    (delete "" (mapcar #'valsi-instruction--unquote
+                       (valsi-instruction--split-top inner ?,)))))
+
 (defun valsi-instruction--frontmatter-props (raw-lines)
   "Parse RAW-LINES (frontmatter body strings) into a props plist.
-Recognizes `description', `globs'/`applyTo' (inline string or block list),
-and `alwaysApply'."
+Recognizes `description', `globs'/`applyTo' (inline string, comma list,
+flow array or block list), and `alwaysApply'.  Trailing `# comments' are
+ignored and quoted values are unquoted."
   (let ((desc nil) (globs nil) (apply-to nil) (always nil) (key nil))
     (dolist (line raw-lines)
       (cond
        ((string-match "\\`[ \t]*-[ \t]+\\(.*\\)\\'" line)
-        (let ((val (valsi-instruction--unquote (match-string 1 line))))
+        (let ((val (valsi-instruction--unquote
+                    (valsi-instruction--yaml-value (match-string 1 line)))))
           (pcase key
             ('globs (push val globs))
             ('apply-to (push val apply-to)))))
        ((string-match "\\`\\([A-Za-z_]+\\)[ \t]*:[ \t]*\\(.*\\)\\'" line)
         (let ((k (downcase (match-string 1 line)))
-              (v (string-trim (match-string 2 line))))
+              (v (valsi-instruction--yaml-value (match-string 2 line))))
           (pcase k
             ("description" (setq desc (valsi-instruction--unquote v) key nil))
             ("globs"
              (setq key 'globs)
-             (unless (string-empty-p v)
-               (push (valsi-instruction--unquote v) globs)))
+             (setq globs (append (reverse (valsi-instruction--glob-values v))
+                                 globs)))
             ("applyto"
              (setq key 'apply-to)
-             (unless (string-empty-p v)
-               (push (valsi-instruction--unquote v) apply-to)))
+             (setq apply-to (append (reverse (valsi-instruction--glob-values v))
+                                    apply-to)))
             ("alwaysapply"
-             (setq always (string= (downcase v) "true") key nil))
+             (setq always (string= (downcase (valsi-instruction--unquote v))
+                                   "true")
+                   key nil))
             (_ (setq key nil)))))))
     (list :description desc
           :globs (nreverse globs)

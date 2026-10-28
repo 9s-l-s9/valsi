@@ -94,5 +94,43 @@
         (kill-buffer b))
       (delete-directory dir t))))
 
+;;;; #62 -- frontmatter value forms
+
+(defun valsi-instruction-fixes-test--fm (content)
+  "Return the frontmatter node of CONTENT and its lint messages."
+  (let ((root (valsi-instruction-parse content)))
+    (cons (car (valsi-node-of-type root 'frontmatter))
+          (mapcar #'cdr (valsi-instruction--lint-collect root)))))
+
+(ert-deftest valsi-test-instruction-frontmatter-value-forms ()
+  "Flow arrays, comma globs, comments and quoted booleans parse correctly."
+  (pcase-dolist (`(,content ,prop ,expected)
+                 '(("---\nglobs: [\"a\", \"b\"]\n---\n" :globs ("a" "b"))
+                   ("---\nglobs: \"*.ts,*.tsx\"\n---\n" :globs ("*.ts" "*.tsx"))
+                   ("---\nglobs: *.ts, *.tsx # web\n---\n" :globs ("*.ts" "*.tsx"))
+                   ("---\nglobs: \"src/**/*.{ts,tsx}\"\n---\n"
+                    :globs ("src/**/*.{ts,tsx}"))
+                   ("---\nglobs:\n  - \"a#b\" # c\n---\n" :globs ("a#b"))
+                   ("---\napplyTo: '**/*.py, **/*.pyi'\n---\n"
+                    :apply-to ("**/*.py" "**/*.pyi"))
+                   ("---\ndescription: x # note\nglobs: a\n---\n"
+                    :description "x")
+                   ("---\ndescription: Don't panic # note\nglobs: a\n---\n"
+                    :description "Don't panic")))
+    (let ((res (valsi-instruction-fixes-test--fm content)))
+      (should (equal expected (valsi-node-prop (car res) prop)))
+      (should (null (cdr res)))))
+  (dolist (content '("---\ndescription: x\nalwaysApply: true # c\n---\n"
+                     "---\ndescription: x\nalwaysApply: \"true\"\n---\n"
+                     "---\ndescription: x\nalwaysApply: 'True'\n---\n"))
+    (let ((res (valsi-instruction-fixes-test--fm content)))
+      (should (eq t (valsi-node-prop (car res) :always-apply)))
+      (should (null (cdr res)))))
+  (let ((res (valsi-instruction-fixes-test--fm
+              "---\ndescription: x\nalwaysApply: false # c\n---\n")))
+    (should-not (valsi-node-prop (car res) :always-apply))
+    (should (equal '("frontmatter declares no globs/applyTo scope")
+                   (cdr res)))))
+
 (provide 'valsi-instruction-fixes-test)
 ;;; valsi-instruction-fixes-test.el ends here
