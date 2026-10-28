@@ -37,38 +37,78 @@ This is the seam a wire transport (or a non-Emacs server) plugs into."
 ;;;; Line records
 
 (cl-defstruct (valsi-line (:constructor valsi-line-create))
-  "One physical line of a buffer, with byte region and text."
-  n beg end text indent)
+  "One physical line of a buffer, with byte region and text.
+FENCED is non-nil for a fenced code block line, delimiters included."
+  n beg end text indent fenced)
 
-(defun valsi-parse-lines (&optional buffer)
-  "Return a list of `valsi-line' for every line of BUFFER (or current)."
+(defconst valsi-parse-fence-re "^[ \t]*\\(`\\{3,\\}\\|~\\{3,\\}\\)\\(.*\\)$"
+  "Fenced code block delimiter: three or more backticks or tildes.")
+
+(defun valsi-parse--fence-open (text)
+  "Return the fence string if TEXT opens a fenced code block, else nil.
+A backtick fence's info string may not contain a backtick (CommonMark)."
+  (when (and (string-match valsi-parse-fence-re text)
+             (not (and (eq ?` (aref (match-string 1 text) 0))
+                       (string-search "`" (match-string 2 text)))))
+    (match-string 1 text)))
+
+(defun valsi-parse--fence-close-p (text fence)
+  "Return non-nil when TEXT closes the code block opened by FENCE.
+The closer uses FENCE's character, is at least as long, and has no info."
+  (and (string-match valsi-parse-fence-re text)
+       (eq (aref fence 0) (aref (match-string 1 text) 0))
+       (>= (length (match-string 1 text)) (length fence))
+       (string-blank-p (match-string 2 text))))
+
+(defun valsi-parse-lines (&optional buffer keep-fenced)
+  "Return a list of `valsi-line' for every line of BUFFER (or current).
+Lines of fenced code blocks (delimiters included) are omitted, so no
+grammar reads a checkbox or heading inside a fence as structure; an
+unclosed fence runs to the end of the buffer, as in CommonMark.  With
+KEEP-FENCED, return them too, marked by a non-nil `valsi-line-fenced'."
   (with-current-buffer (or buffer (current-buffer))
     (save-excursion
       (goto-char (point-min))
-      (let ((n 0) acc)
+      (let ((n 0) (fence nil) acc)
         (while (not (eobp))
           (let* ((beg (line-beginning-position))
                  (end (line-end-position))
-                 (text (buffer-substring-no-properties beg end)))
-            (push (valsi-line-create
-                   :n n :beg beg :end (min (point-max) (1+ end))
-                   :text text
-                   :indent (string-match-p "[^ \t]" text))
-                  acc))
+                 (text (buffer-substring-no-properties beg end))
+                 (fenced (cond (fence
+                                (when (valsi-parse--fence-close-p text fence)
+                                  (setq fence nil))
+                                t)
+                               ((setq fence (valsi-parse--fence-open text))
+                                t))))
+            (when (or keep-fenced (not fenced))
+              (push (valsi-line-create
+                     :n n :beg beg :end (min (point-max) (1+ end))
+                     :text text
+                     :indent (string-match-p "[^ \t]" text)
+                     :fenced fenced)
+                    acc)))
           (setq n (1+ n))
           (forward-line 1))
         (nreverse acc)))))
 
 ;;;; Generic markdown recognizers
 
-(defconst valsi-parse-heading-re "^\\(#+\\)[ \t]+\\(.*\\)$"
-  "ATX heading recognizer.")
+(defconst valsi-parse-heading-re "^\\(#\\{1,6\\}\\)[ \t]+\\(.*\\)$"
+  "ATX heading recognizer (CommonMark allows at most six hashes).")
+
+(defconst valsi-parse-heading-close-re "\\(?:\\`\\|[ \t]+\\)#+[ \t]*\\'"
+  "Optional closing hash sequence of an ATX heading title.")
 
 (defun valsi-parse-heading (text)
-  "If TEXT is an ATX heading return (LEVEL . TITLE), else nil."
+  "If TEXT is an ATX heading return (LEVEL . TITLE), else nil.
+A closing sequence of hashes (\"## Foo ##\") is not part of TITLE."
   (when (string-match valsi-parse-heading-re text)
-    (cons (length (match-string 1 text))
-          (string-trim (match-string 2 text)))))
+    (let ((level (length (match-string 1 text)))
+          (title (match-string 2 text)))
+      (cons level
+            (string-trim
+             (replace-regexp-in-string valsi-parse-heading-close-re ""
+                                       title t t))))))
 
 (defconst valsi-parse-checkbox-re
   "^\\([ \t]*\\)-[ \t]+\\[\\(.\\)\\][ \t]+\\(.*\\)$"
@@ -109,22 +149,42 @@ Plist keys: :indent (columns) :state :char :rest :rest-offset."
 (defconst valsi-parse-tag-re "\\[\\([A-Za-z0-9][A-Za-z0-9._-]*\\)\\]"
   "Bracketed tag recognizer (R3): [P], [US1], [label].")
 
+(defconst valsi-parse--lead-id-re
+  "[ \t]*\\(?:T[0-9]+\\(?:\\.[0-9]+\\)*\\|[0-9]+\\(?:\\.[0-9]+\\)*\\)\\.?\\(?:[ \t)]\\|\\'\\)"
+  "A task id that may sit among the leading tags (cf. `valsi-parse-id-re').")
+
+(defun valsi-parse--match-at (regexp text pos)
+  "Return non-nil when REGEXP matches TEXT exactly at POS (match data set)."
+  (eq pos (string-match regexp text pos)))
+
 (defun valsi-parse-tags (text)
   "Return a list of (TAG-STRING . KIND) recognized in leading TEXT.
-KIND is one of `parallel', `story', `label'.  Also matches bare US1."
-  (let ((tags nil) (start 0))
-    ;; Leading bracketed tags only (before free description) plus bare story.
-    (while (string-match valsi-parse-tag-re text start)
-      (let ((tok (match-string 1 text)))
-        (push (cons tok (valsi-parse--tag-kind tok)) tags)
-        (setq start (match-end 0))
-        ;; stop once we hit non-tag content between brackets
-        (unless (string-match-p "\\`[ \t]*\\[" (substring text start))
-          (setq start (length text)))))
-    (when (string-match "\\`\\(?:\\[[^]]*\\][ \t]*\\)*\\(US[0-9]+\\)\\b" text)
-      (let ((tok (match-string 1 text)))
-        (unless (assoc tok tags)
-          (push (cons tok 'story) tags))))
+KIND is one of `parallel', `story', `label'.  Also matches bare US1.
+Only the leading run of tokens counts: bracketed tags, bare story ids,
+and at most one task id (speckit puts it first: \"T001 [P] [US1] do\").
+Brackets after the first word of free description (citations, link text)
+are not tags."
+  (let ((tags nil) (pos 0) (id-seen nil) (done nil))
+    (while (not done)
+      (cond
+       ;; [TAG], but not the text of a markdown link [text](url)
+       ((and (valsi-parse--match-at
+              (concat "[ \t]*" valsi-parse-tag-re) text pos)
+             (not (eq ?\( (aref (concat text " ") (match-end 0)))))
+        (let ((tok (match-string 1 text)))
+          (push (cons tok (valsi-parse--tag-kind tok)) tags)
+          (setq pos (match-end 0))))
+       ;; bare story id: US1
+       ((valsi-parse--match-at "[ \t]*\\(US[0-9]+\\)\\b" text pos)
+        (let ((tok (match-string 1 text)))
+          (unless (assoc tok tags)
+            (push (cons tok 'story) tags))
+          (setq pos (match-end 0))))
+       ((and (not id-seen)
+             (valsi-parse--match-at valsi-parse--lead-id-re text pos))
+        (setq id-seen t
+              pos (match-end 0)))
+       (t (setq done t))))
     (nreverse tags)))
 
 (defun valsi-parse--tag-kind (tok)
@@ -177,8 +237,11 @@ KIND is one of `parallel', `story', `label'.  Also matches bare US1."
       (setq start (match-end 0)))
     (nreverse refs)))
 
-(defconst valsi-parse-req-re "_Requirements:[ \t]*\\([^_]*\\)_"
-  "Kiro requirements trace recognizer (R6a).")
+(defconst valsi-parse-req-re
+  "_Requirements:[ \t]*\\(.*?\\)_\\(?:[^[:alnum:]_]\\|$\\)"
+  "Kiro requirements trace recognizer (R6a).
+The closing underscore is the first one not followed by a word character,
+so ids that contain underscores (FR_2, REQ_1_2) are kept whole.")
 
 (defun valsi-parse-requirements (text)
   "Return a list of requirement ids if TEXT is an R6a trace line."
