@@ -210,5 +210,36 @@
     (valsi-registry-unregister 'issue5x)
     (valsi-proto-reset)))
 
+(ert-deftest valsi-test-server-non-string-uri-text-is-invalid-params ()
+  "Issue #27: non-string or missing uri/text answers -32602."
+  (valsi-server-init)
+  (valsi-proto-reset)
+  (unwind-protect
+      (let ((responses
+             (valsi-server-test--exchange
+              (list :jsonrpc "2.0" :id 1 :method "artifact/didOpen"
+                    :params (list :uri 5 :text "x"))
+              (list :jsonrpc "2.0" :id 2 :method "artifact/didOpen"
+                    :params (list :uri "u" :text 5))
+              (list :jsonrpc "2.0" :id 3 :method "artifact/didChange"
+                    :params (list :uri "u"))
+              (list :jsonrpc "2.0" :id 4 :method "artifact/symbols"
+                    :params (list :uri ["x"]))
+              (list :jsonrpc "2.0" :id 5 :method "artifact/capabilities"
+                    :params (list :uri 1))
+              (list :jsonrpc "2.0" :id 6 :method "artifact/planContext"
+                    :params (list :uri "u" :taskId 7))
+              (list :jsonrpc "2.0" :id 7 :method "artifact/didClose"
+                    :params (list :uri :false))
+              (list :jsonrpc "2.0" :id 8 :method "grammar/detect"
+                    :params (list :uri 3))
+              (list :jsonrpc "2.0" :id 9 :method "artifact/didOpen"
+                    :params (list :uri "u" :text "x")))))
+        (should (equal '(-32602 -32602 -32602 -32602 -32602 -32602 -32602
+                         -32602 nil)
+                       (valsi-server-test--codes responses)))
+        (should (equal '("u") (valsi-proto-open-uris))))
+    (valsi-proto-reset)))
+
 (provide 'valsi-server-test)
 ;;; valsi-server-test.el ends here

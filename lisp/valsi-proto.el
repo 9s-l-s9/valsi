@@ -54,6 +54,18 @@
 
 ;;;; Dispatch
 
+(define-error 'valsi-proto-invalid-params "Invalid AAP params")
+
+(defun valsi-proto--string-param (params key &optional optional)
+  "Return the string at KEY in PARAMS.
+Signal `valsi-proto-invalid-params' unless it is a string, or absent and
+OPTIONAL is non-nil."
+  (let ((value (plist-get params key)))
+    (if (or (stringp value) (and optional (null value)))
+        value
+      (signal 'valsi-proto-invalid-params
+              (list (format "%s must be a string" key) value)))))
+
 (defun valsi-proto-request (method params)
   "Handle an AAP request: METHOD (symbol) with PARAMS (plist) -> response plist.
 This is the native in-process seam.  A wire transport wraps
@@ -70,24 +82,27 @@ This is the native in-process seam.  A wire transport wraps
     ('grammar/list
      (list :grammars (valsi-registry-all)))
     ('grammar/detect
-     (list :id (valsi-registry-detect (plist-get params :uri)
-                                     (plist-get params :text))))
-    ('artifact/didOpen
-     (valsi-proto--sync (plist-get params :uri) (plist-get params :text)))
-    ('artifact/didChange
-     (valsi-proto--sync (plist-get params :uri) (plist-get params :text)))
+     (list :id (valsi-registry-detect
+                (valsi-proto--string-param params :uri t)
+                (valsi-proto--string-param params :text t))))
+    ((or 'artifact/didOpen 'artifact/didChange)
+     (valsi-proto--sync (valsi-proto--string-param params :uri)
+                        (valsi-proto--string-param params :text)))
     ('artifact/didClose
-     (remhash (plist-get params :uri) valsi-proto--docs)
-     (list :uri (plist-get params :uri)))
+     (let ((uri (valsi-proto--string-param params :uri)))
+       (remhash uri valsi-proto--docs)
+       (list :uri uri)))
     ('artifact/symbols
-     (let ((doc (gethash (plist-get params :uri) valsi-proto--docs)))
+     (let ((doc (gethash (valsi-proto--string-param params :uri)
+                         valsi-proto--docs)))
        (and doc (valsi-proto-doc-tree doc))))
     ('artifact/capabilities
-     (let ((doc (gethash (plist-get params :uri) valsi-proto--docs)))
+     (let ((doc (gethash (valsi-proto--string-param params :uri)
+                         valsi-proto--docs)))
        (list :capabilities (and doc (valsi-proto-doc-caps doc)))))
     ('artifact/planContext
-     (valsi-proto--plan-context (plist-get params :uri)
-                               (plist-get params :taskId)))
+     (valsi-proto--plan-context (valsi-proto--string-param params :uri)
+                               (valsi-proto--string-param params :taskId t)))
     (_ (list :error (format "unknown method: %s" method)))))
 
 (defun valsi-proto-json-request (method params)

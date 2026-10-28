@@ -78,7 +78,7 @@
             (and has-id
                  (list :jsonrpc valsi-server-jsonrpc-version
                        :id id :result result)))
-        (wrong-type-argument
+        ((valsi-proto-invalid-params wrong-type-argument)
          (and has-id
               (valsi-server--error id -32602 "Invalid params"
                                   (error-message-string err))))
