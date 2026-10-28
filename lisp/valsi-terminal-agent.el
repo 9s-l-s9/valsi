@@ -148,8 +148,10 @@ This client-side reporting boundary is outside AAP."
   (file-name-nondirectory (directory-file-name root)))
 
 (defun valsi-terminal-agent--key (root name)
-  "Return registry key for ROOT and agent NAME."
-  (cons (file-truename root) name))
+  "Return registry key for ROOT and agent NAME.
+ROOT uses the same canonical identity as `valsi-terminal-agent--start', so
+a missing trailing slash or a symlink alias finds the same agent."
+  (cons (valsi-project-canonical-root root) name))
 
 (defun valsi-terminal-agent--backend (backend)
   "Return declaration for BACKEND, or signal a user error."
