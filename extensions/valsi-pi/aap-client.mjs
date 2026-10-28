@@ -23,8 +23,12 @@ export class AAPClient {
 		this.child.stderr.on("data", (chunk) => {
 			this.stderr = (this.stderr + chunk).slice(-16_384);
 		});
-		this.child.once("error", (error) => this.failAll(error));
+		this.child.once("error", (error) => {
+			this.child = undefined;
+			this.failAll(error);
+		});
 		this.child.once("exit", (code, signal) => {
+			this.child = undefined;
 			const detail = this.stderr.trim();
 			this.failAll(
 				new Error(
@@ -32,6 +36,11 @@ export class AAPClient {
 				),
 			);
 		});
+	}
+
+	/** True while the server process can still accept requests. */
+	get running() {
+		return this.child !== undefined && this.child.exitCode === null;
 	}
 
 	consume(chunk) {
@@ -67,7 +76,7 @@ export class AAPClient {
 	}
 
 	request(method, params = {}, signal) {
-		if (!this.child || this.child.exitCode !== null) {
+		if (!this.running) {
 			return Promise.reject(new Error("AAP server is not running"));
 		}
 		const id = `pi-${this.nextId++}`;
@@ -109,5 +118,22 @@ export class AAPClient {
 		this.child?.stdin.end();
 		this.child = undefined;
 	}
+}
+
+/** Return a getter that reuses a running client and respawns a dead one. */
+export function aapConnection(create) {
+	let client;
+	const connection = () => {
+		if (!client?.running) {
+			client?.close();
+			client = create();
+		}
+		return client;
+	};
+	connection.close = () => {
+		client?.close();
+		client = undefined;
+	};
+	return connection;
 }
 

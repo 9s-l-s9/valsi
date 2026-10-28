@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import test from "node:test";
-import { AAPClient } from "../aap-client.mjs";
+import { AAPClient, aapConnection } from "../aap-client.mjs";
 
 function fakeProcess(onWrite = () => {}) {
 	const child = new EventEmitter();
@@ -80,4 +80,32 @@ test("malformed output, CRLF, exit, abort, and timeout reject without hanging", 
 		});
 		await assert.rejects(client.request("x"), /timed out/);
 	}
+});
+
+test("a connection respawns the client after the server exits or fails to spawn", async () => {
+	const children = [];
+	const connection = aapConnection(
+		() =>
+			new AAPClient("unused", [], {
+				spawn: () => {
+					const child = fakeProcess();
+					children.push(child);
+					return child;
+				},
+			}),
+	);
+	const first = connection();
+	assert.equal(connection(), first);
+	children[0].emit("exit", 3, null);
+	assert.equal(first.running, false);
+	await assert.rejects(first.request("x"), /not running/);
+	const second = connection();
+	assert.notEqual(second, first);
+	assert.equal(second.running, true);
+	children[1].emit("error", new Error("spawn emacs ENOENT"));
+	const third = connection();
+	assert.notEqual(third, second);
+	assert.equal(children.length, 3);
+	connection.close();
+	assert.equal(third.running, false);
 });
