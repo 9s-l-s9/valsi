@@ -76,6 +76,11 @@ Disk notifications and explicit refreshes always request a full scan.")
 (defvar-local valsi-app-live-refresh--buffer-tick nil
   "Last observed text modification tick; fontification does not change it.")
 
+;; Observation must survive `revert-buffer' and major-mode changes, which
+;; call `kill-all-local-variables'.
+(put 'valsi-app-live-refresh--buffer-root 'permanent-local t)
+(put 'valsi-app-live-refresh--buffer-tick 'permanent-local t)
+
 (defvar valsi-app-live-refresh--find-file-hook-installed nil
   "Non-nil when live-refresh discovery is installed in `find-file-hook'.")
 
@@ -158,30 +163,52 @@ Disk notifications and explicit refreshes always request a full scan.")
     (valsi-app-live-refresh-schedule valsi-app-live-refresh--buffer-root
                                      buffer-file-name)))
 
+(defun valsi-app-live-refresh--add-buffer-hooks ()
+  "Install the current buffer's artifact observation hooks."
+  (add-hook 'after-change-functions
+            #'valsi-app-live-refresh--buffer-after-change nil t)
+  (add-hook 'after-save-hook
+            #'valsi-app-live-refresh--buffer-after-save nil t)
+  (add-hook 'kill-buffer-hook
+            #'valsi-app-live-refresh--buffer-killed nil t)
+  (add-hook 'after-change-major-mode-hook
+            #'valsi-app-live-refresh--add-buffer-hooks nil t))
+
+(defun valsi-app-live-refresh--remove-buffer-hooks ()
+  "Remove the current buffer's artifact observation hooks."
+  (remove-hook 'after-change-functions
+               #'valsi-app-live-refresh--buffer-after-change t)
+  (remove-hook 'after-save-hook
+               #'valsi-app-live-refresh--buffer-after-save t)
+  (remove-hook 'kill-buffer-hook
+               #'valsi-app-live-refresh--buffer-killed t)
+  (remove-hook 'after-change-major-mode-hook
+               #'valsi-app-live-refresh--add-buffer-hooks t))
+
+;; The hooks are permanent so that `kill-all-local-variables' keeps them.
+;; Re-adding them after a major-mode change also re-binds the C-level
+;; `after-change-functions', which otherwise keeps its global value until
+;; Lisp code next reads the variable.
+(dolist (hook-function '(valsi-app-live-refresh--buffer-after-change
+                         valsi-app-live-refresh--buffer-after-save
+                         valsi-app-live-refresh--buffer-killed
+                         valsi-app-live-refresh--add-buffer-hooks))
+  (put hook-function 'permanent-local-hook t))
+
 (defun valsi-app-live-refresh--observe-buffer (file root)
   "Observe edits and saves in FILE's existing buffer for ROOT."
   (when-let* ((buffer (valsi-app-live-refresh--file-buffer file)))
     (with-current-buffer buffer
       (setq-local valsi-app-live-refresh--buffer-root root)
       (setq-local valsi-app-live-refresh--buffer-tick (buffer-chars-modified-tick))
-      (add-hook 'after-change-functions
-                #'valsi-app-live-refresh--buffer-after-change nil t)
-      (add-hook 'after-save-hook
-                #'valsi-app-live-refresh--buffer-after-save nil t)
-      (add-hook 'kill-buffer-hook
-                #'valsi-app-live-refresh--buffer-killed nil t))))
+      (valsi-app-live-refresh--add-buffer-hooks))))
 
 (defun valsi-app-live-refresh--unobserve (root)
   "Detach artifact buffer hooks for ROOT when observation ends."
   (dolist (buffer (buffer-list))
     (with-current-buffer buffer
       (when (equal valsi-app-live-refresh--buffer-root root)
-        (remove-hook 'after-change-functions
-                     #'valsi-app-live-refresh--buffer-after-change t)
-        (remove-hook 'after-save-hook
-                     #'valsi-app-live-refresh--buffer-after-save t)
-        (remove-hook 'kill-buffer-hook
-                     #'valsi-app-live-refresh--buffer-killed t)
+        (valsi-app-live-refresh--remove-buffer-hooks)
         (setq valsi-app-live-refresh--buffer-root nil
               valsi-app-live-refresh--buffer-tick nil)))))
 
