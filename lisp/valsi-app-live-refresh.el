@@ -82,6 +82,8 @@ Nested working projects can index the same file.")
 (put 'valsi-app-live-refresh--buffer-roots 'permanent-local t)
 (put 'valsi-app-live-refresh--buffer-tick 'permanent-local t)
 
+(defvar valsi-app-excluded-directory-names)
+
 (defvar valsi-app-live-refresh--find-file-hook-installed nil
   "Non-nil when live-refresh discovery is installed in `find-file-hook'.")
 
@@ -445,6 +447,12 @@ IMMEDIATE skips the idle debounce for an explicit user refresh."
             (seq-remove (lambda (watch) (equal (cdr watch) (car event)))
                         (valsi-app-live-refresh--project-watches project))))
     (when (valsi-app-live-refresh--project-subscribers project)
+      ;; Watch a new subdirectory, so files added there later are noticed
+      ;; even though it holds no known artifact yet.
+      (pcase event
+        ((or `(,_ created ,file) `(,_ renamed ,_ ,file))
+         (when (and (file-directory-p file) (not (file-symlink-p file)))
+           (valsi-app-live-refresh--watch-tree project file))))
       (valsi-app-live-refresh-schedule root))))
 
 (defun valsi-app-live-refresh--watch-directory (project directory)
@@ -468,6 +476,20 @@ A stopped watch, for example of a deleted directory, is replaced."
                   (valsi-app-live-refresh--project-watches project)))
         (file-notify-error nil)
         (file-error nil)))))
+
+(defun valsi-app-live-refresh--watch-tree (project directory)
+  "Watch PROJECT DIRECTORY and its subdirectories.
+Directories named in `valsi-app-excluded-directory-names' and symbolic links
+are skipped."
+  (let ((directory (file-name-as-directory directory)))
+    (unless (member (file-name-nondirectory (directory-file-name directory))
+                    (bound-and-true-p valsi-app-excluded-directory-names))
+      (valsi-app-live-refresh--watch-directory project directory)
+      (dolist (child (ignore-errors
+                       (directory-files
+                        directory t directory-files-no-dot-files-regexp t)))
+        (when (and (file-directory-p child) (not (file-symlink-p child)))
+          (valsi-app-live-refresh--watch-tree project child))))))
 
 (defun valsi-app-live-refresh--ensure-watches (project)
   "Ensure PROJECT root and known artifact directories are watched."

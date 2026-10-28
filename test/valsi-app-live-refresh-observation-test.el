@@ -156,5 +156,29 @@
           (should (= 1 (length watches)))
           (should (file-notify-valid-p (cdar watches))))))))
 
+(ert-deftest valsi-app-live-refresh-observation-watches-new-subdirectories ()
+  "Regression for #52: files added to a new subdirectory refresh the hub."
+  (skip-unless file-notify--library)
+  (valsi-app-live-refresh-observation-test--with-root root
+    (let ((docs (file-name-as-directory (expand-file-name "docs" root)))
+          (deep (file-name-as-directory (expand-file-name "docs/deep" root)))
+          (git (file-name-as-directory (expand-file-name ".git" root)))
+          (project (valsi-app-live-refresh--project root)))
+      (valsi-app-live-refresh-subscribe
+       (generate-new-buffer " *valsi-observe-hub*") root #'ignore)
+      (make-directory deep t)
+      (make-directory git)
+      (valsi-app-live-refresh-observation-test--pump)
+      (let ((watched (mapcar #'car (valsi-app-live-refresh--project-watches
+                                    project))))
+        (should (member docs watched))
+        (should (member deep watched))
+        (should-not (member git watched)))
+      (valsi-app-live-refresh--cancel-work project)
+      (with-temp-file (expand-file-name "NEW.md" deep)
+        (insert "# New\n- [ ] T9 y\n"))
+      (valsi-app-live-refresh-observation-test--pump)
+      (should (valsi-app-live-refresh-observation-test--pending-p root)))))
+
 (provide 'valsi-app-live-refresh-observation-test)
 ;;; valsi-app-live-refresh-observation-test.el ends here
