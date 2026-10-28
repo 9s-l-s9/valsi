@@ -114,5 +114,47 @@
       (should (string-match-p "unsaved" (valsi-app--file-text file)))
       (should (eq buffer (plist-get (valsi-app--file-cache-key file) :buffer))))))
 
+(defun valsi-app-live-refresh-observation-test--pump ()
+  "Process pending filesystem notification events."
+  (dotimes (_ 3) (read-event nil nil 0.2)))
+
+(ert-deftest valsi-app-live-refresh-observation-replaces-stopped-watch ()
+  "Regression for #50: a watch of a deleted directory is replaced."
+  (skip-unless file-notify--library)
+  (valsi-app-live-refresh-observation-test--with-root root
+    (let ((doc (file-name-as-directory (expand-file-name "doc" root)))
+          (project (valsi-app-live-refresh--project root)))
+      (make-directory doc)
+      (valsi-app-live-refresh-subscribe
+       (generate-new-buffer " *valsi-observe-hub*") root #'ignore)
+      (valsi-app-live-refresh--watch-directory project doc)
+      (delete-directory doc t)
+      (valsi-app-live-refresh-observation-test--pump)
+      (make-directory doc)
+      (valsi-app-live-refresh-observation-test--pump)
+      ;; What the next scan does for a directory with known artifacts.
+      (valsi-app-live-refresh--watch-directory project doc)
+      (let ((watch (assoc doc (valsi-app-live-refresh--project-watches project))))
+        (should watch)
+        (should (file-notify-valid-p (cdr watch))))
+      (valsi-app-live-refresh--cancel-work project)
+      (with-temp-file (expand-file-name "M.md" doc) (insert "m"))
+      (valsi-app-live-refresh-observation-test--pump)
+      (should (valsi-app-live-refresh-observation-test--pending-p root)))))
+
+(ert-deftest valsi-app-live-refresh-observation-rewatches-invalid-entry ()
+  "Regression for #50: an invalid descriptor never blocks a new watch."
+  (skip-unless file-notify--library)
+  (valsi-app-live-refresh-observation-test--with-root root
+    (let ((project (valsi-app-live-refresh--project root)))
+      (valsi-app-live-refresh--watch-directory project root)
+      (let ((stale (cdr (assoc root (valsi-app-live-refresh--project-watches
+                                     project)))))
+        (file-notify-rm-watch stale)
+        (valsi-app-live-refresh--watch-directory project root)
+        (let ((watches (valsi-app-live-refresh--project-watches project)))
+          (should (= 1 (length watches)))
+          (should (file-notify-valid-p (cdar watches))))))))
+
 (provide 'valsi-app-live-refresh-observation-test)
 ;;; valsi-app-live-refresh-observation-test.el ends here

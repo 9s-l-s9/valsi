@@ -435,27 +435,39 @@ IMMEDIATE skips the idle debounce for an explicit user refresh."
                valsi-app-live-refresh-delay nil
                #'valsi-app-live-refresh--dispatch project token))))))
 
-(defun valsi-app-live-refresh--notify (root _event)
-  "Schedule ROOT reconciliation for a filesystem notification."
+(defun valsi-app-live-refresh--notify (root event)
+  "Schedule ROOT reconciliation for a filesystem notification EVENT."
   (when-let* ((project (gethash root valsi-app-live-refresh--projects)))
+    ;; A deleted or renamed directory stops its watch.  Forget it so a
+    ;; recreated directory is watched again.
+    (when (eq (nth 1 event) 'stopped)
+      (setf (valsi-app-live-refresh--project-watches project)
+            (seq-remove (lambda (watch) (equal (cdr watch) (car event)))
+                        (valsi-app-live-refresh--project-watches project))))
     (when (valsi-app-live-refresh--project-subscribers project)
       (valsi-app-live-refresh-schedule root))))
 
 (defun valsi-app-live-refresh--watch-directory (project directory)
-  "Add a filesystem watch for PROJECT DIRECTORY when supported."
-  (unless (or (file-remote-p directory)
-              (assoc directory
-                     (valsi-app-live-refresh--project-watches project)))
-    (condition-case nil
-        (let ((descriptor
-               (file-notify-add-watch
-                directory '(change attribute-change)
-                (apply-partially #'valsi-app-live-refresh--notify
-                                 (valsi-app-live-refresh--project-root project)))))
-          (push (cons directory descriptor)
-                (valsi-app-live-refresh--project-watches project)))
-      (file-notify-error nil)
-      (file-error nil))))
+  "Add a filesystem watch for PROJECT DIRECTORY when supported.
+A stopped watch, for example of a deleted directory, is replaced."
+  (let ((watch (assoc directory
+                      (valsi-app-live-refresh--project-watches project))))
+    (when (and watch (not (file-notify-valid-p (cdr watch))))
+      (ignore-errors (file-notify-rm-watch (cdr watch)))
+      (setf (valsi-app-live-refresh--project-watches project)
+            (delq watch (valsi-app-live-refresh--project-watches project))
+            watch nil))
+    (unless (or watch (file-remote-p directory))
+      (condition-case nil
+          (let ((descriptor
+                 (file-notify-add-watch
+                  directory '(change attribute-change)
+                  (apply-partially #'valsi-app-live-refresh--notify
+                                   (valsi-app-live-refresh--project-root project)))))
+            (push (cons directory descriptor)
+                  (valsi-app-live-refresh--project-watches project)))
+        (file-notify-error nil)
+        (file-error nil)))))
 
 (defun valsi-app-live-refresh--ensure-watches (project)
   "Ensure PROJECT root and known artifact directories are watched."
