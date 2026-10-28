@@ -75,8 +75,9 @@ conformance:
 	$(BATCH) -l ert -l test/conformance/aap-conformance.el \
 	  --eval "(ert-run-tests-batch-and-exit \"^valsi-aap-conformance-\")"
 
-lint:
-	$(BATCH) --eval "(mapc #'checkdoc-file '($(patsubst %,\"%\",$(SRC))))"
+# checkdoc-file only warns in batch; valsi-lint exits 1 on any diagnostic.
+lint: ensure-emacs
+	$(BATCH) -l test/valsi-lint.el -f valsi-lint-batch-checkdoc $(SRC)
 
 # lisp/valsi.el's header is the single source of truth for the version, URL
 # and hard dependencies (package.el, MELPA and Guix all read it).  Everything
