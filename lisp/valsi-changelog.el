@@ -33,7 +33,7 @@
         ;; group 2: ` - date' (any text, so lint can flag non-ISO dates)
         ;; or `(date)'
         (date (lambda (sep)
-                (concat "\\(?:" sep "[-–][ \t]*\\(?2:[0-9]\\{4\\}-[0-9]\\{2\\}"
+                (concat "\\(?:" sep "[-–—][ \t]*\\(?2:[0-9]\\{4\\}-[0-9]\\{2\\}"
                         "-[0-9]\\{2\\}\\|[^\n]*\\)"
                         "\\|[ \t]+(\\(?2:[^)\n]*\\))\\)"))))
     ;; `[version]' (optionally linked) may be followed by anything; a bare

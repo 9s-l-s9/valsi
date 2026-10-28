@@ -45,7 +45,11 @@
   (dolist (heading '("## [1.2.0] - 2024-01-01"
                      "## 1.2.0 - 2024-01-01"
                      "## v1.2.0 (2024-01-01)"
-                     "## [1.2.0](https://x/y) - 2024-01-01"))
+                     "## [1.2.0](https://x/y) - 2024-01-01"
+                     ;; En and em dash separators (issue #70).
+                     "## [1.2.0] – 2024-01-01"
+                     "## [1.2.0] — 2024-01-01"
+                     "## 1.2.0 — 2024-01-01"))
     (let ((rel (car (valsi-node-of-type
                      (valsi-changelog-parse (concat heading "\n"))
                      'release))))
