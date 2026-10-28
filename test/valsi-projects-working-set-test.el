@@ -141,5 +141,59 @@
       (valsi-projects)
       (should (equal (list a) (valsi-project-roots))))))
 
+;; Batch Emacs cannot create a minibuffer-only frame, so these stub the
+;; frame primitives with symbols standing in for frames and windows (#88).
+
+(defmacro valsi-projects-test--with-fake-frames (spec &rest body)
+  "Run BODY with fake frames from SPEC.
+SPEC is a plist with :frames (FRAME MINIBUFFER-PARAMETER MINIBUFFER-FRAME)
+entries, :selected-window, and :last-frame."
+  (declare (indent 1))
+  `(let* ((spec ,spec)
+          (frames (plist-get spec :frames)))
+     (cl-letf (((symbol-function 'frame-parameter)
+                (lambda (frame parameter)
+                  (when (eq parameter 'minibuffer) (nth 1 (assq frame frames)))))
+               ((symbol-function 'frame-live-p) (lambda (frame) (and (assq frame frames) t)))
+               ((symbol-function 'frame-list) (lambda () (mapcar #'car frames)))
+               ((symbol-function 'minibuffer-selected-window)
+                (lambda () (plist-get spec :selected-window)))
+               ((symbol-function 'last-nonminibuffer-frame)
+                (lambda () (plist-get spec :last-frame)))
+               ((symbol-function 'minibuffer-window)
+                (lambda (frame) (list 'minibuffer (nth 2 (assq frame frames)))))
+               ((symbol-function 'window-frame)
+                (lambda (window)
+                  (if (eq (car-safe window) 'minibuffer) (cadr window) window))))
+       ,@body)))
+
+(ert-deftest valsi-projects-working-frame-keeps-ordinary-frames ()
+  "A frame with ordinary windows manages its own layouts (#88)."
+  (should (eq (selected-frame) (valsi-projects--working-frame)))
+  (valsi-projects-test--with-fake-frames
+      '(:frames ((work nil mb) (mb only mb)) :last-frame work)
+    (should (eq 'work (valsi-projects--working-frame 'work)))))
+
+(ert-deftest valsi-projects-working-frame-resolves-minibuffer-only-frames ()
+  "Commands invoked in a minibuffer-only frame manage a working frame (#88)."
+  (let ((frames '((one nil mb) (two nil mb) (other t other) (mb only mb))))
+    ;; The frame the active minibuffer was entered from wins.
+    (valsi-projects-test--with-fake-frames
+        `(:frames ,frames :selected-window two :last-frame one)
+      (should (eq 'two (valsi-projects--working-frame 'mb))))
+    ;; Otherwise the last frame with ordinary windows.
+    (valsi-projects-test--with-fake-frames
+        `(:frames ,frames :last-frame one)
+      (should (eq 'one (valsi-projects--working-frame 'mb))))
+    (valsi-projects-test--with-fake-frames
+        `(:frames ,frames :last-frame mb)
+      ;; Then a frame that uses this minibuffer frame, never itself.
+      (should (memq (valsi-projects--working-frame 'mb) '(one two))))
+    (valsi-projects-test--with-fake-frames
+        '(:frames ((other t other) (mb only mb)))
+      (should (eq 'other (valsi-projects--working-frame 'mb))))
+    (valsi-projects-test--with-fake-frames '(:frames ((mb only mb)))
+      (should (eq 'mb (valsi-projects--working-frame 'mb))))))
+
 (provide 'valsi-projects-working-set-test)
 ;;; valsi-projects-working-set-test.el ends here

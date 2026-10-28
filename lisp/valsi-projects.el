@@ -23,6 +23,36 @@
 (defvar valsi-projects--removed nil
   "Roots removed from Projects that saving a layout must not add again.")
 
+(defun valsi-projects--working-frame (&optional frame)
+  "Return the frame whose layout Projects commands invoked in FRAME manage.
+FRAME defaults to the selected frame.  A minibuffer-only frame holds no
+project layout, so resolve it to the frame the minibuffer was entered
+from, the last frame with ordinary windows, or a frame that uses its
+minibuffer.  Any other frame is returned unchanged."
+  (let ((frame (or frame (selected-frame))))
+    (if (not (eq (frame-parameter frame 'minibuffer) 'only))
+        frame
+      (let ((usable (lambda (candidate)
+                      (and (frame-live-p candidate)
+                           (not (eq (frame-parameter candidate 'minibuffer) 'only))
+                           candidate))))
+        (or (funcall usable (and (minibuffer-selected-window)
+                                 (window-frame (minibuffer-selected-window))))
+            (funcall usable (last-nonminibuffer-frame))
+            (seq-find (lambda (candidate)
+                        (and (funcall usable candidate)
+                             (eq (window-frame (minibuffer-window candidate)) frame)))
+                      (frame-list))
+            (seq-find usable (frame-list))
+            frame)))))
+
+(defun valsi-projects--select-working-frame ()
+  "Select the frame whose project layout the current command manages.
+See `valsi-projects--working-frame'."
+  (let ((frame (valsi-projects--working-frame)))
+    (unless (eq frame (selected-frame))
+      (select-frame-set-input-focus frame))))
+
 (defun valsi-projects--save-layout ()
   "Remember the current project's windows in this frame."
   (unless (derived-mode-p 'valsi-projects-mode)
@@ -116,6 +146,7 @@ deleted keeps the buffer the selected window showed before."
   (setq root (valsi-project-canonical-root root))
   (unless (file-directory-p root)
     (user-error "Project directory is unavailable: %s" root))
+  (valsi-projects--select-working-frame)
   (valsi-projects--save-layout)
   (valsi-project-register root)
   (let* ((saved (cdr (assoc root (frame-parameter nil 'valsi-project-layouts))))
@@ -410,6 +441,7 @@ A project with a running agent must be stopped explicitly before removal."
 (defun valsi-projects-quit ()
   "Return to the window layout from which Projects was opened."
   (interactive)
+  (valsi-projects--select-working-frame)
   (if-let* ((origin (frame-parameter nil 'valsi-projects-origin)))
       (let ((projects (current-buffer))
             (root (cdr origin)))
@@ -471,6 +503,7 @@ A project with a running agent must be stopped explicitly before removal."
 (defun valsi-projects ()
   "Show working projects and their artifact and agent attention."
   (interactive)
+  (valsi-projects--select-working-frame)
   (unless (derived-mode-p 'valsi-projects-mode)
     (valsi-projects--save-layout)
     (set-frame-parameter nil 'valsi-projects-origin
