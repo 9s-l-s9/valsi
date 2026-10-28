@@ -7,6 +7,7 @@
 (require 'ert)
 (require 'json)
 (require 'valsi-server)
+(require 'valsi-test-emacs)
 
 (defun valsi-server-test--server ()
   "Return (SERVER . OUTPUT-CELL) with captured output."
@@ -138,13 +139,7 @@
   ;; valsi-server-stdio reads the process's own stdin via /proc/PID/fd/0, so the
   ;; test only applies where that interface exists.
   (skip-unless (file-exists-p "/proc/self/fd/0"))
-  (let ((program
-         (or ;; The running binary, even when Emacs was launched off PATH by
-             ;; an absolute store path (invocation-name is then unfindable).
-             (let ((self (expand-file-name invocation-name invocation-directory)))
-               (and (file-executable-p self) self))
-             (executable-find invocation-name)
-             (executable-find "emacs"))))
+  (let ((program (valsi-test-emacs-program)))
     (skip-unless program)
     (with-temp-buffer
       (insert "{\"jsonrpc\":\"2.0\",\"id\":\"live\",\"method\":\"initialize\"}\n")
@@ -439,7 +434,7 @@
 (ert-deftest valsi-test-server-real-stdio-survives-hostile-register ()
   "Issue #80: requests after a hostile grammar/register are still answered."
   (skip-unless (file-exists-p "/proc/self/fd/0"))
-  (skip-unless (valsi-server-test--emacs-program))
+  (skip-unless (valsi-test-emacs-program))
   (let* ((line (concat (make-string 3900 ?a) "\n"))
          (records
           (append
@@ -467,7 +462,7 @@
          (process
           (make-process
            :name "valsi-hostile" :connection-type 'pipe :noquery t
-           :command (list (valsi-server-test--emacs-program)
+           :command (list (valsi-test-emacs-program)
                           "-Q" "--batch"
                           "--eval" "(setq load-prefer-newer t)"
                           "-L" (expand-file-name "lisp" default-directory)
@@ -591,17 +586,10 @@
     (dolist (id '(boom81 so81 zzz81)) (valsi-registry-unregister id))
     (valsi-proto-reset)))
 
-(defun valsi-server-test--emacs-program ()
-  "Return the running Emacs binary for a real-stdio test, or nil."
-  (or (let ((self (expand-file-name invocation-name invocation-directory)))
-        (and (file-executable-p self) self))
-      (executable-find invocation-name)
-      (executable-find "emacs")))
-
 (defun valsi-server-test--stdio-bytes (input &optional environment)
   "Run a real stdio server on unibyte INPUT; return its raw stdout bytes.
 ENVIRONMENT entries are prepended to `process-environment'."
-  (let ((program (valsi-server-test--emacs-program))
+  (let ((program (valsi-test-emacs-program))
         (process-environment (append environment process-environment))
         (coding-system-for-read 'binary)
         (coding-system-for-write 'binary))
@@ -619,7 +607,7 @@ ENVIRONMENT entries are prepended to `process-environment'."
 (ert-deftest valsi-test-server-real-stdio-writes-utf-8 ()
   "Issue #79: non-ASCII output is valid UTF-8 on stdout, in any locale."
   (skip-unless (file-exists-p "/proc/self/fd/0"))
-  (skip-unless (valsi-server-test--emacs-program))
+  (skip-unless (valsi-test-emacs-program))
   (let* ((uri "café-\U0001F600- .md")
          (text "# Café \U0001F600 x\n- [ ] T1 naïve\n")
          (input (encode-coding-string

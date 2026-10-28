@@ -11,6 +11,7 @@
 
 (require 'ert)
 (require 'valsi-lint)
+(require 'valsi-test-emacs)
 
 (defun valsi-lint-test--write (file body)
   "Write a minimal library around BODY to FILE."
@@ -46,11 +47,12 @@
 
 (ert-deftest valsi-lint-test-batch-exits-non-zero ()
   "The batch driver exits non-zero only when a file has diagnostics."
+  (skip-unless (valsi-test-emacs-program))
   (let* ((dir (make-temp-file "valsi-lint-test" t))
          (bad (expand-file-name "valsi-lint-bad.el" dir))
          (good (expand-file-name "valsi-lint-good.el" dir))
          (lint (locate-library "valsi-lint.el" t))
-         (emacs (expand-file-name invocation-name invocation-directory)))
+         (emacs (valsi-test-emacs-program)))
     (unwind-protect
         (progn
           (valsi-lint-test--write
