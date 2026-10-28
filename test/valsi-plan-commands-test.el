@@ -61,5 +61,23 @@
                                        (line-beginning-position)
                                        (line-end-position))))))))
 
+(ert-deftest valsi-plan-commands-test-toggle-interior ()
+  "Toggle changes only the parent's checkbox, as documented (#20)."
+  (should-not (string-match-p "offer" (documentation 'valsi-plan-toggle)))
+  (with-temp-buffer
+    (insert "- [ ] T001 p\n  - [ ] T001.1 c\n")
+    (goto-char (point-min))
+    (valsi-plan-toggle)
+    (should (equal "- [-] T001 p\n  - [ ] T001.1 c\n" (buffer-string)))))
+
+(ert-deftest valsi-plan-commands-test-block-checks-task-first ()
+  "Block refuses a non-task line before prompting for a reason (#20)."
+  (with-temp-buffer
+    (insert "# Plan\n- [ ] T001 a\n")
+    (goto-char (point-min))
+    (cl-letf (((symbol-function 'read-string)
+               (lambda (&rest _) (error "Prompted"))))
+      (should-error (valsi-plan-block) :type 'user-error))))
+
 (provide 'valsi-plan-commands-test)
 ;;; valsi-plan-commands-test.el ends here

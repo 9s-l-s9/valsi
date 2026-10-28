@@ -423,7 +423,8 @@ A plan with no dialect evidence at all is `plain' (no ids are minted)."
 
 (defun valsi-plan-toggle (&optional _arg)
   "Cycle the task at point: open -> in-progress -> done -> open.
-On an interior task with children, offer to apply to all children."
+Only this line's checkbox changes, even on an interior task; use
+`valsi-plan-complete-with-children' to mark a whole subtree done."
   (interactive "P")
   (save-excursion
     (beginning-of-line)
@@ -439,11 +440,12 @@ On an interior task with children, offer to apply to all children."
 (defun valsi-plan-block ()
   "Mark the task at point blocked, recording a reason as a child bullet."
   (interactive)
-  (let* ((task (valsi-plan--task-at-line
-                (valsi-node-of-type (valsi-plan--buffer-tree) 'task)))
-         (reason (read-string "Blocked reason: ")))
+  (let ((task (valsi-plan--task-at-line
+               (valsi-node-of-type (valsi-plan--buffer-tree) 'task)))
+        reason)
     (unless task
       (user-error "No task on this line"))
+    (setq reason (read-string "Blocked reason: "))
     (save-excursion
       (end-of-line)
       (let ((indent (save-excursion (beginning-of-line)
