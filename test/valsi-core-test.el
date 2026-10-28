@@ -151,5 +151,25 @@
            (should (equal valsi-view--installed-keywords keywords))))
       (valsi-registry-register spec))))
 
+;;;; #75: the outline works in non-file buffers
+
+(ert-deftest valsi-core-test-outline-in-non-file-buffer ()
+  "`valsi-outline' names and titles its buffer from a non-file buffer."
+  (valsi-init)
+  (let (outline)
+    (unwind-protect
+        (with-temp-buffer
+          (insert "# P\n\n- [ ] T001 x\n")
+          (rename-buffer "valsi-core-scratchy" t)
+          (valsi-artifact-minor-mode 1)
+          (save-window-excursion
+            (valsi-outline)
+            (setq outline (current-buffer))
+            (should (equal (buffer-name)
+                           "*Valsi Outline: valsi-core-scratchy*"))
+            (goto-char (point-min))
+            (should (looking-at "valsi-core-scratchy\n"))))
+      (when (buffer-live-p outline) (kill-buffer outline)))))
+
 (provide 'valsi-core-test)
 ;;; valsi-core-test.el ends here

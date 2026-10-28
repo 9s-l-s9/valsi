@@ -550,8 +550,11 @@ structure shallowly.")
     (erase-buffer)
     (insert (propertize
              (format "%s\n\n"
-                     (file-name-nondirectory
-                      (buffer-local-value 'buffer-file-name source)))
+                     (let ((file (buffer-local-value 'buffer-file-name
+                                                     source)))
+                       (if file
+                           (file-name-nondirectory file)
+                         (buffer-name source))))
              'face 'bold))
     (valsi-view-insert-outline
      (with-current-buffer source (valsi-tree)) source 3)
@@ -567,7 +570,9 @@ dashboards: same node tree, same sectioned rendering as the sidebar."
   (let* ((source (current-buffer))
          (buffer (get-buffer-create
                   (format "*Valsi Outline: %s*"
-                          (abbreviate-file-name buffer-file-name)))))
+                          (if buffer-file-name
+                              (abbreviate-file-name buffer-file-name)
+                            (buffer-name))))))
     (with-current-buffer buffer
       (valsi-outline-mode)
       (setq valsi-outline--source source
