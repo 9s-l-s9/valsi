@@ -30,5 +30,22 @@
                         (valsi-graph--edges-plan f)))
       (delete-file f))))
 
+;;;; Leading tags (#8)
+
+(ert-deftest valsi-parse-test-tags-leading-only ()
+  "Only the leading run of bracketed tokens is read as tags."
+  (should (null (valsi-parse-tags "Implement parser, see [RFC1]")))
+  (should (null (valsi-parse-tags "Fix the [P] thing see [docs](x) and [foo]")))
+  (should (null (valsi-parse-tags "T002 Initialize [language] project")))
+  (should (null (valsi-parse-tags "[docs](x) explain")))
+  (should (equal '(("P" . parallel) ("US1" . story))
+                 (valsi-parse-tags "T001 [P] [US1] do [later]")))
+  (should (equal '(("P" . parallel) ("US1" . story))
+                 (valsi-parse-tags "[P] [US1] do")))
+  (should (equal '(("P" . parallel) ("US3" . story))
+                 (valsi-parse-tags "T301 [P] US3 react setup")))
+  (should (equal '(("wip" . label))
+                 (valsi-parse-tags "1.2 [wip] Set up see [RFC1]"))))
+
 (provide 'valsi-parse-test)
 ;;; valsi-parse-test.el ends here

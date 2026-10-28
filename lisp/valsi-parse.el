@@ -109,22 +109,42 @@ Plist keys: :indent (columns) :state :char :rest :rest-offset."
 (defconst valsi-parse-tag-re "\\[\\([A-Za-z0-9][A-Za-z0-9._-]*\\)\\]"
   "Bracketed tag recognizer (R3): [P], [US1], [label].")
 
+(defconst valsi-parse--lead-id-re
+  "[ \t]*\\(?:T[0-9]+\\(?:\\.[0-9]+\\)*\\|[0-9]+\\(?:\\.[0-9]+\\)*\\)\\.?\\(?:[ \t)]\\|\\'\\)"
+  "A task id that may sit among the leading tags (cf. `valsi-parse-id-re').")
+
+(defun valsi-parse--match-at (regexp text pos)
+  "Return non-nil when REGEXP matches TEXT exactly at POS (match data set)."
+  (eq pos (string-match regexp text pos)))
+
 (defun valsi-parse-tags (text)
   "Return a list of (TAG-STRING . KIND) recognized in leading TEXT.
-KIND is one of `parallel', `story', `label'.  Also matches bare US1."
-  (let ((tags nil) (start 0))
-    ;; Leading bracketed tags only (before free description) plus bare story.
-    (while (string-match valsi-parse-tag-re text start)
-      (let ((tok (match-string 1 text)))
-        (push (cons tok (valsi-parse--tag-kind tok)) tags)
-        (setq start (match-end 0))
-        ;; stop once we hit non-tag content between brackets
-        (unless (string-match-p "\\`[ \t]*\\[" (substring text start))
-          (setq start (length text)))))
-    (when (string-match "\\`\\(?:\\[[^]]*\\][ \t]*\\)*\\(US[0-9]+\\)\\b" text)
-      (let ((tok (match-string 1 text)))
-        (unless (assoc tok tags)
-          (push (cons tok 'story) tags))))
+KIND is one of `parallel', `story', `label'.  Also matches bare US1.
+Only the leading run of tokens counts: bracketed tags, bare story ids,
+and at most one task id (speckit puts it first: \"T001 [P] [US1] do\").
+Brackets after the first word of free description (citations, link text)
+are not tags."
+  (let ((tags nil) (pos 0) (id-seen nil) (done nil))
+    (while (not done)
+      (cond
+       ;; [TAG], but not the text of a markdown link [text](url)
+       ((and (valsi-parse--match-at
+              (concat "[ \t]*" valsi-parse-tag-re) text pos)
+             (not (eq ?\( (aref (concat text " ") (match-end 0)))))
+        (let ((tok (match-string 1 text)))
+          (push (cons tok (valsi-parse--tag-kind tok)) tags)
+          (setq pos (match-end 0))))
+       ;; bare story id: US1
+       ((valsi-parse--match-at "[ \t]*\\(US[0-9]+\\)\\b" text pos)
+        (let ((tok (match-string 1 text)))
+          (unless (assoc tok tags)
+            (push (cons tok 'story) tags))
+          (setq pos (match-end 0))))
+       ((and (not id-seen)
+             (valsi-parse--match-at valsi-parse--lead-id-re text pos))
+        (setq id-seen t
+              pos (match-end 0)))
+       (t (setq done t))))
     (nreverse tags)))
 
 (defun valsi-parse--tag-kind (tok)
