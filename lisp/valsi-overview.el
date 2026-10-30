@@ -147,7 +147,7 @@ link to url and a target such as `Foo_(bar)' keeps its parentheses."
 
 (defvar valsi-overview-font-lock-keywords
   `((,valsi-overview-fence-re 2 'valsi-meta-face))
-  "Font-lock keywords for overview buffers (light; markdown-mode does the rest).")
+  "Font-lock keywords for overview buffers (light; `markdown-mode' does the rest).")
 
 ;;;; Commands
 
