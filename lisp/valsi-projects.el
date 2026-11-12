@@ -13,6 +13,11 @@
 
 (require 'valsi-app)
 (require 'valsi-project)
+(require 'frameset)
+
+;; These values contain live buffers and belong only to this Emacs session.
+(dolist (parameter '(valsi-project-layouts valsi-projects-origin valsi-project-current))
+  (setf (alist-get parameter frameset-filter-alist) :never))
 
 (declare-function valsi--maybe-enable "valsi")
 
@@ -58,12 +63,26 @@ See `valsi-projects--working-frame'."
   (unless (derived-mode-p 'valsi-projects-mode)
     (when-let* ((root (valsi-project-current-root)))
       (unless (member root valsi-projects--removed)
-        (valsi-project-register root))
-      (set-frame-parameter
-       nil 'valsi-project-layouts
-       (cons (cons root (list (window-state-get (frame-root-window))
-                              (current-buffer) (point)))
-             (assoc-delete-all root (frame-parameter nil 'valsi-project-layouts)))))))
+        (valsi-project-register root)
+        (set-frame-parameter
+         nil 'valsi-project-layouts
+         (cons (cons root (list (window-state-get (frame-root-window))
+                                (current-buffer) (point)))
+               (assoc-delete-all root (frame-parameter nil 'valsi-project-layouts))))))))
+
+(defun valsi-projects--forget-layouts (root)
+  "Release saved layouts for forgotten ROOT in every frame."
+  (cl-pushnew root valsi-projects--removed :test #'equal)
+  (dolist (frame (frame-list))
+    (set-frame-parameter
+     frame 'valsi-project-layouts
+     (assoc-delete-all root (frame-parameter frame 'valsi-project-layouts)))
+    (when (equal root (frame-parameter frame 'valsi-project-current))
+      (set-frame-parameter frame 'valsi-project-current nil))
+    (when (equal root (cdr (frame-parameter frame 'valsi-projects-origin)))
+      (set-frame-parameter frame 'valsi-projects-origin nil))))
+
+(add-hook 'valsi-project-forget-functions #'valsi-projects--forget-layouts)
 
 (defun valsi-projects--replace-killed-buffers (state placeholder)
   "Return a copy of window STATE with killed buffers shown in PLACEHOLDER.
@@ -293,8 +312,7 @@ A project with a running agent must be stopped explicitly before removal."
   (let ((root (valsi-projects--selected-root)))
     (when (seq-some #'valsi-terminal-agent--live-p (valsi-terminal-agent-list root))
       (user-error "Project has running agents; stop them explicitly before removal"))
-    (valsi-project-forget root)
-    (push root valsi-projects--removed)))
+    (valsi-project-forget root)))
 
 (defun valsi-projects-filter (query)
   "Filter project names and paths by QUERY; an empty QUERY lists all."

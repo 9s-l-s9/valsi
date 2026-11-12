@@ -29,6 +29,7 @@
           (valsi-project--load-error nil)
           (valsi-project--roots nil)
           (valsi-project--saved-roots nil)
+          (valsi-projects--removed nil)
           (valsi-app-live-refresh--projects (make-hash-table :test #'equal))
           (valsi-terminal-agent--instances (make-hash-table :test #'equal))
           (valsi-global-mode nil)

@@ -11,6 +11,70 @@
 (require 'ert)
 (require 'valsi-projects-test)
 
+(defvar frameset--target-display)
+
+(ert-deftest valsi-projects-layouts-excluded-from-framesets ()
+  "Desktop and frame registers never serialize or restore live project state."
+  (valsi-projects-test--with-projects
+    (switch-to-buffer (find-file-noselect fa))
+    (valsi-projects)
+    (set-frame-parameter nil 'valsi-project-current a)
+    (should (frame-parameter nil 'valsi-project-layouts))
+    (should (frame-parameter nil 'valsi-projects-origin))
+    (let* ((frameset--target-display nil)
+           (saved (frameset-save (list (selected-frame))))
+           (params (caar (frameset-states saved)))
+           (restore (frameset-filter-params
+                     (seq-filter (lambda (entry)
+                                   (memq (car entry) '(valsi-project-layouts
+                                                       valsi-projects-origin
+                                                       valsi-project-current)))
+                                 (frame-parameters))
+                     frameset-filter-alist nil)))
+      (dolist (key '(valsi-project-layouts valsi-projects-origin valsi-project-current))
+        (should-not (assq key params))
+        (should-not (assq key restore)))
+      (should (frameset-valid-p (read (prin1-to-string saved)))))))
+
+(ert-deftest valsi-projects-forget-releases-layouts-in-every-frame ()
+  "Direct forget cleans all frames while preserving other projects and buffers."
+  (valsi-projects-test--with-projects
+    (let ((valsi-projects--removed nil)
+          (valsi-project-change-hook nil)
+          (params (make-hash-table :test #'equal))
+          (source (find-file-noselect fa)))
+      (valsi-project-register a)
+      (valsi-project-register b)
+      (dolist (frame '(one two))
+        (puthash (list frame 'valsi-project-layouts)
+                 (list (list a 'window-state source 1)
+                       (list b 'other-state source 2)) params)
+        (puthash (list frame 'valsi-project-current) (if (eq frame 'one) a b) params)
+        (puthash (list frame 'valsi-projects-origin)
+                 (cons 'window-state (if (eq frame 'one) a b)) params))
+      (cl-letf (((symbol-function 'frame-list) (lambda () '(one two)))
+                ((symbol-function 'frame-parameter)
+                 (lambda (frame key) (gethash (list frame key) params)))
+                ((symbol-function 'set-frame-parameter)
+                 (lambda (frame key value) (puthash (list frame key) value params))))
+        (valsi-project-forget a))
+      (dolist (frame '(one two))
+        (should (equal (list (list b 'other-state source 2))
+                       (gethash (list frame 'valsi-project-layouts) params))))
+      (should-not (gethash '(one valsi-project-current) params))
+      (should-not (gethash '(one valsi-projects-origin) params))
+      (should (equal b (gethash '(two valsi-project-current) params)))
+      (should (equal (cons 'window-state b) (gethash '(two valsi-projects-origin) params)))
+      (should (buffer-live-p source))
+      (should (file-exists-p fa))
+      (should (equal (list b) (valsi-project-roots)))
+      ;; Visiting the forgotten source cannot retain another saved layout.
+      (switch-to-buffer source)
+      (set-frame-parameter nil 'valsi-project-layouts nil)
+      (valsi-projects--save-layout)
+      (should-not (frame-parameter nil 'valsi-project-layouts))
+      (should (equal (list b) (valsi-project-roots))))))
+
 (ert-deftest valsi-projects-quit-with-killed-origin-falls-back-to-hub ()
   "Quitting after the origin buffer was killed shows the origin hub (#54)."
   (valsi-projects-test--with-projects

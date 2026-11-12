@@ -63,6 +63,8 @@ grammar activates.
 
 ### Fixed
 
+- Session-only project layouts are excluded from frameset/desktop persistence.
+  Forgetting a project releases its saved layouts in every frame (#103).
 - Nested plans resolve file references against the project root before their
   own directory, consistently across lint, follow, stale checks, and terminal
   handoff. Remote Flymake checks avoid filesystem probes; subtree completion

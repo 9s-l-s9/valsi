@@ -33,6 +33,8 @@
 (defvar valsi-project--loaded nil "Non-nil after reading project declarations.")
 (defvar valsi-project--load-error nil "Error preventing safe declaration writes.")
 (defvar valsi-project-change-hook nil "Hook run when working-set membership changes.")
+(defvar valsi-project-forget-functions nil
+  "Functions called with a root after it is removed from the working set.")
 (defvar-local valsi-project-root nil "Canonical project identity for this buffer.")
 
 (autoload 'valsi-projects "valsi-projects" nil t)
@@ -160,6 +162,7 @@ made since they were loaded are kept, and returns the roots to save."
   (when (member root valsi-project--saved-roots)
     (valsi-project--save (lambda (roots) (delete root (copy-sequence roots)))))
   (setq valsi-project--roots (delete root valsi-project--roots))
+  (run-hook-with-args 'valsi-project-forget-functions root)
   (run-hooks 'valsi-project-change-hook))
 
 (defun valsi-project-current-root ()
