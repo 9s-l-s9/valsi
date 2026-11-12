@@ -1,0 +1,42 @@
+#!@BASH@/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Supply the Bun binary's ELF loader without changing its payload offsets.
+# This is filesystem compatibility, not a security sandbox.
+set -eu
+shopt -s nullglob dotglob
+
+if [[ ! -d "${HOME:-}" ]]; then
+  echo 'pi: HOME must name an existing directory' >&2
+  exit 1
+fi
+
+loader_dir=@LOADER_DIR@
+loader_name=@LOADER_NAME@
+bwrap_args=(--dev-bind / /)
+if [[ ! -d "$loader_dir" ]]; then
+  # Creating a mount point in a bind-mounted root would modify the host or
+  # fail on a read-only root. Mirror its entries into a temporary root instead.
+  bwrap_args=(--tmpfs /)
+  for entry in /*; do
+    [[ "$entry" == "$loader_dir" ]] && continue
+    if [[ -L "$entry" ]]; then
+      bwrap_args+=(--symlink "$(@COREUTILS@/bin/readlink "$entry")" "$entry")
+    else
+      bwrap_args+=(--dev-bind "$entry" "$entry")
+    fi
+  done
+fi
+
+# Overlay only the loader directory, retaining every other entry (including
+# symlinks). This also works when the host has /lib64 -> /usr/lib64.
+bwrap_args+=(--tmpfs "$loader_dir")
+for entry in "$loader_dir"/*; do
+  [[ "${entry##*/}" == "$loader_name" ]] && continue
+  if [[ -L "$entry" ]]; then
+    bwrap_args+=(--symlink "$(@COREUTILS@/bin/readlink "$entry")" "$entry")
+  else
+    bwrap_args+=(--dev-bind "$entry" "$entry")
+  fi
+done
+bwrap_args+=(--ro-bind @LOADER@ "$loader_dir/$loader_name" --chdir "$PWD")
+exec @BWRAP@/bin/bwrap "${bwrap_args[@]}" @RUNTIME@ "$@"

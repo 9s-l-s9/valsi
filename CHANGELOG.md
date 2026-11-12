@@ -63,6 +63,9 @@ grammar activates.
 
 ### Fixed
 
+- The Guix Pi launcher retains host paths, sockets, and the working directory
+  while supplying the ELF loader. Invalid home directories fail explicitly;
+  existing loader-directory contents are preserved (#94).
 - Guix source snapshots contain only tracked files, keeping local agent
   worktrees, private state, and build outputs out of the store (#91).
 - Sidebar renders use cached path identities and buffer associations instead

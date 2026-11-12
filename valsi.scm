@@ -77,42 +77,20 @@
                        (launcher (string-append bin "/pi"))
                        (runtime (string-append out "/libexec/pi/pi")))
                   (mkdir-p bin)
-                  (call-with-output-file launcher
-                    (lambda (port)
-                      (format port
-                              "#!~a/bin/bash
-set -eu
-pi_home=\"${HOME:?HOME must be set}\"
-if [[ ! -d \"$pi_home\" ]]; then
-  pi_home=\"/tmp/valsi-pi-home-${UID}\"
-  mkdir -p \"$pi_home\"
-fi
-bwrap_args=( \\
-  --tmpfs / \\
-  --ro-bind /gnu /gnu \\
-  --ro-bind /etc /etc )
-if [[ -d /sys ]]; then
-  bwrap_args+=(--ro-bind /sys /sys)
-fi
-bwrap_args+=( \\
-  --proc /proc \\
-  --dev /dev \\
-  --bind /tmp /tmp \\
-  --bind \"$pi_home\" \"$pi_home\" \\
-  --setenv HOME \"$pi_home\" \\
-  --dir /lib64 \\
-  --ro-bind ~a /lib64/~a )
-exec ~a/bin/bwrap \"${bwrap_args[@]}\" ~a \"$@\"
-"
-                              #$bash-minimal
-                              #$(file-append glibc loader)
-                              #$(basename loader)
-                              #$bubblewrap
-                              runtime)))
+                  (copy-file #$(local-file "scripts/pi-launcher.sh.in") launcher)
+                  (substitute* launcher
+                    (("@BASH@") #$bash-minimal)
+                    (("@COREUTILS@") #$coreutils-minimal)
+                    (("@BWRAP@") #$bubblewrap)
+                    (("@LOADER_DIR@")
+                     #$(if (string-prefix? "x86_64-linux" system) "/lib64" "/lib"))
+                    (("@LOADER_NAME@") #$(basename loader))
+                    (("@LOADER@") #$(file-append glibc loader))
+                    (("@RUNTIME@") runtime))
                   (chmod launcher #o555))))
             (delete 'strip)
             (delete 'validate-runpath))))
-      (inputs (list bash-minimal bubblewrap glibc))
+      (inputs (list bash-minimal bubblewrap coreutils-minimal glibc))
       (supported-systems '("x86_64-linux" "aarch64-linux"))
       (home-page "https://github.com/earendil-works/pi")
       (synopsis "Pi coding-agent runtime")
@@ -120,8 +98,9 @@ exec ~a/bin/bwrap \"${bwrap_args[@]}\" ~a \"$@\"
        "This package installs the upstream, Bun-compiled Pi coding-agent
 runtime.  It is pinned to a checksummed release and kept byte-for-byte intact;
 a Bubblewrap launcher supplies Guix's dynamic loader at the conventional path
-expected by the executable.  This provides the @command{pi} CLI and JSONL RPC
-server without a global npm installation.")
+expected by the executable while retaining the host filesystem, sockets, and
+working directory.  It does not provide security isolation.  This provides
+the @command{pi} CLI and JSONL RPC server without a global npm installation.")
       (license license:expat))))
 
 (package
