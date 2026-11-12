@@ -63,6 +63,8 @@ grammar activates.
 
 ### Fixed
 
+- Guix source snapshots contain only tracked files, keeping local agent
+  worktrees, private state, and build outputs out of the store (#91).
 - Sidebar renders use cached path identities and buffer associations instead
   of filesystem probes for every Markdown file. Unrecognized unopened files
   are classified from a bounded head before any full artifact analysis (#97).

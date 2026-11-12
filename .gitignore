@@ -6,6 +6,7 @@
 
 # Valsi runtime (agent sessions, auth) — files-over-formats, but machine-local
 .valsi/
+/.claude/
 
 
 # Build / doc artifacts

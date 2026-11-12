@@ -129,15 +129,10 @@ server without a global npm installation.")
   (version "1.0.0")
   (source (local-file %source-dir "valsi-checkout"
                       #:recursive? #t
-                      #:select? (lambda (file stat)
-                                  ;; Ship sources + docs; skip VCS + build junk.
-                                  (not (or (string-contains file "/.git")
-                                           (string-contains file "/.agents/")
-                                           (string-contains file "/.codex/")
-                                           (string-contains file "/.valsi/")
-                                           (string-suffix? ".elc" file)
-                                           (string-suffix? "~" file)
-                                           (string-contains file "/#"))))))
+                      ;; In a checkout, only tracked files are package sources.
+                      ;; A release archive has no Git metadata: keep its files.
+                      #:select? (or (git-predicate %source-dir)
+                                    (const #t))))
   (build-system emacs-build-system)
   (arguments
    (list
