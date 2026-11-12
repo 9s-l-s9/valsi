@@ -53,7 +53,7 @@
 (ert-deftest valsi-test-graph-plan ()
   "Path-refs and requirement traces become edges."
   (valsi-graph-test--with-file
-      "Do work in `lisp/valsi.el`.\n_Requirements: 1.2, 3.1_\n" f
+      "- [ ] T1 Do work in `lisp/valsi.el`.\n_Requirements: 1.2, 3.1_\n" f
     (let ((edges (valsi-graph--edges-plan f)))
       (should (member (list (file-name-nondirectory f) "path" "lisp/valsi.el")
                       edges))
@@ -82,6 +82,7 @@
 (ert-deftest valsi-test-graph-register ()
   "Registering an edge source adds it once (idempotent)."
   (let ((valsi-graph-edge-sources (copy-sequence valsi-graph-edge-sources))
+        (valsi-graph--source-grammars (copy-tree valsi-graph--source-grammars))
         (fn (lambda (_f) nil)))
     (valsi-graph-register-edge-source fn)
     (should (memq fn valsi-graph-edge-sources))
@@ -125,7 +126,8 @@ Edge sources are root-relative paths, so same-named files stay distinct."
           (cl-letf (((symbol-function 'valsi-graph--project-root)
                      (lambda () root))
                     (valsi-graph-edge-sources
-                     (list #'valsi-graph--edges-memory)))
+                     (list (lambda (file)
+                             (list (list (valsi-graph--source-name file) "test" "x"))))))
             (let ((srcs (sort (mapcar #'cadr (valsi-graph--collect))
                               #'string<)))
               (should (equal srcs

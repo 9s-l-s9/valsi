@@ -306,8 +306,15 @@ The thesis capstone unifies the per-family links --- instruction
 @code{@@imports}, memory @code{[[wiki]]} links and index pointers, and plan
 path/trace refs plus phase-successor edges --- into one navigable edge list.
 @kbd{RET} on a row visits the source artifact.  Edge sources are pluggable:
-@code{valsi-graph-register-edge-source} lets a new family add edges with no
-change to the core.
+@code{valsi-graph-register-edge-source} takes a function and an optional list
+of grammar IDs; omitting that list accepts every grammar. Each function still
+receives the file path, but runs in a shared read-only buffer with
+@code{valsi-graph-current-grammar} and @code{valsi-graph-current-tree} bound.
+The tree uses zero-based text offsets. Sources should use this context instead
+of reopening the file. The scanner reads each file once and parses it once
+when at least one source applies. Built-in sources use grammar nodes, so
+fenced examples and unrelated prose do not become edges. Failures appear as
+@samp{error} rows alongside the successfully collected edges.
 
 @node The agent harness
 @chapter The Valsi application and agent terminals

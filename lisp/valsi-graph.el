@@ -22,9 +22,14 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'seq)
+(require 'subr-x)
 (require 'valsi-view)
 (require 'valsi-parse)
 (require 'valsi-instruction)
+(require 'valsi-memory)
+(require 'valsi-plan)
+(require 'valsi-registry)
 
 (declare-function project-current "project")
 (declare-function project-root "project")
@@ -34,23 +39,47 @@
     valsi-graph--edges-memory
     valsi-graph--edges-plan
     valsi-graph--edges-phase)
-  "List of edge-source functions.
-Each is called with a FILE path and returns a list of (SRC KIND TARGET)
-edges.  Extend it with `valsi-graph-register-edge-source' -- the pluggable
-seam that lets later families add edges without touching the core.")
+  "List of edge-source functions, called with a FILE path.
+Each source runs in a shared read-only buffer containing that file, returning
+triples of the form (SRC KIND TARGET).  Use `valsi-graph-register-edge-source'
+to declare
+which grammar IDs a source applies to; nil means any grammar.")
+
+(defvar valsi-graph--source-grammars
+  '((valsi-graph--edges-instruction instruction)
+    (valsi-graph--edges-memory memory)
+    (valsi-graph--edges-plan plan)
+    (valsi-graph--edges-phase plan))
+  "Edge sources and the grammar IDs they accept; absent or nil means any.")
+
+(defvar valsi-graph-current-tree nil
+  "The parsed tree shared by edge sources during collection.
+Offsets refer to the current buffer's text, starting at zero.")
+
+(defvar valsi-graph-current-grammar nil
+  "Detected grammar ID shared by edge sources during collection.")
+
+(defvar valsi-graph--current-file nil "File owning the current shared tree.")
+(defvar valsi-graph--errors nil "Failures recorded by the latest graph collection.")
 
 ;;;###autoload
-(defun valsi-graph-register-edge-source (fn)
-  "Register FN as a cross-artifact edge source.
-FN receives a FILE path and returns a list of (SRC KIND TARGET) edge triples.
-Idempotent: registering the same function twice is a no-op.  Returns FN."
+(defun valsi-graph-register-edge-source (fn &optional grammars)
+  "Register FN for GRAMMARS, a list of grammar IDs, or nil for any grammar.
+FN receives a FILE path and returns (SRC KIND TARGET) triples.  It runs in the
+shared read-only source buffer and can use `valsi-graph-current-tree' and
+`valsi-graph-current-grammar'; it need not reopen FILE.  Existing one-argument
+sources remain compatible.  Re-registering updates the grammar declaration
+without duplicating FN.  Return FN."
+  (unless (and (proper-list-p grammars) (seq-every-p #'symbolp grammars))
+    (error "Graph source grammars must be a list of symbols"))
   (cl-pushnew fn valsi-graph-edge-sources)
+  (setf (alist-get fn valsi-graph--source-grammars nil nil #'eq) grammars)
   fn)
 
 (defun valsi-graph--project-root ()
   "Return the project root, or `default-directory'."
-  (or (and (fboundp 'project-current) (project-current)
-           (project-root (project-current)))
+  (or (and (fboundp 'project-current) (project-current nil)
+           (project-root (project-current nil)))
       default-directory))
 
 (defvar valsi-graph-ignored-directories
@@ -68,11 +97,24 @@ entry) are skipped as well, so their copies do not duplicate edges.")
                    valsi-graph-ignored-directories)
            (file-exists-p (expand-file-name ".git" dir)))))
 
+(defun valsi-graph--record-error (file source error)
+  "Record ERROR from SOURCE at FILE for the graph's visible failure rows."
+  (push (list file source (error-message-string error)) valsi-graph--errors))
+
 (defun valsi-graph--artifact-files ()
-  "Return candidate artifact files under the project root, recursively."
-  (ignore-errors
-    (directory-files-recursively (valsi-graph--project-root) "\\.md\\'"
-                                 nil #'valsi-graph--descend-p)))
+  "Return candidate files recursively, recording directory read failures."
+  (let ((pending (list (valsi-graph--project-root))) files)
+    (while pending
+      (let ((directory (pop pending)))
+        (condition-case err
+            (dolist (file (directory-files directory t directory-files-no-dot-files-regexp t))
+              (cond
+               ((file-directory-p file)
+                (when (and (not (file-symlink-p file)) (valsi-graph--descend-p file))
+                  (push file pending)))
+               ((string-match-p "\\.md\\'" file) (push file files))))
+          (file-error (valsi-graph--record-error directory 'discovery err)))))
+    (sort files #'string<)))
 
 (defun valsi-graph--source-name (file)
   "Return the edge SRC for FILE.
@@ -84,79 +126,119 @@ stay distinct; the bare file name otherwise."
 
 ;;;; Built-in edge sources
 
+(defun valsi-graph--file-tree (file parser)
+  "Return FILE's shared tree or read and parse it directly with PARSER.
+The fallback keeps direct calls to individual built-in sources useful."
+  (if (equal file valsi-graph--current-file)
+      valsi-graph-current-tree
+    (with-temp-buffer
+      (insert-file-contents file)
+      (funcall parser (buffer-string)))))
+
 (defun valsi-graph--edges-instruction (file)
-  "Extract @import edges from FILE.
-Uses the instruction grammar's import scan, so inline imports count and
-@mentions that are not path-like do not."
+  "Extract import edges from FILE's instruction nodes, excluding fenced code."
   (let ((base (valsi-graph--source-name file)))
-    (mapcar (lambda (target) (list base "import" target))
-            (valsi-instruction--imports-of-file file))))
+    (mapcar (lambda (node) (list base "import" (valsi-node-prop node :target)))
+            (valsi-node-of-type
+             (valsi-graph--file-tree file #'valsi-instruction-parse) 'import))))
 
 (defun valsi-graph--edges-memory (file)
-  "Extract [[wiki]] and index-pointer edges from FILE."
-  (let (edges (base (valsi-graph--source-name file)))
-    (with-temp-buffer
-      (insert-file-contents file)
-      (goto-char (point-min))
-      (while (re-search-forward "\\[\\[\\([^]]+\\)\\]\\]" nil t)
-        (push (list base "link" (match-string 1)) edges))
-      (goto-char (point-min))
-      (while (re-search-forward
-              "^[ \t]*-[ \t]+\\[[^]]+\\](\\([^)]+\\.md\\))" nil t)
-        (push (list base "index" (match-string 1)) edges)))
-    (nreverse edges)))
+  "Extract wiki links and index pointers from FILE's memory nodes."
+  (let ((base (valsi-graph--source-name file)))
+    (mapcar (lambda (node)
+              (list base (if (eq (valsi-node-type node) 'link) "link" "index")
+                    (valsi-node-prop node :target)))
+            (valsi-node-of-type
+             (valsi-graph--file-tree file #'valsi-memory-parse) '(link pointer)))))
 
 (defun valsi-graph--edges-plan (file)
-  "Extract trace/path-ref edges from a plan FILE."
-  (let (edges (base (valsi-graph--source-name file)))
-    (with-temp-buffer
-      (insert-file-contents file)
-      (goto-char (point-min))
-      (while (re-search-forward "`\\([^`\n]*?/[^`\n]*?\\)`" nil t)
-        (push (list base "path" (match-string 1)) edges))
-      (goto-char (point-min))
-      (while (re-search-forward valsi-parse-req-re nil t)
-        (push (list base "trace" (string-trim (match-string 1))) edges)))
+  "Extract task file references and requirement traces from plan FILE."
+  (let ((base (valsi-graph--source-name file)) edges)
+    (dolist (node (valsi-node-of-type
+                   (valsi-graph--file-tree file #'valsi-plan-parse) '(task trace)))
+      (if (eq (valsi-node-type node) 'trace)
+          (push (list base "trace" (string-join (valsi-node-prop node :reqs) ", ")) edges)
+        (dolist (ref (valsi-node-prop node :pathrefs))
+          (when (valsi-plan--pathref-file ref)
+            (push (list base "path" ref) edges)))))
     (nreverse edges)))
 
 (defconst valsi-graph-phase-re
-  "^##[ \t]+\\(\\(?:Sprint\\|Phase\\|Milestone\\|Stage\\|Part\\)\\b[^\n]*\\)$"
-  "Level-2 phase heading recognizer for phase-successor edges.")
+  "\\`\\(?:Sprint\\|Phase\\|Milestone\\|Stage\\|Part\\)\\b"
+  "Plan group title recognizer for phase-successor edges.")
 
 (defun valsi-graph--edges-phase (file)
-  "Extract phase-successor edges (## Sprint/Phase ordering) from FILE.
-Consecutive phase headings yield one \"A → B\" successor edge each."
-  (let (titles (base (valsi-graph--source-name file)))
-    (with-temp-buffer
-      (insert-file-contents file)
-      (goto-char (point-min))
-      (while (re-search-forward valsi-graph-phase-re nil t)
-        (push (string-trim (match-string 1)) titles)))
-    (setq titles (nreverse titles))
-    (cl-loop for (a b) on titles
-             while b
-             collect (list base "phase" (format "%s → %s" a b)))))
+  "Extract successor edges between consecutive level-2 phase groups in FILE."
+  (let ((base (valsi-graph--source-name file)) titles)
+    (dolist (group (valsi-node-of-type
+                    (valsi-graph--file-tree file #'valsi-plan-parse) 'group))
+      (when (and (= 2 (valsi-node-prop group :level))
+                 (string-match-p valsi-graph-phase-re (valsi-node-prop group :title)))
+        (push (valsi-node-prop group :title) titles)))
+    (cl-loop for (a b) on (nreverse titles)
+             while b collect (list base "phase" (format "%s → %s" a b)))))
 
 ;;;; Collect + view
 
 (defun valsi-graph--collect ()
-  "Return all edges as (FILE SRC KIND TARGET) across the project.
-FILE is the absolute path the edge came from (for navigation)."
+  "Return (FILE SRC KIND TARGET) edges, reading and parsing each file once.
+Sources run only for their declared grammar.  Failures are retained in
+`valsi-graph--errors' and rendered by `valsi-graph--entries'."
+  (unless (valsi-registry-all) (valsi-registry-register-bundled))
+  (setq valsi-graph--errors nil)
   (let ((valsi-graph--root (valsi-graph--project-root)) all)
-    (dolist (file (valsi-graph--artifact-files))
-      (dolist (src valsi-graph-edge-sources)
-        (ignore-errors
-          (dolist (e (funcall src file))
-            (push (cons file e) all)))))
+    (dolist (file (condition-case err (valsi-graph--artifact-files)
+                    (error (valsi-graph--record-error valsi-graph--root 'discovery err) nil)))
+      (condition-case err
+          (with-temp-buffer
+            (insert-file-contents file)
+            (setq buffer-file-name file
+                  default-directory (file-name-directory file))
+            (let* ((text (buffer-string))
+                   (valsi-graph--current-file file)
+                   (valsi-graph-current-grammar (valsi-registry-detect file text))
+                   (sources
+                    (seq-filter
+                     (lambda (source)
+                       (let ((grammars (alist-get source valsi-graph--source-grammars nil nil #'eq)))
+                         (or (null grammars) (memq valsi-graph-current-grammar grammars))))
+                     valsi-graph-edge-sources))
+                   (valsi-graph-current-tree
+                    (and sources (valsi-registry-parse-content valsi-graph-current-grammar text)))
+                   (buffer-read-only t))
+              (dolist (source sources)
+                (condition-case err
+                    (save-excursion
+                      (save-restriction
+                        (widen)
+                        (goto-char (point-min))
+                        (dolist (edge (funcall source file))
+                          (unless (and (proper-list-p edge) (= 3 (length edge))
+                                       (seq-every-p #'stringp edge))
+                            (error "Invalid graph edge: %S" edge))
+                          (push (cons file edge) all))))
+                  (error (valsi-graph--record-error file source err))))))
+        (error (valsi-graph--record-error file 'read/parse err))))
+    (setq valsi-graph--errors (nreverse valsi-graph--errors))
+    (when valsi-graph--errors
+      (message "Valsi graph: %d failure(s); see error rows" (length valsi-graph--errors)))
     (nreverse all)))
 
 (defun valsi-graph--entries ()
-  "Return tabulated entries for the cross-artifact graph.
-The row id is the absolute source file, so RET can visit it."
-  (mapcar (lambda (fe)
-            (let ((file (car fe)) (e (cdr fe)))
-              (list file (vector (nth 0 e) (nth 1 e) (nth 2 e)))))
-          (valsi-graph--collect)))
+  "Return edge rows followed by visible error rows for the project graph."
+  (let ((edges (valsi-graph--collect)))
+    (append
+     (mapcar (lambda (edge)
+               (list (car edge) (vector (nth 1 edge) (nth 2 edge) (nth 3 edge))))
+             edges)
+     (mapcar (lambda (failure)
+               (list (car failure)
+                     (vector (valsi-graph--source-name (car failure)) "error"
+                             (format "%s: %s"
+                                     (if (symbolp (cadr failure)) (cadr failure)
+                                       "custom source")
+                                     (caddr failure)))))
+             valsi-graph--errors))))
 
 (defun valsi-graph-visit ()
   "Open the artifact file backing the current graph row."

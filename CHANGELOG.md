@@ -63,6 +63,9 @@ grammar activates.
 
 ### Fixed
 
+- The graph reads each file once, shares its parsed tree among applicable
+  grammar sources, excludes fenced examples and unrelated prose, and shows
+  discovery, read, and source errors alongside successful edges (#102).
 - Directory notifications queue bounded, ignore-aware watch discovery.
   Watches use hash lookups, preserve discovery in new empty folders, and
   report resource limits or backend failures instead of hiding them (#99).
