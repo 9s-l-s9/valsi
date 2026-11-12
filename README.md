@@ -166,6 +166,14 @@ visible with a refreshing indicator until the new snapshot is ready. `g`
 requests a fresh scan. For repeatable latency measurements, including initial
 display and the longest processing turn, run `make benchmark`.
 
+Filesystem watches follow directories returned by the project backend and
+their ancestors. Newly created folders are checked against project ignore
+rules and explored in batches, including empty folders that may later receive
+artifacts. Git's nested ignore rules and negations are respected; symlinks and
+nested repositories are not traversed. The per-project watch limit defaults to
+512 (`valsi-app-live-refresh-watch-limit`). A visible warning reports the cap
+or a watch failure; `g` still scans the project and retries watch setup.
+
 Unopened files whose names do not identify an artifact are classified from
 their first 64 KiB (`valsi-app-detect-head-bytes`). Recognized artifacts are
 then analyzed up to `valsi-app-max-file-bytes`; open buffers use their full

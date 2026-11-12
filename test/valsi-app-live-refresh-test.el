@@ -150,7 +150,7 @@
           (valsi-app-live-refresh-reconcile
            root (list (list :file file :grammar 'speckit)))
           (cl-letf (((symbol-function
-                      'valsi-app-live-refresh--ensure-watches)
+                      'valsi-app-live-refresh--watch-directory)
                      #'ignore))
             (valsi-app-live-refresh-subscribe hub root #'ignore))
           (setq buffer (find-file-noselect file))

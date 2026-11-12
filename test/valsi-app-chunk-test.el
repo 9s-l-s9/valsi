@@ -140,7 +140,7 @@
       (make-directory (file-name-directory new))
       (with-temp-file new (insert "- [x] T001 New\n"))
       (setq files (append (cdr files) (list new)))
-      (valsi-app-live-refresh--notify root nil)
+      (valsi-app-live-refresh--notify root (list nil 'created new))
       (should (eq snapshot (buffer-local-value 'valsi-app--entries hub)))
       (valsi-test-refresh-drain root)
       (let ((entries (buffer-local-value 'valsi-app--entries hub)))

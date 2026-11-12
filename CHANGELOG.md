@@ -63,6 +63,9 @@ grammar activates.
 
 ### Fixed
 
+- Directory notifications queue bounded, ignore-aware watch discovery.
+  Watches use hash lookups, preserve discovery in new empty folders, and
+  report resource limits or backend failures instead of hiding them (#99).
 - The retained RPC test client revokes released policies, starts with deny-all,
   removes temporary policy files and stderr buffers on stop/exit, and times
   out unanswered requests without retaining their callbacks (#101).

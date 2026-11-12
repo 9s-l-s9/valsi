@@ -11,6 +11,7 @@
 (require 'cl-lib)
 (require 'valsi-app-live-refresh)
 (require 'valsi-app)
+(require 'valsi-test-refresh)
 
 (defmacro valsi-app-live-refresh-observation-test--with-root (root &rest body)
   "Run BODY with a temporary canonical ROOT, resetting live refresh after."
@@ -134,9 +135,9 @@
       (valsi-app-live-refresh-observation-test--pump)
       ;; What the next scan does for a directory with known artifacts.
       (valsi-app-live-refresh--watch-directory project doc)
-      (let ((watch (assoc doc (valsi-app-live-refresh--project-watches project))))
+      (let ((watch (gethash doc (valsi-app-live-refresh--project-watches project))))
         (should watch)
-        (should (file-notify-valid-p (cdr watch))))
+        (should (file-notify-valid-p watch)))
       (valsi-app-live-refresh--cancel-work project)
       (with-temp-file (expand-file-name "M.md" doc) (insert "m"))
       (valsi-app-live-refresh-observation-test--pump)
@@ -148,13 +149,12 @@
   (valsi-app-live-refresh-observation-test--with-root root
     (let ((project (valsi-app-live-refresh--project root)))
       (valsi-app-live-refresh--watch-directory project root)
-      (let ((stale (cdr (assoc root (valsi-app-live-refresh--project-watches
-                                     project)))))
+      (let ((stale (gethash root (valsi-app-live-refresh--project-watches project))))
         (file-notify-rm-watch stale)
         (valsi-app-live-refresh--watch-directory project root)
         (let ((watches (valsi-app-live-refresh--project-watches project)))
-          (should (= 1 (length watches)))
-          (should (file-notify-valid-p (cdar watches))))))))
+          (should (= 1 (hash-table-count watches)))
+          (should (file-notify-valid-p (gethash root watches))))))))
 
 (ert-deftest valsi-app-live-refresh-observation-watches-new-subdirectories ()
   "Regression for #52: files added to a new subdirectory refresh the hub."
@@ -169,8 +169,9 @@
       (make-directory deep t)
       (make-directory git)
       (valsi-app-live-refresh-observation-test--pump)
-      (let ((watched (mapcar #'car (valsi-app-live-refresh--project-watches
-                                    project))))
+      (cl-letf (((symbol-function 'project-current) (lambda (&rest _) nil)))
+        (valsi-test-refresh-drain root))
+      (let ((watched (hash-table-keys (valsi-app-live-refresh--project-watches project))))
         (should (member docs watched))
         (should (member deep watched))
         (should-not (member git watched)))

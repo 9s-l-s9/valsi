@@ -199,10 +199,16 @@ When COMPACT is non-nil, return the artifact-index name."
 
 (iter-defun valsi-app--project-file-steps (root)
   "Filter ROOT's project candidates one at a time, returning Markdown files."
-  (let ((candidates (valsi-app--project-candidates root)) files)
+  (let ((candidates (valsi-app--project-candidates root))
+        (project (valsi-app-live-refresh--project root)) files)
     (iter-yield nil)
     (dolist (candidate candidates)
       (let ((file (expand-file-name candidate root)))
+        ;; The backend already applied project ignore rules. Watch ancestors
+        ;; of all candidates, so future Markdown beside other files is seen.
+        (when (valsi-app-live-refresh--project-subscribers project)
+          (iter-yield-from
+           (valsi-app-live-refresh--watch-parents project (file-name-directory file))))
         (when (and (string-match-p "\\.\\(?:md\\|mdc\\|markdown\\)\\'" file)
                    (file-regular-p file)
                    (not (seq-some

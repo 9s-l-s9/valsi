@@ -17,8 +17,10 @@
 (require 'cl-lib)
 (require 'filenotify)
 (require 'generator)
+(require 'project)
 (require 'seq)
 (require 'subr-x)
+(require 'vc)
 
 (defgroup valsi-app-live-refresh nil
   "Live refresh and reconciliation for the Valsi project application."
@@ -40,6 +42,13 @@ A single file operation, parser, or project backend call can take longer."
   :type 'integer
   :group 'valsi-app-live-refresh)
 
+(defcustom valsi-app-live-refresh-watch-limit 512
+  "Maximum directory watches per project.
+When this limit is reached, use the explicit refresh command to discover
+changes outside watched directories.  The effective minimum limit is one."
+  :type 'integer
+  :group 'valsi-app-live-refresh)
+
 (cl-defstruct (valsi-app-live-refresh--project
                (:constructor valsi-app-live-refresh--make-project))
   root
@@ -48,7 +57,12 @@ A single file operation, parser, or project backend call can take longer."
   known
   cache
   subscribers
-  watches
+  (watches (make-hash-table :test #'equal))
+  (watch-directories (make-hash-table :test #'equal))
+  (watch-queued (make-hash-table :test #'equal))
+  watch-pending
+  watch-status
+  watch-recheck
   changed-files
   rescan
   scan-function
@@ -104,8 +118,7 @@ Nested working projects can index the same file.")
                 :signatures (make-hash-table :test #'equal)
                 :known (make-hash-table :test #'equal)
                 :cache (make-hash-table :test #'equal)
-                :subscribers nil
-                :watches nil)))
+                :subscribers nil)))
           (puthash root fresh valsi-app-live-refresh--projects)
           fresh))))
 
@@ -375,7 +388,8 @@ SCAN is called with ROOT.  Explicit calls outside a dispatch always reconcile."
         (iter-end-of-sequence
          (when (eq iterator (valsi-app-live-refresh--project-iterator project))
            (setf (valsi-app-live-refresh--project-iterator project) nil
-                 (valsi-app-live-refresh--project-status project) nil
+                 (valsi-app-live-refresh--project-status project)
+                 (valsi-app-live-refresh--project-watch-status project)
                  (valsi-app-live-refresh--project-snapshot project) (cdr error))
            (valsi-app-live-refresh--publish project)))
         (valsi-app-live-refresh-stale
@@ -393,6 +407,15 @@ SCAN is called with ROOT.  Explicit calls outside a dispatch always reconcile."
               (run-at-time 0.01 nil #'valsi-app-live-refresh--continue
                            project iterator))))))
 
+(iter-defun valsi-app-live-refresh--dispatch-steps (project scan changed-files)
+  "Process PROJECT's queued directory work, then SCAN CHANGED-FILES."
+  (valsi-app-live-refresh--watch-directory project (valsi-app-live-refresh--project-root project))
+  (iter-yield-from (valsi-app-live-refresh--watch-steps project))
+  (if scan
+      (iter-yield-from
+       (funcall scan (valsi-app-live-refresh--project-root project) changed-files))
+    (valsi-app-live-refresh--project-snapshot project)))
+
 (defun valsi-app-live-refresh--dispatch (project &optional token)
   "Start one shared refresh for PROJECT's live subscribers.
 TOKEN, when supplied by a timer, rejects callbacks from cancelled requests."
@@ -408,20 +431,22 @@ TOKEN, when supplied by a timer, rejects callbacks from cancelled requests."
           (scan (valsi-app-live-refresh--project-scan-function project)))
       (setf (valsi-app-live-refresh--project-changed-files project) nil
             (valsi-app-live-refresh--project-rescan project) nil)
-      (if scan
-          (let ((iterator (funcall scan (valsi-app-live-refresh--project-root project)
-                                   valsi-app-live-refresh-changed-files)))
+      (let ((iterator (valsi-app-live-refresh--dispatch-steps
+                       project scan valsi-app-live-refresh-changed-files)))
             (setf (valsi-app-live-refresh--project-iterator project) iterator
                   (valsi-app-live-refresh--project-status project) 'refreshing)
             (valsi-app-live-refresh--publish project)
-            (valsi-app-live-refresh--continue project iterator))
-        (valsi-app-live-refresh--publish project)))))
+            (valsi-app-live-refresh--continue project iterator)))))
 
 (defun valsi-app-live-refresh-schedule (root &optional file immediate)
   "Schedule one debounced refresh for subscribers of ROOT.
 FILE identifies a buffer edit; nil requests full filesystem reconciliation.
 IMMEDIATE skips the idle debounce for an explicit user refresh."
   (let ((project (valsi-app-live-refresh--project root)))
+    (when immediate
+      (setf (valsi-app-live-refresh--project-watch-status project) nil
+            (valsi-app-live-refresh--project-watch-recheck project)
+            (valsi-app-live-refresh--project-initialized project)))
     ;; A cancelled pass may contain other changes.  Rediscover on restart so
     ;; none of those changes are lost, while still reusing cached parse results.
     (when (valsi-app-live-refresh--project-iterator project)
@@ -441,69 +466,198 @@ IMMEDIATE skips the idle debounce for an explicit user refresh."
                valsi-app-live-refresh-delay nil
                #'valsi-app-live-refresh--dispatch project token))))))
 
+(defun valsi-app-live-refresh--watch-warning (project text)
+  "Record PROJECT watch warning TEXT without hiding an active refresh."
+  (setf (valsi-app-live-refresh--project-watch-status project) text)
+  (unless (eq 'refreshing (valsi-app-live-refresh--project-status project))
+    (setf (valsi-app-live-refresh--project-status project) text)))
+
+(defun valsi-app-live-refresh--remove-watch (project directory)
+  "Remove PROJECT's watch of DIRECTORY, including its reverse lookup."
+  (let ((descriptor (gethash directory (valsi-app-live-refresh--project-watches project))))
+    (when descriptor
+      (remhash directory (valsi-app-live-refresh--project-watches project))
+      (remhash descriptor (valsi-app-live-refresh--project-watch-directories project))
+      (ignore-errors (file-notify-rm-watch descriptor)))))
+
+(defun valsi-app-live-refresh--queue-directory (project directory)
+  "Queue PROJECT DIRECTORY for batched, ignore-aware watch discovery."
+  (setq directory (file-name-as-directory (expand-file-name directory)))
+  (unless (gethash directory (valsi-app-live-refresh--project-watch-queued project))
+    (puthash directory t (valsi-app-live-refresh--project-watch-queued project))
+    (push directory (valsi-app-live-refresh--project-watch-pending project))))
+
 (defun valsi-app-live-refresh--notify (root event)
-  "Schedule ROOT reconciliation for a filesystem notification EVENT."
+  "Queue ROOT reconciliation for relevant filesystem EVENT without walking."
   (when-let* ((project (gethash root valsi-app-live-refresh--projects)))
-    ;; A deleted or renamed directory stops its watch.  Forget it so a
-    ;; recreated directory is watched again.
-    (when (eq (nth 1 event) 'stopped)
-      (setf (valsi-app-live-refresh--project-watches project)
-            (seq-remove (lambda (watch) (equal (cdr watch) (car event)))
-                        (valsi-app-live-refresh--project-watches project))))
-    (when (valsi-app-live-refresh--project-subscribers project)
-      ;; Watch a new subdirectory, so files added there later are noticed
-      ;; even though it holds no known artifact yet.
-      (pcase event
-        ((or `(,_ created ,file) `(,_ renamed ,_ ,file))
-         (when (and (file-directory-p file) (not (file-symlink-p file)))
-           (valsi-app-live-refresh--watch-tree project file))))
-      (valsi-app-live-refresh-schedule root))))
+    (let ((action (nth 1 event)) relevant)
+      (when (eq action 'stopped)
+        (when-let* ((directory (gethash (car event)
+                                       (valsi-app-live-refresh--project-watch-directories project))))
+          (remhash directory (valsi-app-live-refresh--project-watches project))
+          (remhash (car event) (valsi-app-live-refresh--project-watch-directories project))
+          (setq relevant t)))
+      (when (valsi-app-live-refresh--project-subscribers project)
+        (dolist (file (seq-filter #'stringp (cddr event)))
+          (when (member (file-name-nondirectory file) '(".gitignore" ".ignore"))
+            (setf (valsi-app-live-refresh--project-watch-recheck project) t
+                  (valsi-app-live-refresh--project-watch-status project) nil))
+          (cond
+           ((and (memq action '(created renamed))
+                 (file-directory-p file) (not (file-symlink-p file)))
+            (valsi-app-live-refresh--queue-directory project file)
+            (setq relevant t))
+           ((or (string-match-p "\\.\\(?:md\\|mdc\\|markdown\\)\\'" file)
+                (member (file-name-nondirectory file) '(".gitignore" ".ignore"))
+                (gethash (file-name-as-directory file)
+                         (valsi-app-live-refresh--project-watches project)))
+            (setq relevant t))))
+        (when relevant (valsi-app-live-refresh-schedule root))))))
 
 (defun valsi-app-live-refresh--watch-directory (project directory)
-  "Add a filesystem watch for PROJECT DIRECTORY when supported.
-A stopped watch, for example of a deleted directory, is replaced."
-  (let ((watch (assoc directory
-                      (valsi-app-live-refresh--project-watches project))))
-    (when (and watch (not (file-notify-valid-p (cdr watch))))
-      (ignore-errors (file-notify-rm-watch (cdr watch)))
-      (setf (valsi-app-live-refresh--project-watches project)
-            (delq watch (valsi-app-live-refresh--project-watches project))
-            watch nil))
-    (unless (or watch (file-remote-p directory))
-      (condition-case nil
-          (let ((descriptor
-                 (file-notify-add-watch
-                  directory '(change attribute-change)
-                  (apply-partially #'valsi-app-live-refresh--notify
-                                   (valsi-app-live-refresh--project-root project)))))
-            (push (cons directory descriptor)
-                  (valsi-app-live-refresh--project-watches project)))
-        (file-notify-error nil)
-        (file-error nil)))))
+  "Watch PROJECT DIRECTORY once, respecting the watch cap and reporting errors."
+  (setq directory (file-name-as-directory (expand-file-name directory)))
+  (let* ((watches (valsi-app-live-refresh--project-watches project))
+         (descriptor (gethash directory watches)))
+    (when (and descriptor (not (file-notify-valid-p descriptor)))
+      (valsi-app-live-refresh--remove-watch project directory)
+      (setq descriptor nil))
+    (unless (or descriptor (file-remote-p directory)
+                (valsi-app-live-refresh--project-watch-status project)
+                (file-symlink-p (directory-file-name directory)))
+      (if (>= (hash-table-count watches) (max 1 valsi-app-live-refresh-watch-limit))
+          (valsi-app-live-refresh--watch-warning
+           project "Watch limit reached; press g to refresh")
+        (condition-case err
+            (let ((watch (file-notify-add-watch
+                          directory '(change attribute-change)
+                          (apply-partially #'valsi-app-live-refresh--notify
+                                           (valsi-app-live-refresh--project-root project)))))
+              (puthash directory watch watches)
+              (puthash watch directory (valsi-app-live-refresh--project-watch-directories project)))
+          (file-error
+           (valsi-app-live-refresh--watch-warning
+            project (format "Cannot watch %s: %s; press g to refresh"
+                            directory (error-message-string err)))))))))
 
-(defun valsi-app-live-refresh--watch-tree (project directory)
-  "Watch PROJECT DIRECTORY and its subdirectories.
-Directories named in `valsi-app-excluded-directory-names' and symbolic links
-are skipped."
-  (let ((directory (file-name-as-directory directory)))
-    (unless (member (file-name-nondirectory (directory-file-name directory))
-                    (bound-and-true-p valsi-app-excluded-directory-names))
-      (valsi-app-live-refresh--watch-directory project directory)
-      (dolist (child (ignore-errors
-                       (directory-files
-                        directory t directory-files-no-dot-files-regexp t)))
-        (when (and (file-directory-p child) (not (file-symlink-p child)))
-          (valsi-app-live-refresh--watch-tree project child))))))
+(defun valsi-app-live-refresh--excluded-directory-p (root directory)
+  "Return non-nil for DIRECTORY outside ROOT or under an excluded component."
+  (or (not (string-prefix-p root directory))
+      (seq-some (lambda (part)
+                  (member part (bound-and-true-p valsi-app-excluded-directory-names)))
+                (file-name-split (file-relative-name directory root)))))
 
-(defun valsi-app-live-refresh--ensure-watches (project)
-  "Ensure PROJECT root and known artifact directories are watched."
-  (valsi-app-live-refresh--watch-directory
-   project (valsi-app-live-refresh--project-root project))
-  (maphash
-   (lambda (file _entry)
-     (valsi-app-live-refresh--watch-directory
-      project (file-name-directory file)))
-   (valsi-app-live-refresh--project-known project)))
+(defun valsi-app-live-refresh--glob-ignored-p (root directory patterns)
+  "Match DIRECTORY against a non-Git project's ignore PATTERNS below ROOT."
+  (let ((relative (directory-file-name (file-relative-name directory root))))
+    (seq-some
+     (lambda (pattern)
+       (let* ((pattern (directory-file-name pattern))
+              (rooted (or (string-prefix-p "./" pattern) (string-match-p "/" pattern)))
+              (pattern (string-remove-prefix "./" pattern))
+              (regexp (wildcard-to-regexp pattern)))
+         (if rooted
+             (let ((path relative) matched)
+               (while (and path (not matched))
+                 (setq matched (string-match-p regexp (directory-file-name path))
+                       path (file-name-directory (directory-file-name path))))
+               matched)
+           (seq-some (lambda (part) (string-match-p regexp part))
+                     (file-name-split relative)))))
+     patterns)))
+
+(defun valsi-app-live-refresh--ignored-directory-p (root directory git ignores)
+  "Check DIRECTORY below ROOT against Git or backend IGNORES.
+GIT selects `git check-ignore', including nested rules and negations."
+  (or (valsi-app-live-refresh--excluded-directory-p root directory)
+      (file-symlink-p (directory-file-name directory))
+      (and (not (equal root directory))
+           (or (file-exists-p (expand-file-name ".git" directory))
+               (valsi-app-live-refresh--glob-ignored-p root directory ignores)
+               (when git
+                   (let ((status (process-file "git" nil nil nil "-C" root "check-ignore" "--quiet" "--"
+                                               ;; A trailing slash lets a directory's own
+                                               ;; ignore file match the directory itself.
+                                               (directory-file-name (file-relative-name directory root)))))
+                     (cond ((eq status 0) t) ((eq status 1) nil)
+                           (t (error "Git ignore check failed for %s" directory)))))))))
+
+(iter-defun valsi-app-live-refresh--watch-steps (project)
+  "Discover queued PROJECT directories in bounded steps, pruning ignored trees."
+  (when (and (not (file-remote-p (valsi-app-live-refresh--project-root project)))
+             (or (valsi-app-live-refresh--project-watch-pending project)
+                 (valsi-app-live-refresh--project-watch-recheck project)))
+    (let* ((root (valsi-app-live-refresh--project-root project))
+           (default-directory root)
+           (backend (project-current nil root))
+           (git (and (eq (car-safe backend) 'vc)
+                     (vc-call-backend 'Git 'root root)))
+           ;; Git handles its own nested/negative rules. Extra project globs
+           ;; use the same directory-local lookup as project-files.
+           (ignores (if git (project--value-in-dir 'project-vc-ignores root)
+                      (project-ignores backend root))))
+      (when (valsi-app-live-refresh--project-watch-recheck project)
+        (dolist (directory (hash-table-keys (valsi-app-live-refresh--project-watches project)))
+          (condition-case err
+              (when (or (not (file-directory-p directory))
+                        (valsi-app-live-refresh--ignored-directory-p root directory git ignores))
+                (valsi-app-live-refresh--remove-watch project directory))
+            (error
+             (valsi-app-live-refresh--watch-warning
+              project (format "Watch discovery failed: %s; press g to refresh"
+                              (error-message-string err)))))
+          (iter-yield nil))
+        (setf (valsi-app-live-refresh--project-watch-recheck project) nil))
+      (while (and (valsi-app-live-refresh--project-watch-pending project)
+                  (valsi-app-live-refresh--project-subscribers project)
+                  (not (valsi-app-live-refresh--project-watch-status project))
+                  (not (file-remote-p root)))
+        (let ((directory (pop (valsi-app-live-refresh--project-watch-pending project)))
+              complete)
+          (unwind-protect
+              (progn
+                (condition-case err
+                    (when (and (file-directory-p directory)
+                               (not (valsi-app-live-refresh--ignored-directory-p root directory git ignores)))
+                      (valsi-app-live-refresh--watch-directory project directory)
+                      ;; Stop discovery on a cap or backend failure. Explicit
+                      ;; refresh still scans project files and can retry watches.
+                      (unless (valsi-app-live-refresh--project-watch-status project)
+                        (dolist (child (directory-files directory t directory-files-no-dot-files-regexp t))
+                          (when (and (file-directory-p child) (not (file-symlink-p child)))
+                            (valsi-app-live-refresh--queue-directory project child))
+                          (iter-yield nil))))
+                  (error
+                   (valsi-app-live-refresh--watch-warning
+                    project (format "Watch discovery failed: %s; press g to refresh"
+                                    (error-message-string err)))))
+                (setq complete (not (valsi-app-live-refresh--project-watch-status project))))
+            (if complete
+                (remhash directory (valsi-app-live-refresh--project-watch-queued project))
+              ;; A scan cancelled between children must not lose the rest.
+              (push directory (valsi-app-live-refresh--project-watch-pending project)))))
+        (iter-yield nil)))))
+
+(iter-defun valsi-app-live-refresh--watch-parents (project directory)
+  "Watch DIRECTORY and its ancestors within PROJECT, yielding for each."
+  (let ((root (valsi-app-live-refresh--project-root project)))
+    (setq directory (file-name-as-directory directory))
+    (unless (valsi-app-live-refresh--excluded-directory-p root directory)
+      (while (and (string-prefix-p root directory)
+                  (not (valsi-app-live-refresh--project-watch-status project))
+                  (not (gethash directory (valsi-app-live-refresh--project-watches project))))
+        (valsi-app-live-refresh--watch-directory project directory)
+        (setq directory (file-name-directory (directory-file-name directory)))
+        (iter-yield nil)))))
+
+(defun valsi-app-live-refresh--clear-watches (project)
+  "Release all PROJECT watches and queued discovery."
+  (dolist (directory (hash-table-keys (valsi-app-live-refresh--project-watches project)))
+    (valsi-app-live-refresh--remove-watch project directory))
+  (clrhash (valsi-app-live-refresh--project-watch-queued project))
+  (setf (valsi-app-live-refresh--project-watch-pending project) nil
+        (valsi-app-live-refresh--project-watch-recheck project) nil
+        (valsi-app-live-refresh--project-watch-status project) nil))
 
 (defun valsi-app-live-refresh-subscribe (buffer root function &optional scan)
   "Subscribe BUFFER to debounced ROOT refreshes using FUNCTION.
@@ -543,9 +697,7 @@ retaining the authoritative snapshot for the next hub entry."
          (valsi-app-live-refresh--project-root project))
         (valsi-app-live-refresh--cancel-work project)
         (setf (valsi-app-live-refresh--project-status project) nil)
-        (dolist (watch (valsi-app-live-refresh--project-watches project))
-          (ignore-errors (file-notify-rm-watch (cdr watch))))
-        (setf (valsi-app-live-refresh--project-watches project) nil))
+        (valsi-app-live-refresh--clear-watches project))
       (valsi-app-live-refresh--maybe-remove-find-file-hook))))
 
 (defun valsi-app-live-refresh-reset (&optional root)
@@ -560,8 +712,7 @@ This is primarily useful for tests and explicit application teardown."
       (valsi-app-live-refresh--unobserve key)
       (when-let* ((project (gethash key valsi-app-live-refresh--projects)))
         (valsi-app-live-refresh--cancel-work project)
-        (dolist (watch (valsi-app-live-refresh--project-watches project))
-          (ignore-errors (file-notify-rm-watch (cdr watch))))
+        (valsi-app-live-refresh--clear-watches project)
         (remhash key valsi-app-live-refresh--projects)))
     (valsi-app-live-refresh--maybe-remove-find-file-hook)))
 
