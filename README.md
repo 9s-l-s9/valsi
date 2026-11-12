@@ -145,6 +145,12 @@ visible with a refreshing indicator until the new snapshot is ready. `g`
 requests a fresh scan. For repeatable latency measurements, including initial
 display and the longest processing turn, run `make benchmark`.
 
+Unopened files whose names do not identify an artifact are classified from
+their first 64 KiB (`valsi-app-detect-head-bytes`). Recognized artifacts are
+then analyzed up to `valsi-app-max-file-bytes`; open buffers use their full
+current text. Set the detection limit to nil for grammars with signals later
+in a document.
+
 To try everything in a scratch Emacs:
 
     make run      # guix shell + emacs -Q -l valsi-demo.el

@@ -34,8 +34,16 @@
   :group 'valsi)
 
 (defcustom valsi-app-max-file-bytes 300000
-  "Maximum bytes read while classifying one unopened artifact candidate."
+  "Maximum bytes read to analyze one unopened artifact candidate."
   :type 'integer
+  :group 'valsi-app)
+
+(defcustom valsi-app-detect-head-bytes 65536
+  "Maximum bytes used to classify unopened files without a named grammar.
+Recognized artifacts are then read up to `valsi-app-max-file-bytes' for their
+summaries.  Nil uses that full limit for detection too.  Open buffers always
+use their full current text, including unsaved edits."
+  :type '(choice (const :tag "Full analysis limit" nil) natnum)
   :group 'valsi-app)
 
 (defcustom valsi-app-relevant-limit 8
@@ -137,6 +145,8 @@ Nil falls back to `project-dired'."
 
 (defvar-local valsi-app--root nil)
 (defvar-local valsi-app--entries nil)
+(defvar-local valsi-app--entry-index nil
+  "Pair of the indexed snapshot and a hash table of file names to entries.")
 (defvar-local valsi-app--refresh-status nil)
 (defvar-local valsi-app--compact nil)
 (defvar-local valsi-app--filter nil)
@@ -274,16 +284,28 @@ WARNINGS is a cached count of structural plan findings, when available."
   (let ((buffer (valsi-app-live-refresh--file-buffer file)))
     (list :signature (valsi-app-live-refresh--signature file) :buffer buffer
           :tick (and buffer (buffer-chars-modified-tick buffer))
-          :generation valsi-registry-generation :limit valsi-app-max-file-bytes)))
+          :generation valsi-registry-generation :limit valsi-app-max-file-bytes
+          :detect-limit valsi-app-detect-head-bytes)))
 
 (defun valsi-app--analyze-file (file cache)
   "Analyze FILE, reusing and updating its entry in CACHE."
   (let* ((key (valsi-app--file-cache-key file))
          (cached (gethash file cache))
          (fresh (equal key (plist-get cached :key)))
-         (text (unless fresh (valsi-app--file-text file)))
+         (head-only (and (not fresh) valsi-app-detect-head-bytes
+                         (< valsi-app-detect-head-bytes valsi-app-max-file-bytes)
+                         (not (plist-get key :buffer))
+                         (eq (valsi-registry-detect file "") 'generic)))
+         (text (unless fresh
+                 (let ((valsi-app-max-file-bytes
+                        (if head-only valsi-app-detect-head-bytes
+                          valsi-app-max-file-bytes)))
+                   (valsi-app--file-text file))))
          (grammar (if fresh (plist-get cached :grammar)
                     (valsi-registry-detect file text)))
+         (text (if (and head-only (not (eq grammar 'generic)))
+                   (valsi-app--file-text file)
+                 text))
          (tree (if fresh (plist-get cached :tree)
                  (unless (eq grammar 'generic)
                    (condition-case nil
@@ -360,13 +382,15 @@ CHANGED-FILES identifies edits that may be analyzed incrementally."
   (let* ((versions (make-hash-table :test #'equal))
          (entries (iter-yield-from (valsi-app--scan-steps root changed-files versions)))
          (generation valsi-registry-generation)
-         (limit valsi-app-max-file-bytes))
+         (limit valsi-app-max-file-bytes)
+         (head-limit valsi-app-detect-head-bytes))
     (iter-yield-from
      (valsi-app-live-refresh--reconcile-steps
       root entries
       (lambda (entry)
         (and (= generation valsi-registry-generation)
              (equal limit valsi-app-max-file-bytes)
+             (equal head-limit valsi-app-detect-head-bytes)
              (or (null entry)
                  (let ((file (plist-get entry :file)))
                    (equal (gethash file versions)
@@ -481,6 +505,8 @@ CHANGED-FILES identifies edits that may be analyzed incrementally."
                                  (valsi-node-prop node :depends)
                                  (valsi-node-prop node :dependencies)))))
         (list :file buffer-file-name
+              :file-key (and buffer-file-name
+                             (expand-file-name (or buffer-file-truename buffer-file-name)))
               :grammar (and (boundp 'valsi--grammar) valsi--grammar)
               :capabilities (and (boundp 'valsi--capabilities)
                                  valsi--capabilities)
@@ -498,6 +524,7 @@ CHANGED-FILES identifies edits that may be analyzed incrementally."
              (node (and tree (fboundp 'valsi-node-at)
                         (valsi-node-at tree (point)))))
         (list source
+              buffer-file-name buffer-file-truename
               (buffer-chars-modified-tick)
               valsi-registry-generation
               (and node (valsi-node-type node))
@@ -525,6 +552,22 @@ CHANGED-FILES identifies edits that may be analyzed incrementally."
                valsi-app--artifact-command-hints)
    4))
 
+(defun valsi-app--entry-for-file (file)
+  "Find FILE in the current snapshot without filesystem access.
+Index both lexical and canonical file names, reusing the index until a new
+snapshot replaces `valsi-app--entries'."
+  (when file
+    (unless (eq (car valsi-app--entry-index) valsi-app--entries)
+      (let ((index (make-hash-table :test #'equal)))
+        (dolist (entry valsi-app--entries)
+          (puthash (plist-get entry :file) entry index)
+          (when-let* ((canonical (plist-get entry :truename)))
+            (unless (gethash canonical index)
+              (puthash canonical entry index))))
+        (setq valsi-app--entry-index (cons valsi-app--entries index))))
+    (when (cdr valsi-app--entry-index)
+      (gethash (expand-file-name file) (cdr valsi-app--entry-index)))))
+
 (defun valsi-app--insert-context (layout)
   "Insert active artifact context for responsive sidebar LAYOUT."
   (when-let* ((context (valsi-app--context)))
@@ -535,11 +578,8 @@ CHANGED-FILES identifies edits that may be analyzed incrementally."
           (node-type (plist-get context :node-type))
           (state (plist-get context :state))
           (dependencies (plist-get context :dependencies))
-          (entry (seq-find
-                  (lambda (item)
-                    (and file
-                         (file-equal-p file (plist-get item :file))))
-                  valsi-app--entries)))
+          (entry (or (valsi-app--entry-for-file file)
+                     (valsi-app--entry-for-file (plist-get context :file-key)))))
       (insert "\n" (propertize "CURRENT\n" 'face 'valsi-section-face))
       (when file
         (insert-text-button
@@ -672,7 +712,10 @@ CHANGED-FILES identifies edits that may be analyzed incrementally."
   "Return actionable reason label for ENTRY, or nil.
 Diagnostics and semantic staleness count only for an open artifact."
   (let* ((state (plist-get entry :state))
-         (open (valsi-app-live-refresh--file-buffer (plist-get entry :file)))
+         ;; Reconciliation already resolved aliases to the visiting buffer.
+         ;; `find-buffer-visiting' would stat every unopened file on renders.
+         (open (or (buffer-live-p (plist-get entry :buffer))
+                   (get-file-buffer (plist-get entry :file))))
          (warnings (or (plist-get entry :warnings) 0))
          (stale (or (plist-get entry :stale) 0)))
     (cond
@@ -975,7 +1018,7 @@ LAYOUT selects the narrow or wide row format."
                       (eq (plist-get entry :grammar) 'generic))
                     entries))
          (groups (valsi-app--group recognized))
-         (attention (valsi-app--attention-entries entries))
+         (attention (unless valsi-app--compact (valsi-app--attention-entries entries)))
          (agents (valsi-terminal-agent-list root))
          (layout (valsi-app--layout)))
     (setq valsi-app--last-layout layout)

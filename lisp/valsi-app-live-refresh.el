@@ -290,6 +290,10 @@ No baseline is committed until all entries pass validation."
                 "changed on disk")
                (buffer "open")
                (t "clean"))))
+        ;; Resolve path identity once in the batched scan.  Renderers can use
+        ;; these names and the live buffer directly, without probing the disk.
+        (setq entry (plist-put (copy-sequence entry) :truename file))
+        (setq entry (plist-put entry :buffer buffer))
         (puthash file signature signatures)
         (puthash file (copy-sequence entry) known)
         (valsi-app-live-refresh--observe-buffer file root)

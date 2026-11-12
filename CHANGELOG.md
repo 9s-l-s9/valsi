@@ -63,6 +63,9 @@ grammar activates.
 
 ### Fixed
 
+- Sidebar renders use cached path identities and buffer associations instead
+  of filesystem probes for every Markdown file. Unrecognized unopened files
+  are classified from a bounded head before any full artifact analysis (#97).
 - ADR status editing is available for empty records, requires a lifecycle
   value and a superseding ADR where appropriate, and highlights lifecycle
   words only on the parsed status line (#105).
