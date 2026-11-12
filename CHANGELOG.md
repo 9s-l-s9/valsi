@@ -63,6 +63,9 @@ grammar activates.
 
 ### Fixed
 
+- The retained RPC test client revokes released policies, starts with deny-all,
+  removes temporary policy files and stderr buffers on stop/exit, and times
+  out unanswered requests without retaining their callbacks (#101).
 - The Pi artifact tool releases documents after each query, serializes
   concurrent access to one path, bounds and filters symbol output, enforces
   project-relative paths, and accepts documented uppercase configuration

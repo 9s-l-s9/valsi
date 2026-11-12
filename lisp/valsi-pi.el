@@ -84,10 +84,18 @@ Valsi does not scan the store or maintain a second index.")
   :type 'integer
   :group 'valsi-harness)
 
+(defcustom valsi-pi-request-timeout 30
+  "Seconds before an unanswered Pi request fails its callback."
+  :type 'number
+  :group 'valsi-harness)
+
+(defvar valsi-pi--clients nil
+  "Clients owning temporary resources to release on Emacs exit.")
+
 (cl-defstruct (valsi-pi
                (:include valsi-harness)
                (:constructor valsi-pi--create))
-  program arguments directory process stderr-buffer policy-gate
+  program arguments directory process stderr-buffer stderr-text policy-gate
   policy-file extension-file policy-owner
   (pending (make-hash-table :test #'equal))
   (session-list-pending (make-hash-table :test #'equal))
@@ -175,12 +183,15 @@ explicit allow-lists; nil therefore permits nothing.  DRY-RUN denies every
 mutating call before execution."
   (unless (and (stringp dispatch-id) (not (string-empty-p dispatch-id)))
     (error "Valsi Pi policy requires a dispatch id"))
+  (cl-pushnew client valsi-pi--clients :test #'eq)
   (let ((path (or (valsi-pi-policy-file client)
                   (let ((new (make-temp-file "valsi-pi-policy-" nil ".json")))
                     (setf (valsi-pi-policy-file client) new)
                     new))))
     (valsi-pi--atomic-write-json
      path (valsi-pi--policy-object client dispatch-id tools files dry-run))
+    (when-let* ((process (valsi-pi-process client)))
+      (process-put process 'valsi-pi-policy-file path))
     path))
 
 (defun valsi-pi-claim-policy (client owner)
@@ -196,9 +207,41 @@ Only one live prompt or plan dispatch may replace the policy at a time."
 
 (defun valsi-pi-release-policy (client owner)
   "Release CLIENT's policy authority when it is still owned by OWNER."
-  (when (equal owner (valsi-pi-policy-owner client))
+  (when (and owner (equal owner (valsi-pi-policy-owner client)))
+    (valsi-pi-set-policy client "released:deny-all" nil nil t)
     (setf (valsi-pi-policy-owner client) nil)
     t))
+
+(defun valsi-pi--cleanup (client &optional process)
+  "Release CLIENT's resources, or only those belonging to old PROCESS.
+Capture bounded stderr text before killing its buffer.  A delayed sentinel
+must not remove a replacement process's policy or reset its owner."
+  (let* ((current (or (null process) (eq process (valsi-pi-process client))))
+         (path (if process (process-get process 'valsi-pi-policy-file)
+                 (valsi-pi-policy-file client)))
+         (buffer (if process (process-get process 'valsi-pi-stderr-buffer)
+                   (valsi-pi-stderr-buffer client)))
+         (stderr (valsi-pi--stderr-string client process)))
+    (when process
+      (process-put process 'valsi-pi-stderr-text stderr))
+    (when current
+      (setf (valsi-pi-process client) nil
+            (valsi-pi-policy-owner client) nil
+            (valsi-pi-policy-file client) nil
+            (valsi-pi-stderr-buffer client) nil
+            (valsi-pi-stderr-text client) stderr)
+      (setq valsi-pi--clients (delq client valsi-pi--clients)))
+    (when (buffer-live-p buffer) (kill-buffer buffer))
+    (when (and path (file-exists-p path)) (delete-file path))))
+
+(defun valsi-pi--shutdown ()
+  "Stop clients and release their temporary resources on Emacs exit."
+  (dolist (client (copy-sequence valsi-pi--clients))
+    (condition-case err
+        (valsi-harness-stop client)
+      (error (message "Valsi Pi cleanup failed: %s" (error-message-string err))))))
+
+(add-hook 'kill-emacs-hook #'valsi-pi--shutdown)
 
 (defun valsi-pi--command (client)
   "Return the complete audited subprocess command for CLIENT."
@@ -222,6 +265,7 @@ Only one live prompt or plan dispatch may replace the policy at a time."
   "Start CLIENT's Pi subprocess unless it is already live."
   (valsi-pi--require-json)
   (unless (valsi-harness-live-p client)
+    (valsi-pi--cleanup client (valsi-pi-process client))
     (let* ((default-directory (file-name-as-directory
                                (expand-file-name (valsi-pi-directory client))))
            (policy-file (and (valsi-pi-policy-gate client)
@@ -232,8 +276,13 @@ Only one live prompt or plan dispatch may replace the policy at a time."
                       process-environment)
               process-environment))
            (stderr (generate-new-buffer " *valsi-pi-stderr*"))
-           (process
-            (make-process
+           process)
+      (cl-pushnew client valsi-pi--clients :test #'eq)
+      (setf (valsi-pi-stderr-buffer client) stderr
+            (valsi-pi-stderr-text client) nil)
+      (condition-case err
+          (setq process
+                (make-process
              :name "valsi-pi"
              :command (valsi-pi--command client)
              :coding '(utf-8-unix . utf-8-unix)
@@ -241,11 +290,15 @@ Only one live prompt or plan dispatch may replace the policy at a time."
              :noquery t
              :stderr stderr
              :filter #'valsi-pi--process-filter
-             :sentinel #'valsi-pi--process-sentinel)))
+                 :sentinel #'valsi-pi--process-sentinel))
+        (error
+         (valsi-pi--cleanup client)
+         (signal (car err) (cdr err))))
       (set-process-query-on-exit-flag process nil)
       (process-put process 'valsi-pi-client client)
       (process-put process 'valsi-pi-deliberate-stop nil)
       (process-put process 'valsi-pi-stderr-buffer stderr)
+      (process-put process 'valsi-pi-policy-file policy-file)
       (setf (valsi-pi-process client) process
             (valsi-pi-stderr-buffer client) stderr
             (valsi-pi-receive-buffer client) "")
@@ -258,8 +311,10 @@ Only one live prompt or plan dispatch may replace the policy at a time."
     (when (process-live-p process)
       (process-put process 'valsi-pi-deliberate-stop t)
       (delete-process process))
-    (setf (valsi-pi-process client) nil)
-    (setf (valsi-pi-policy-owner client) nil)
+    ;; delete-process may already have run the sentinel and a callback may
+    ;; have started a replacement. Never clean that replacement's resources.
+    (when (eq process (valsi-pi-process client))
+      (valsi-pi--cleanup client process))
     (valsi-pi--fail-pending client "Pi stopped" process)
     (valsi-pi--fail-session-lists client "Pi stopped" process)
     (valsi-harness-emit client (list :type 'stopped)))
@@ -284,7 +339,10 @@ sentinel from the old process cannot affect requests sent to the replacement."
     ;; protocol compatibility and must not appear as an unmatched record.
     (puthash id (list :callback callback
                       :command (plist-get command :type)
-                      :process (valsi-pi-process client))
+                      :process (valsi-pi-process client)
+                      :timer (run-at-time
+                              valsi-pi-request-timeout nil
+                              #'valsi-pi--request-timeout client id))
              (valsi-pi-pending client))
     (condition-case err
         (process-send-string
@@ -293,10 +351,27 @@ sentinel from the old process cannot affect requests sent to the replacement."
                                  :false-object :json-false)
                  "\n"))
       (error
-       (remhash id (valsi-pi-pending client))
+       (valsi-pi--take-pending client id)
        (when callback (valsi-pi--call-callback client callback nil err))
        (signal (car err) (cdr err))))
     id))
+
+(defun valsi-pi--take-pending (client id)
+  "Remove CLIENT's pending ID, cancel its timer, and return its entry."
+  (let ((entry (gethash id (valsi-pi-pending client))))
+    (remhash id (valsi-pi-pending client))
+    (when (and (listp entry) (not (functionp entry)))
+      (when-let* ((timer (plist-get entry :timer))) (cancel-timer timer)))
+    entry))
+
+(defun valsi-pi--request-timeout (client id)
+  "Fail CLIENT's unanswered request ID once and release its callback."
+  (when-let* ((entry (valsi-pi--take-pending client id))
+              (callback (valsi-pi--pending-callback entry)))
+    (valsi-pi--call-callback
+     client callback nil
+     (list 'error (format "Pi request timed out: %s"
+                          (valsi-pi--pending-command entry))))))
 
 (defun valsi-pi--require-session-client (client)
   "Require CLIENT to be a Pi session authority."
@@ -501,7 +576,7 @@ status arrives as a `valsi-auth-status' extension UI event."
                          (plist-get record :success)
                          (valsi-pi--accept-state client record))))
               (when entry
-                (remhash id (valsi-pi-pending client))
+                (valsi-pi--take-pending client id)
                 (when callback
                   (if (or mismatch state-error)
                       (valsi-pi--call-callback
@@ -543,8 +618,7 @@ status arrives as a `valsi-auth-status' extension UI event."
   "Report PROCESS state change EVENT and fail requests on exit."
   (let ((client (process-get process 'valsi-pi-client)))
     (when (and client (not (process-live-p process)))
-      (when (eq process (valsi-pi-process client))
-        (setf (valsi-pi-process client) nil))
+      (valsi-pi--cleanup client process)
       (valsi-pi--fail-pending client (string-trim event) process)
       (valsi-pi--fail-session-lists client (string-trim event) process)
       (valsi-harness-emit
@@ -647,7 +721,7 @@ When PROCESS is nil, fail every pending callback."
                        callbacks)))
              (valsi-pi-pending client))
     (dolist (item callbacks)
-      (remhash (car item) (valsi-pi-pending client))
+      (valsi-pi--take-pending client (car item))
       (when (cdr item)
         (valsi-pi--call-callback
          client (cdr item) nil (list 'error reason))))))
@@ -658,8 +732,12 @@ When PROCESS is nil, fail every pending callback."
                     (process-get process 'valsi-pi-stderr-buffer)
                   (valsi-pi-stderr-buffer client))))
     (if (buffer-live-p buffer)
-        (with-current-buffer buffer (buffer-string))
-      "")))
+        (with-current-buffer buffer
+          (buffer-substring-no-properties (max (point-min) (- (point-max) 16384))
+                                          (point-max)))
+      (or (if process (process-get process 'valsi-pi-stderr-text)
+            (valsi-pi-stderr-text client))
+          ""))))
 
 (provide 'valsi-pi)
 ;;; valsi-pi.el ends here
