@@ -9,7 +9,7 @@
 ;;;
 ;;; The dev shell mirrors the Makefile's pinned tool set
 ;;; (nss-certs + emacs + emacs-markdown-mode + emacs-eat); see `guix-check'
-;;; target.  Emacs floor is 29.1; CI/dev run on 30.2 (ADR 0002).
+;;; target.  See .github/workflows/ci.yml for the tested Emacs versions.
 
 (use-modules (guix packages)
              (guix gexp)
@@ -41,7 +41,8 @@
           "0l00w07fijmwl3ha63b7l6xy1h0kn5qxx4m2zch941v7433ib0rv"
           "/lib/ld-linux-aarch64.so.1"))
    (else
-    (error "Pi 0.80.6 has no packaged release asset for system" system))))
+    (error "Pi has no packaged release asset for version/system"
+           %pi-version system))))
 
 (define pi-runtime
   (let* ((system (or (%current-target-system) (%current-system)))
@@ -179,14 +180,15 @@ server without a global npm installation.")
    (list (search-path-specification
           (variable "EMACSLOADPATH")
           (files '("share/emacs/site-lisp")))))
-  ;; nss-certs is here so the dev shell has the TLS roots the R-track needs.
+  ;; TLS roots for network tools in the development shell.
   (native-inputs (list nss-certs))
   (home-page "https://github.com/9s-l-s9/valsi")
   (synopsis "Emacs application for agent artifacts and terminal agents")
   (description
    "Valsi is an Emacs client/server harness for the structured markdown
 artifacts agents read and write --- plan/tasks, instruction (AGENTS.md/
-CLAUDE.md), prompt-file (SKILL.md/subagents/commands), and memory --- unified
+CLAUDE.md), prompt-file (SKILL.md/subagents/commands), memory, changelog,
+decision, and overview --- unified
 by a cross-artifact link graph.  Grammars are @emph{descriptive}: tolerant
 recognizers over plain markdown that annotate but never reject, so files stay
 ordinary and portable.  It is the reference implementation of the Agent

@@ -28,7 +28,8 @@ dependency. See the "Grammars are yours to define" principle in ADR 0001.
 - **Toolchain**: `Makefile` + ERT; grammars/model run inside Emacs; reproducible
   **Guix** package (`valsi.scm`); `jsonrpc.el` (built in) for the AAP transport
   (ADR 0004).
-- **Emacs floor: 29.1**; **dev/CI runs on 30.2** (what Guix currently provides).
+- **Emacs floor: 29.1**; see `.github/workflows/ci.yml` for the CI matrix.
+  The original Guix toolchain check used 30.2, as recorded below.
   29.1 gives mature `jsonrpc.el`, bundled eglot (client reference), `secure-hash`,
   `base64url-encode-string`, and `make-network-process` — everything
   `valsi-agent-auth` and the server/client need, without

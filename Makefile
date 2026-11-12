@@ -4,7 +4,7 @@
 
 EMACS ?= emacs
 GUIX  ?= guix
-# The extension tests are node:test files; Bun runs them too (CI uses Bun).
+# The extension tests are node:test files; Bun runs them too (CI uses Node).
 NODE  ?= node
 MAKEINFO ?= makeinfo
 
@@ -26,7 +26,8 @@ TEST_SUPPORT = lisp/valsi-harness.el lisp/valsi-pi.el
 ELC = $(SRC:.el=.elc) $(TEST_SUPPORT:.el=.elc)
 TESTS = $(sort $(wildcard test/*-test.el))
 
-BATCH = $(EMACS) -Q --batch -L lisp -L test -L test/conformance
+BATCH = $(EMACS) -Q --batch --eval "(setq load-prefer-newer t)" \
+	-L lisp -L test -L test/conformance
 
 .PHONY: all check check-all compile ensure-emacs test test-extension benchmark \
 	conformance lint verify-meta info clean \

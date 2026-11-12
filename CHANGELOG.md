@@ -63,6 +63,8 @@ grammar activates.
 
 ### Fixed
 
+- Standalone test, conformance, and benchmark runs load newer source instead
+  of stale bytecode left by an earlier build (#92).
 - Family dashboards refresh from their source artifacts, including unsaved
   edits, instead of parsing their own rendered tables. Outline navigation
   returns to the original artifact, and each dashboard keeps its own Enter
