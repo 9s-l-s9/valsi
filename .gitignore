@@ -15,3 +15,4 @@
 
 # make verify-meta scratch
 .meta.tmp
+/coverage.json

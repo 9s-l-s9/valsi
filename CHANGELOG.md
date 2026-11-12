@@ -9,6 +9,11 @@ grammar activates.
 
 ### Added
 
+- Optional `make coverage` reports execution points and missed lines using
+  built-in Emacs instrumentation, without an external dependency or coverage
+  threshold. Direct tests cover context ownership, verification, SemVer,
+  ADR helpers and family dashboard commands; scale checks use work counts
+  instead of wall-clock assertions (#106).
 - A working-project overview (`valsi-projects`) with shared artifact attention,
   named agents, add/remove/filter actions, and explicit root persistence.
 - Project switching restores each project's windows and selected buffer per
@@ -63,6 +68,8 @@ grammar activates.
 
 ### Fixed
 
+- ADR directory discovery handles buffers without a file without a matching ADR
+  directory, returning no entries instead of a type error (#106).
 - The graph reads each file once, shares its parsed tree among applicable
   grammar sources, excludes fenced examples and unrelated prose, and shows
   discovery, read, and source errors alongside successful edges (#102).

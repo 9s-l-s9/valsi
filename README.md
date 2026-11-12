@@ -188,6 +188,16 @@ To try everything in a scratch Emacs:
 `make run` opens the project's PLAN.md, or `examples/PLAN.md` when the
 project has none.
 
+`make coverage` runs ERT with Emacs's built-in Edebug instrumentation and
+writes `coverage.json`, including per-function counts and missed source lines.
+It measures executed evaluation points, not branch coverage; subprocesses and
+external programs are outside that measurement. Coverage has no pass threshold
+and is separate from `make check`. To focus a run, set `COVERAGE_FILES` to a
+space-separated list of Lisp source paths and `TESTS` to the relevant test
+files. `COVERAGE_REPORT` changes the output path. Use `make benchmark` for
+latency measurements; ERT scale checks count work instead of imposing timing
+limits on a loaded machine.
+
 ## Documentation
 
 The reference manual is `doc/valsi.texi` (`make info` builds

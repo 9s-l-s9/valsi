@@ -77,7 +77,9 @@
 
 (ert-deftest valsi-responsiveness-long-dependencies ()
   "Long chains and cycles lint completely without recursive graph traversal."
-  (let ((max-lisp-eval-depth 100))
+  ;; Edebug coverage adds constant interpreter frames; the budget still stays
+  ;; far below the 2000-node chain and catches recursive graph traversal.
+  (let ((max-lisp-eval-depth 200))
     (should-not (valsi-plan--lint-collect
                  (valsi-plan-parse (valsi-responsiveness--chain 2000))))
     (let* ((tree (valsi-plan-parse (valsi-responsiveness--chain 2000 t)))

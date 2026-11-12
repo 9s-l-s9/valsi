@@ -354,15 +354,15 @@ Prefer the visited file's own directory when it is an ADR directory, then
 the first of `valsi-decision-dirs' under the project, then the visited
 file's directory."
   (let ((own (and buffer-file-name (file-name-directory buffer-file-name)))
-        (root (or (and (fboundp 'project-current) (project-current)
-                       (project-root (project-current)))
+        (root (or (and (fboundp 'project-current) (project-current nil)
+                       (project-root (project-current nil)))
                   default-directory)))
     (if (and own (string-match-p valsi-decision-dir-re own))
         own
       (cl-find-if #'file-directory-p
                   (append (mapcar (lambda (d) (expand-file-name d root))
                                   valsi-decision-dirs)
-                          (list own))))))
+                          (and own (list own)))))))
 
 (defun valsi-decision--adr-p (file root)
   "Return non-nil when FILE, parsed as ROOT, is likely an ADR.

@@ -6,10 +6,8 @@
 ;; v1.0 hardening: parse + serialize at scale.  The reparse
 ;; model is cache + full reparse on change (the client caches `valsi--tree' and
 ;; invalidates it on edit), so the load-bearing perf property is that a full
-;; parse of a large plan is fast and correct, and that the edit->reparse loop
-;; stays cheap.  Time budgets are deliberately generous (CI headroom); the point
-;; is to catch pathological blow-ups, and to print elapsed times as a profiling
-;; record.
+;; parse of a large plan is correct and performs bounded work.  Timing remains
+;; diagnostic only; `make benchmark' records interactive latency separately.
 
 ;;; Code:
 
@@ -42,14 +40,17 @@
        elapsed)))
 
 (ert-deftest valsi-test-perf-parse-large ()
-  "A large plan parses correctly and quickly."
+  "A large plan parses correctly with bounded regexp work."
   (let* ((content (valsi-perf--big-plan))
          (want (* valsi-perf--phases valsi-perf--per-phase))
-         root elapsed)
-    (setq elapsed (valsi-perf--timed "parse 2000-task plan"
-                    (setq root (valsi-plan-parse content))))
+         root
+         (count (valsi-perf--count-regexps
+                 (lambda ()
+                   (valsi-perf--timed "parse 2000-task plan"
+                     (setq root (valsi-plan-parse content)))))))
     (should (= want (length (valsi-node-of-type root 'task))))
-    (should (< elapsed 5.0))))
+    ;; Includes ID, state, tag and dependency recognition for every task.
+    (should (< (car count) (* 12 want)))))
 
 (ert-deftest valsi-test-perf-serialize-large ()
   "Serializing a large tree to the wire plist preserves every node."
@@ -64,19 +65,21 @@
       (should (= count rehydrated)))))
 
 (ert-deftest valsi-test-perf-reparse-loop ()
-  "The edit->reparse loop (full reparse each time) stays cheap."
+  "Repeated full parses do the same bounded work without accumulating state."
   (let ((content (valsi-perf--big-plan))
-        (iterations 20)
-        (elapsed 0.0))
-    (setq elapsed
-          (valsi-perf--timed (format "%d full reparses" iterations)
-            (dotimes (_ iterations) (valsi-plan-parse content))))
-    (should (< elapsed 15.0))))
+        (iterations 20))
+    (let ((one (valsi-perf--count-regexps (lambda () (valsi-plan-parse content))))
+          (many (valsi-perf--count-regexps
+                 (lambda ()
+                   (valsi-perf--timed (format "%d full reparses" iterations)
+                     (dotimes (_ iterations) (valsi-plan-parse content)))))))
+      (should (> (car one) 0))
+      (should (= (* iterations (car one)) (car many)))
+      (should (= (cdr one) (cdr many))))))
 
 ;;;; Regexp work per line
 ;;
-;; Wall-clock budgets above are generous, so a constant-factor slowdown
-;; slips through them.  These guards count regexp calls instead, which is
+;; These guards count regexp calls, which is
 ;; deterministic: every per-line recognizer that runs its regexp on lines
 ;; it cannot match costs a full match attempt, and once a parse uses more
 ;; distinct regexps than Emacs's compiled-pattern cache holds (20 entries,

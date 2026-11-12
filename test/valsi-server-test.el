@@ -154,6 +154,7 @@
              (call-process-region
               (point-min) (point-max) program t t nil
               "-Q" "--batch" "-L" (expand-file-name "lisp" default-directory)
+              "--eval" "(setq load-prefer-newer t)"
               "-l" "valsi-server" "-f" "valsi-server-stdio")))
         (should (zerop status))
         (goto-char (point-min))
@@ -361,7 +362,6 @@
   (valsi-proto-reset)
   (let* ((grammars (valsi-registry-all))
          (line (concat (make-string 3900 ?a) "\n"))
-         (start (float-time))
          (responses
           (apply
            #'valsi-server-test--exchange
@@ -388,12 +388,11 @@
     (should (string-match-p "rejected (too many unbounded"
                             (plist-get (plist-get (car responses) :error)
                                        :data)))
-    (should (< (- (float-time) start) 5))
     (should (equal grammars (valsi-registry-all)))
     (valsi-proto-reset)))
 
-(ert-deftest valsi-test-server-accepted-regexps-stay-fast ()
-  "Issue #80: legitimate regexps register and run quickly on long input."
+(ert-deftest valsi-test-server-accepted-regexps-handle-long-input ()
+  "Issue #80: legitimate regexps register and answer on long input."
   (skip-unless (json-available-p))
   (valsi-server-init)
   (valsi-proto-reset)
@@ -415,7 +414,6 @@
                            (list (list :uriSuffix ".legit")
                                  (list (list :type "x" :regexp re)))
                          (list (list :textRegexp re :uriRegexp re))))
-                 (start (float-time))
                  (responses
                   (valsi-server-test--exchange
                    (apply #'valsi-server-test--register "legit" spec)
@@ -427,10 +425,39 @@
                                                      (substring long 0 1999)
                                                      "\n"))))))
             (should (equal (list re nil nil nil)
-                           (cons re (valsi-server-test--codes responses))))
-            (should (< (- (float-time) start) 2))))
+                           (cons re (valsi-server-test--codes responses))))))
       (valsi-registry-unregister 'legit)
       (valsi-proto-reset))))
+
+(ert-deftest valsi-test-server-declarative-work-is-bounded ()
+  "Count match calls and input sizes instead of elapsed time on a CI runner."
+  (let* ((regexp "^[a-z]*[a-z]*!x")
+         (limit (valsi-registry--regexp-limit regexp t))
+         (parser (valsi-registry--declarative-parser
+                  'bounded 'document (list (list :type "x" :regexp regexp))))
+         (original (symbol-function 'string-match))
+         lengths)
+    (cl-letf (((symbol-function 'string-match)
+               (lambda (pattern string &rest args)
+                 (when (equal regexp pattern) (push (length string) lengths))
+                 (apply original pattern string args))))
+      (funcall parser (concat (make-string (1+ limit) ?a) "\n"
+                              (make-string limit ?a) "\nshort\n")))
+    ;; The oversized line must never reach the regexp engine.
+    (should (equal (list limit 5) (nreverse lengths))))
+  (let* ((regexp ".*x")
+         (limit (valsi-registry--regexp-limit regexp))
+         (matcher (valsi-registry--declarative-matcher
+                   (list :uriRegexp regexp :textRegexp regexp)))
+         (original (symbol-function 'string-match))
+         lengths)
+    (cl-letf (((symbol-function 'string-match)
+               (lambda (pattern string &rest args)
+                 (when (equal regexp pattern) (push (length string) lengths))
+                 (apply original pattern string args))))
+      (funcall matcher (make-string (1+ limit) ?a) (make-string (* 2 limit) ?a)))
+    ;; Long URIs are skipped and text is truncated before the single match.
+    (should (equal (list limit) lengths))))
 
 (ert-deftest valsi-test-server-declarative-deadline-bounds-request ()
   "Issue #80: declared regexps stop matching after the request deadline."
@@ -695,6 +722,7 @@ ENVIRONMENT entries are prepended to `process-environment'."
                             (point-min) (point-max) (valsi-test-emacs-program)
                             t (list t stderr) nil
                             "-Q" "--batch"
+                            "--eval" "(setq load-prefer-newer t)"
                             "-L" (expand-file-name "lisp" default-directory)
                             "-l" "valsi-server"
                             "--eval" "(fset 'json-available-p #'ignore)"
