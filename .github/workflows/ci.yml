@@ -4,17 +4,21 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   check:
     runs-on: ubuntu-latest
+    continue-on-error: ${{ matrix.emacs-version == 'snapshot' }}
     strategy:
       fail-fast: false
       matrix:
-        # The supported floor and the current release (README).
-        emacs-version: ['29.1', '30.1']
+        # Supported floor, maintained releases, and early warning for development.
+        emacs-version: ['29.1', '30.2', '31.1', 'snapshot']
     steps:
-      - uses: actions/checkout@v5
-      - uses: purcell/setup-emacs@master
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: purcell/setup-emacs@34c6ded44899fd1bf74d2889558befd1750e61a7 # 2026-08-24
         with:
           version: ${{ matrix.emacs-version }}
       # compile (warnings are errors) + checkdoc + verify-meta + ERT, same
@@ -26,10 +30,10 @@ jobs:
   check-optional:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: purcell/setup-emacs@master
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: purcell/setup-emacs@34c6ded44899fd1bf74d2889558befd1750e61a7 # 2026-08-24
         with:
-          version: '30.1'
+          version: '31.1'
       - name: Install optional packages
         run: |
           emacs -Q --batch --eval "(progn
@@ -53,15 +57,24 @@ jobs:
   info:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - run: sudo apt-get update && sudo apt-get install -y texinfo
-      - run: make info
+      - name: Build the manual without warnings
+        run: |
+          # Texinfo has no warnings-as-errors option. Keep diagnostics visible
+          # on failure, and reject warnings even when makeinfo exits zero.
+          if ! make info 2>makeinfo.log; then
+            cat makeinfo.log >&2
+            exit 1
+          fi
+          cat makeinfo.log >&2
+          test ! -s makeinfo.log
 
   extension:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: '22'
       - run: make test-extension

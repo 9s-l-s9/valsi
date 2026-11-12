@@ -63,6 +63,8 @@ grammar activates.
 
 ### Fixed
 
+- CI pins action revisions, checks Emacs 29.1, 30.2, and 31.1 plus an
+  advisory snapshot job, and treats manual-build warnings as failures (#93).
 - Named Pi terminals select separate, resumable sessions per project and name.
   Provider and model defaults come from Pi's configuration, and explicit
   session arguments override Valsi's selection (#96).
