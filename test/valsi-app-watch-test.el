@@ -11,6 +11,33 @@
 (require 'valsi-app)
 (require 'valsi-test-refresh)
 
+(defvar valsi-app-watch--eval-ran nil
+  "Whether a directory-local eval form ran during a test.")
+
+(ert-deftest valsi-app-watch-extra-ignores-read-locals-without-applying-them ()
+  "Local ignore patterns override defaults without executing other settings."
+  (let ((root (make-temp-file "valsi-watch-locals-" t))
+        (project-vc-ignores '("default/"))
+        (valsi-app-watch--eval-ran nil))
+    (unwind-protect
+        (progn
+          (should (equal '("default/")
+                         (valsi-app-live-refresh--extra-project-ignores root)))
+          (with-temp-file (expand-file-name ".dir-locals.el" root)
+            (prin1 '((nil . ((project-vc-ignores . ("local/"))
+                              (mode . emacs-lisp)
+                              (eval . (setq valsi-app-watch--eval-ran t)))))
+                   (current-buffer)))
+          (let ((mode major-mode))
+            (should (equal '("local/")
+                           (valsi-app-live-refresh--extra-project-ignores root)))
+            (should (eq mode major-mode))
+            (should-not valsi-app-watch--eval-ran))
+          (let ((enable-dir-local-variables nil))
+            (should (equal '("default/")
+                           (valsi-app-live-refresh--extra-project-ignores root)))))
+      (delete-directory root t))))
+
 (defmacro valsi-app-watch--with-project (&rest body)
   "Run BODY with ROOT, PROJECT and fake watch descriptors."
   (declare (indent 0))

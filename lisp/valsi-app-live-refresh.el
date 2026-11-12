@@ -583,6 +583,18 @@ including nested rules and negations."
                      (cond ((eq status 0) t) ((eq status 1) nil)
                            (t (error "Git ignore check failed for %s" directory)))))))))
 
+(defun valsi-app-live-refresh--extra-project-ignores (root)
+  "Return additional project ignore patterns configured at ROOT.
+Read directory locals without applying modes or evaluating local forms.
+Git's own ignore files are handled separately by `git check-ignore'."
+  (with-temp-buffer
+    (setq default-directory (file-name-as-directory root))
+    (when enable-dir-local-variables
+      (let ((enable-local-variables :all))
+        (hack-dir-local-variables)))
+    (alist-get 'project-vc-ignores file-local-variables-alist
+               (default-value 'project-vc-ignores))))
+
 (iter-defun valsi-app-live-refresh--watch-steps (project)
   "Discover queued PROJECT directories in bounded steps, pruning ignored trees."
   (when (and (not (file-remote-p (valsi-app-live-refresh--project-root project)))
@@ -594,8 +606,8 @@ including nested rules and negations."
            (git (and (eq (car-safe backend) 'vc)
                      (vc-call-backend 'Git 'root root)))
            ;; Git handles its own nested/negative rules. Extra project globs
-           ;; use the same directory-local lookup as project-files.
-           (ignores (if git (project--value-in-dir 'project-vc-ignores root)
+           ;; use directory locals without depending on private project APIs.
+           (ignores (if git (valsi-app-live-refresh--extra-project-ignores root)
                       (project-ignores backend root))))
       (when (valsi-app-live-refresh--project-watch-recheck project)
         (dolist (directory (hash-table-keys (valsi-app-live-refresh--project-watches project)))
