@@ -261,13 +261,17 @@ Context and Decision, @code{Positive Consequences} and
 heading Consequences is optional.  Other MADR sections (options, pros and
 cons) are recorded as plain sections.
 @code{Supersedes}/@code{Superseded by}/@code{Amends} references are
-highlighted but not resolved.
+highlighted but not resolved.  Lifecycle words are highlighted only on the
+parsed status line.  A bare @code{Superseded} is retained when parsing, but
+lint asks for the superseding ADR reference.
 
 Commands: @code{info} (title, status, and the sections present),
 @code{set-status} (also bound to toggle; rewrites the status value from a
-completing-read over the lifecycle values, available once a status exists; a
+completing-read over the lifecycle values, also available for empty records; a
 frontmatter or inline value is replaced in place, keeping its quotes and a
-lowercase spelling), a
+lowercase spelling, and a missing Status section is created).  Empty or
+unrecognized input is refused.  Choosing @code{Superseded} prompts for an ADR
+number and writes @samp{Superseded by ADR-NNNN}.  Other commands include a
 lint that reports a missing or non-standard status and missing canonical
 sections, and a dashboard listing every ADR in the decision directory with its
 title and status; @key{RET} on a row visits the record.  The decision

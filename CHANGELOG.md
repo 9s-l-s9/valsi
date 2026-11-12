@@ -63,6 +63,9 @@ grammar activates.
 
 ### Fixed
 
+- ADR status editing is available for empty records, requires a lifecycle
+  value and a superseding ADR where appropriate, and highlights lifecycle
+  words only on the parsed status line (#105).
 - Instruction sync handles large managed regions, uses the full narrowed
   source, protects open peer edits, and prevents nested imports on reverse
   sync. Text outside managed regions is preserved byte-for-byte (#100).

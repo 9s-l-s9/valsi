@@ -179,11 +179,11 @@
   (should (= 0 (valsi-decision-match "/p/notes.md" "No structure at all.\n"))))
 
 (ert-deftest valsi-test-decision-capabilities-set-status ()
-  "set-status is advertised only when a status value exists."
+  "set-status also repairs records without a status value."
   (should (memq 'set-status
                 (valsi-decision-capabilities
                  (valsi-decision-parse valsi-family-test--adr))))
-  (should-not (memq 'set-status
+  (should (memq 'set-status
                     (valsi-decision-capabilities
                      (valsi-decision-parse "# 1. Bare\n\nProse only.\n")))))
 
