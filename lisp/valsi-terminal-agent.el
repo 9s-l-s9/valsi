@@ -36,12 +36,8 @@
   :group 'valsi-terminal-agent)
 
 (defcustom valsi-agent-terminal-backends
-  ;; Pi's default arguments pin the ChatGPT-backed Codex provider, which is the
-  ;; intended no-API-key subscription path (see README): "no API key" means the
-  ;; ChatGPT subscription, not the absence of an explicit provider selection.
   '((pi :program "pi"
-        :arguments ("--continue" "--provider" "openai-codex"
-                    "--model" "gpt-5.5")
+        :arguments nil
         :capability full)
     (codex :program "codex" :arguments nil :capability terminal)
     (claude :program "claude" :arguments nil :capability terminal)
@@ -49,7 +45,11 @@
   "Agent terminal backend declarations.
 Each entry is (ID :program PROGRAM :arguments STRINGS :capability LEVEL).
 The initial LEVEL values are `full' and `terminal'; they describe Valsi
-integration, not the underlying CLI's coding capability."
+integration, not the underlying CLI's coding capability.
+Pi chooses its own provider and model.  By default, Valsi selects a stable
+Pi session for each project/name pair, including primary.  Explicit session
+selection arguments override that default; see
+`valsi-terminal-agent--pi-session-arguments'."
   :type '(repeat
           (list symbol
                 (const :program) (choice (const nil) string)
@@ -212,13 +212,35 @@ a missing trailing slash or a symlink alias finds the same agent."
                             "../extensions/valsi-pi/index.ts" lisp-dir))))))
     (seq-find #'file-readable-p candidates)))
 
-(defun valsi-terminal-agent--command-arguments (backend arguments)
-  "Return ARGUMENTS augmented with Valsi integration for BACKEND."
+(defun valsi-terminal-agent--pi-session-arguments (root name arguments)
+  "Select the Pi session for ROOT and NAME unless ARGUMENTS already do so.
+An explicit --session, --session-id, --continue, --resume, --fork, or
+--no-session (including short forms) leaves session selection to the user.
+--session-dir changes storage only, so it still receives a stable identity.
+Pi owns session storage and resumes the exact ID, creating it when absent."
+  (unless (seq-some
+           (lambda (argument)
+             (member (car (split-string argument "="))
+                     '("--session" "--session-id" "--continue" "-c"
+                       "--resume" "-r" "--fork" "--no-session")))
+           arguments)
+    (list "--session-id"
+          (concat "valsi-"
+                  (secure-hash
+                   'sha256
+                   (encode-coding-string
+                    (concat (valsi-project-canonical-root root) "\0" name)
+                    'utf-8))))))
+
+(defun valsi-terminal-agent--command-arguments (backend arguments &optional root name)
+  "Return ARGUMENTS with Valsi integration for BACKEND at ROOT and NAME."
   (if (not (eq backend 'pi))
       arguments
-    (if-let* ((extension (valsi-terminal-agent--pi-extension)))
-        (append arguments (list "--extension" extension))
-      arguments)))
+    (append arguments
+            (and root name
+                 (valsi-terminal-agent--pi-session-arguments root name arguments))
+            (when-let* ((extension (valsi-terminal-agent--pi-extension)))
+              (list "--extension" extension)))))
 
 (defvar valsi-terminal-agent-mode-map
   (let ((map (make-sparse-keymap)))
@@ -294,7 +316,7 @@ Deliberately small: the CLI owns every printable key."
                          (valsi-terminal-agent--pi-extension)))
          (arguments
           (valsi-terminal-agent--command-arguments
-           backend (copy-sequence (plist-get decl :arguments))))
+           backend (copy-sequence (plist-get decl :arguments)) root name))
          (project-name (valsi-project-label root))
          (terminal-name (format "Valsi Agent: %s · %s" (valsi-project-label root) name))
          (default-directory root)

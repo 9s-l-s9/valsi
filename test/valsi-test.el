@@ -1028,7 +1028,7 @@ interior-state contradictions."
       (kill-buffer source))))
 
 (ert-deftest valsi-test-terminal-agent-starts-stock-pi-in-project ()
-  "Terminal integration launches stock Pi with the declared subscription CLI."
+  "Terminal integration launches Pi in the project with its own session."
   (let ((root (file-name-as-directory
                (make-temp-file "valsi-agent-" t)))
         captured)
@@ -1045,11 +1045,11 @@ interior-state contradictions."
           (let ((instance
                  (valsi-terminal-agent--start root "primary" 'pi)))
             (should (equal "pi" (nth 1 captured)))
-            (should (equal '("--continue" "--provider" "openai-codex"
-                            "--model" "gpt-5.5")
-                           (seq-take (nth 3 captured) 5)))
+            (should (equal (valsi-terminal-agent--pi-session-arguments
+                            root "primary" nil)
+                           (seq-take (nth 3 captured) 2)))
             (should (equal "--extension"
-                           (nth 5 (nth 3 captured))))
+                           (nth 2 (nth 3 captured))))
             (should (equal root (nth 4 captured)))
             (should (eq 'pi
                         (valsi-terminal-agent-instance-backend instance)))))

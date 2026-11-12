@@ -63,6 +63,9 @@ grammar activates.
 
 ### Fixed
 
+- Named Pi terminals select separate, resumable sessions per project and name.
+  Provider and model defaults come from Pi's configuration, and explicit
+  session arguments override Valsi's selection (#96).
 - The Guix Pi launcher retains host paths, sockets, and the working directory
   while supplying the ELF loader. Invalid home directories fail explicitly;
   existing loader-directory contents are preserved (#94).

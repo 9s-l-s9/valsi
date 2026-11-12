@@ -393,12 +393,30 @@ automatic node review requires a real backend callback; Valsi never scrapes
 terminal output to infer completion.  The user can always open node review and
 verification explicitly.
 
+Pi chooses its provider and model from its own configuration.  To pin them,
+set @code{:arguments} in the Pi entry of @code{valsi-agent-terminal-backends}
+to @code{("--provider" "YOUR-PROVIDER" "--model" "YOUR-MODEL")}.
+By default Valsi passes @option{--session-id} with a stable identity for the
+canonical project path and agent name, including @code{primary}.  Different
+names have independent transcripts; restarting the same name resumes its
+session.  The first launch under this policy starts a new session instead of
+continuing the project's latest session.  Pi owns storage in its normal
+session directory.
+
+Explicit @option{--session}, @option{--session-id}, @option{--continue},
+@option{--resume}, @option{--fork}, or @option{--no-session} arguments
+(including short forms) override that selection.  Configuring
+@option{--continue} therefore makes all names continue the latest project
+session again.  @option{--session-dir} changes storage while retaining the
+separate identities.  The session CLI used here is provided by Pi 0.80.6,
+as pinned in @file{valsi.scm}.
+
 Authentication belongs to the CLI.  Pi stores and refreshes its own
 credentials and provides the tested OpenAI Codex via ChatGPT subscription path.
 Valsi never copies tokens or sessions.  Pi's Claude Pro/Max path may draw from
 Anthropic extra usage billed per token rather than included plan limits.
 
-Future multi-agent support adds named project terminal instances to the hub.
+Named project terminal instances appear in the hub.
 Valsi records only identity, backend, task association, process, worktree, and
 structured status.  Writing agents should normally use separate Git worktrees;
 credentials and transcripts remain with each CLI.

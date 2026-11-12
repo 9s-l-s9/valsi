@@ -58,6 +58,77 @@
             (should (valsi-terminal-agent-get (file-name-as-directory alias) "primary")))
         (when (file-symlink-p alias) (delete-file alias))))))
 
+(ert-deftest valsi-terminal-agent-test-pi-sessions-survive-restart-independently ()
+  "Named Pi terminals select independent sessions, also after restart (#96)."
+  (valsi-terminal-agent-test--with-root
+    (let ((make-terminal (symbol-function 'eat-make)) calls)
+      (cl-letf (((symbol-function 'eat-make)
+                 (lambda (name program startfile &rest arguments)
+                   (push arguments calls)
+                   (apply make-terminal name program startfile arguments))))
+        (dolist (name '("primary" "reviewer" "writer"))
+          (valsi-terminal-agent--start root name 'pi))
+        (let ((first (copy-sequence calls)))
+          (should (= 3 (length (delete-dups
+                                (mapcar (lambda (args)
+                                          (cadr (member "--session-id" args)))
+                                        first)))))
+          (dolist (args first)
+            (should (string-match-p "\\`valsi-[0-9a-f]\\{64\\}\\'"
+                                    (cadr (member "--session-id" args))))
+            (should-not (member "--continue" args))
+            (should-not (member "--provider" args))
+            (should-not (member "--model" args)))
+          ;; Terminate all processes and lose the in-memory registry, as on
+          ;; Emacs restart. No transcript or session file is read by Valsi.
+          (dolist (instance (valsi-terminal-agent-list root))
+            (delete-process (get-buffer-process
+                             (valsi-terminal-agent-instance-buffer instance))))
+          (clrhash valsi-terminal-agent--instances)
+          (setq calls nil)
+          (dolist (name '("primary" "reviewer" "writer"))
+            (valsi-terminal-agent--start root name 'pi))
+          (should (equal first calls)))))))
+
+(ert-deftest valsi-terminal-agent-test-pi-session-identity-is-project-scoped ()
+  "Canonical roots share identities; projects and arbitrary names differ."
+  (valsi-terminal-agent-test--with-root
+    (let ((alias (concat (directory-file-name root) "-alias"))
+          (other (expand-file-name "other" root)))
+      (unwind-protect
+          (progn
+            (make-symbolic-link root alias)
+            (make-directory other)
+            (let ((primary (valsi-terminal-agent--pi-session-arguments
+                            root "primary" nil)))
+              (should (equal primary (valsi-terminal-agent--pi-session-arguments
+                                      alias "primary" nil)))
+              (should-not (equal primary (valsi-terminal-agent--pi-session-arguments
+                                          other "primary" nil)))
+              (should-not (equal primary (valsi-terminal-agent--pi-session-arguments
+                                          root "../Prüfer / 🐈" nil)))))
+        (delete-file alias)))))
+
+(ert-deftest valsi-terminal-agent-test-pi-explicit-session-selection-wins ()
+  "Custom Pi session arguments are authoritative; other options stay intact."
+  (valsi-terminal-agent-test--with-root
+    (cl-letf (((symbol-function 'valsi-terminal-agent--pi-extension) #'ignore))
+      (dolist (args '(("--continue") ("-c") ("--resume") ("-r")
+                      ("--session" "saved.jsonl") ("--session-id" "chosen")
+                      ("--session-id=chosen") ("--no-session")
+                      ("--fork" "saved.jsonl")))
+        (should (equal args (valsi-terminal-agent--command-arguments
+                             'pi args root "reviewer"))))
+      (let* ((options '("--provider" "configured" "--model" "chosen"
+                        "--session-dir" "/session storage"))
+             (args (valsi-terminal-agent--command-arguments
+                    'pi options root "reviewer")))
+        (should (equal options (seq-take args (length options))))
+        (should (member "--session-id" args)))
+      (should (equal '("custom-option")
+                     (valsi-terminal-agent--command-arguments
+                      'claude '("custom-option") root "reviewer"))))))
+
 (ert-deftest valsi-terminal-agent-test-target-respects-explicit-name ()
   "An explicitly named target that is not running is an error (#40)."
   (valsi-terminal-agent-test--with-root

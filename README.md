@@ -102,6 +102,27 @@ terminals, with single-key navigation (`n`/`p`, `TAB`, `RET`, `g`,
 terminal; the CLI keeps its own prompt, tools, and credentials, and
 Valsi hands it artifact context rather than wrapping it.
 
+Pi chooses its provider and model from its own configuration. Valsi passes
+`--session-id` with a stable identity for each canonical project path and agent
+name, including `primary`. Different names get independent transcripts;
+restarting the same name resumes its session. The first launch with this policy
+creates a new session instead of continuing the project's most recent session.
+Pi keeps its session files in its normal storage location.
+
+To pin your own provider/model, customize the Pi entry, for example:
+
+```elisp
+(setf (plist-get (cdr (assq 'pi valsi-agent-terminal-backends)) :arguments)
+      '("--provider" "YOUR-PROVIDER" "--model" "YOUR-MODEL"))
+```
+
+Explicit session options (`--session`, `--session-id`, `--continue`, `--resume`,
+`--fork`, or `--no-session`, including short forms) override Valsi's session
+selection. In particular, configuring `--continue` makes all names continue the
+project's latest session again. `--session-dir` changes the storage location
+while keeping separate identities. This uses the session CLI of Pi 0.80.6,
+the version pinned by `valsi.scm`.
+
 `M-x valsi-projects` opens the working-project overview. Use `+` to add a
 project from Emacs's known projects (or choose another directory), `RET` to
 resume it, `c` for its hub, `a` for its primary agent, and `N` for a new named

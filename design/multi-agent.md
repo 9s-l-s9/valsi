@@ -78,6 +78,16 @@ explicitly outside this model:
 Restarting Valsi may offer to reopen declared instances, but each CLI remains
 responsible for resuming its own session.
 
+For Pi, Valsi passes `--session-id` with a stable hash of the canonical project
+root and agent name (including `primary`). Pi creates or resumes that exact
+session in its own storage. Names therefore remain independent across stops
+and Emacs restarts. The first launch under this policy starts a fresh session;
+it does not adopt the latest unrelated project session. Pi's provider and model
+come from its configuration unless the user sets explicit backend arguments.
+Explicit session-selection flags override Valsi's default; `--continue` then
+opts back into sharing the project's latest session. `--session-dir` alone
+changes storage without changing the per-name identity.
+
 ## 3. Hub and switching
 
 The existing Agents section grows into a compact table:
