@@ -89,6 +89,17 @@ silently clobbers a target. The region computation
 (`valsi-instruction--sync-region`) is a pure string function, tested without
 touching the filesystem.
 
+Narrowing the source does not limit sync: it always uses the full buffer.
+Managed regions already imported into the source are omitted, preventing
+feedback when syncing a peer back to the original file. Nested or duplicate
+managed regions in a target are consolidated; unmatched markers stop the sync
+before any file is written. Large regions use bounded marker searches.
+
+Open peers are updated through their visiting buffers. Save unsaved edits or
+revert externally changed peers before syncing; Valsi checks all selected peers
+before starting writes and checks each again after its confirmation prompt.
+Peers that are symlinks to the source are skipped.
+
 ## Scaffold
 
 `M-x valsi-instruction-scaffold` writes a starter instruction file (default

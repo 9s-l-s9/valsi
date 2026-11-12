@@ -63,6 +63,9 @@ grammar activates.
 
 ### Fixed
 
+- Instruction sync handles large managed regions, uses the full narrowed
+  source, protects open peer edits, and prevents nested imports on reverse
+  sync. Text outside managed regions is preserved byte-for-byte (#100).
 - Session-only project layouts are excluded from frameset/desktop persistence.
   Forgetting a project releases its saved layouts in every frame (#103).
 - Nested plans resolve file references against the project root before their

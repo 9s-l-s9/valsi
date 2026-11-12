@@ -23,6 +23,7 @@
 (require 'valsi-view)
 
 (declare-function valsi-tree "valsi")
+(declare-function valsi--call-browse-editable "valsi" (fn))
 
 (defconst valsi-instruction-emphasis-re
   "\\_<\\(IMPORTANT\\|YOU MUST\\|MUST NOT\\|MUST\\|NEVER\\|ALWAYS\\|DO NOT\\|CRITICAL\\)\\_>"
@@ -490,21 +491,60 @@ with no globs/applyTo and not alwaysApply) and dangling imports."
   "<!-- valsi:sync:end -->"
   "Closing fence of a managed sync region in a target file.")
 
+(defun valsi-instruction--sync-spans (text)
+  "Return outer managed-region spans in TEXT, rejecting unmatched markers.
+Each span is (BEG . END), using string offsets.  Nested old regions are
+included in their outer region so a later sync can repair them."
+  (let ((begin (string-search valsi-instruction-sync-begin text))
+        (end (string-search valsi-instruction-sync-end text))
+        (depth 0) start spans)
+    (while (or begin end)
+      (if (and begin (or (null end) (< begin end)))
+          (progn
+            (when (zerop depth) (setq start begin))
+            (cl-incf depth)
+            (setq begin (string-search
+                         valsi-instruction-sync-begin text
+                         (+ begin (length valsi-instruction-sync-begin)))))
+        (when (zerop depth) (user-error "Unmatched Valsi sync end marker"))
+        (cl-decf depth)
+        (let ((after (+ end (length valsi-instruction-sync-end))))
+          (when (zerop depth) (push (cons start after) spans))
+          (setq end (string-search valsi-instruction-sync-end text after)))))
+    (unless (zerop depth) (user-error "Unmatched Valsi sync begin marker"))
+    (nreverse spans)))
+
+(defun valsi-instruction--sync-replace-spans (text spans replacement)
+  "Replace SPANS in TEXT with REPLACEMENT at the first span.
+Remove the remaining spans, preserving every byte outside them."
+  (let ((offset 0) parts)
+    (dolist (span spans)
+      (push (substring text offset (car span)) parts)
+      (when replacement
+        (push replacement parts)
+        (setq replacement nil))
+      (setq offset (cdr span)))
+    (push (substring text offset) parts)
+    (apply #'concat (nreverse parts))))
+
 (defun valsi-instruction--sync-region (source target)
   "Return TARGET content carrying SOURCE in a managed region.
 If TARGET already has a managed region it is replaced in place; otherwise the
 region is appended.  Pure: no filesystem access.  SOURCE and TARGET are strings.
-Content outside the managed region is preserved verbatim."
-  (let* ((block (concat valsi-instruction-sync-begin "\n"
+Content outside managed regions is preserved verbatim.  Omit SOURCE's imported
+managed regions, and collapse nested or duplicate TARGET regions into one."
+  (let* ((source (valsi-instruction--sync-replace-spans
+                  source (valsi-instruction--sync-spans source) nil))
+         (block (concat valsi-instruction-sync-begin "\n"
                         (string-trim-right source) "\n"
                         valsi-instruction-sync-end))
-         (re (concat (regexp-quote valsi-instruction-sync-begin)
-                     "\\(?:.\\|\n\\)*?"
-                     (regexp-quote valsi-instruction-sync-end))))
-    (if (string-match re target)
-        (replace-match block t t target)
-      (concat (string-trim-right target)
-              (if (string-empty-p (string-trim target)) "" "\n\n")
+         (spans (valsi-instruction--sync-spans target)))
+    (if spans
+        (valsi-instruction--sync-replace-spans target spans block)
+      (concat target
+              (cond ((or (string-empty-p target) (string-suffix-p "\n\n" target)) "")
+                    ((string-suffix-p "\n" target) "\n")
+                    (t "\n\n"))
               block "\n"))))
 
 (defun valsi-instruction--peer-targets (src-file)
@@ -517,28 +557,72 @@ Content outside the managed region is preserved verbatim."
 (defun valsi-instruction-sync ()
   "Sync this instruction file into peer targets' managed regions.
 This file is the source; each chosen sibling target gets a managed region
-mirroring it, preserving the target's own content outside the region."
+mirroring it, preserving the target's own content outside the region.
+Use the full source and refuse modified or externally changed peer buffers."
   (interactive)
   (let* ((src-file (or buffer-file-name (user-error "Buffer has no file")))
-         (source (buffer-substring-no-properties (point-min) (point-max)))
+         (source (save-restriction
+                   (widen)
+                   (buffer-substring-no-properties (point-min) (point-max))))
          (targets (valsi-instruction--peer-targets src-file))
          (names (mapcar #'file-name-nondirectory targets))
          (picked (completing-read-multiple
                   "Sync into peers (comma-separated): "
                   names nil t (string-join names ",")))
-         (written 0))
-    (dolist (name picked)
-      (let* ((path (expand-file-name name (file-name-directory src-file)))
-             (old (if (file-readable-p path)
-                      (with-temp-buffer (insert-file-contents path)
-                                        (buffer-string))
-                    ""))
-             (new (valsi-instruction--sync-region source old)))
-        (when (and (not (string= old new))
-                   (y-or-n-p (format "Write %s? " name)))
-          (with-temp-buffer (insert new) (write-region nil nil path))
-          (cl-incf written))))
+         (written 0) created updates)
+    (unwind-protect
+        (progn
+          ;; Prepare every peer before writing any, so a modified buffer or
+          ;; malformed marker in a later peer cannot cause a partial sync.
+          (dolist (name (delete-dups picked))
+            (unless (member name names) (user-error "Not an instruction peer: %s" name))
+            (let ((path (expand-file-name name (file-name-directory src-file))))
+              (unless (equal (file-truename path) (file-truename src-file))
+                (let* ((existing (find-buffer-visiting path))
+                       (peer (or existing (find-file-noselect path))))
+                  (unless existing (push peer created))
+                  (with-current-buffer peer
+                    (valsi-instruction--sync-check-peer)
+                    (save-restriction
+                      (widen)
+                      (let* ((old (buffer-substring-no-properties (point-min) (point-max)))
+                             (new (valsi-instruction--sync-region source old)))
+                        (unless (equal old new) (push (list peer old new) updates)))))))))
+          (pcase-dolist (`(,peer ,old ,new) (nreverse updates))
+            (when (y-or-n-p (format "Write %s? " (buffer-file-name peer)))
+              (with-current-buffer peer
+                (valsi-instruction--sync-check-peer)
+                (save-restriction
+                  (widen)
+                  (unless (equal old (buffer-substring-no-properties (point-min) (point-max)))
+                    (user-error "Peer changed during sync: %s" buffer-file-name))
+                  (let ((edit (lambda ()
+                                (atomic-change-group
+                                  (replace-region-contents
+                                   (point-min) (point-max)
+                                   ;; Emacs 31 accepts the text directly;
+                                   ;; earlier versions take a producer.
+                                   (if (>= emacs-major-version 31) new
+                                     (lambda () new)))
+                                  (save-buffer)))))
+                    (if (fboundp 'valsi--call-browse-editable)
+                        (valsi--call-browse-editable edit)
+                      (funcall edit)))))
+              (cl-incf written))))
+      (dolist (peer created)
+        (when (and (buffer-live-p peer) (not (buffer-modified-p peer)))
+          (kill-buffer peer))))
     (message "valsi-instruction-sync: updated %d file(s)" written)))
+
+(defun valsi-instruction--sync-check-peer ()
+  "Refuse to overwrite edits in the current visiting peer buffer."
+  (when (buffer-modified-p)
+    (user-error "Peer has unsaved edits: %s" buffer-file-name))
+  (unless (verify-visited-file-modtime (current-buffer))
+    (user-error "Peer changed on disk; revert it before syncing: %s" buffer-file-name))
+  (if (fboundp 'valsi--call-browse-editable)
+      (valsi--call-browse-editable #'barf-if-buffer-read-only)
+    (barf-if-buffer-read-only)))
 
 ;;;; Scaffold
 
