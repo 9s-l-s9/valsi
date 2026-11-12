@@ -34,6 +34,10 @@ instruction artifact; Valsi's instruction grammar activates on it.
 
 ## Style
 
+- Stay within the existing language stack: Emacs Lisp for the application and
+  tests, Scheme for Guix packaging, shell for launchers, and TypeScript/JavaScript
+  for the Pi extension. Do not introduce another language without an explicit
+  user request. In particular, do not add Python code or Python dependencies.
 - Every file uses `lexical-binding: t`, a `valsi-` prefix, and a
   docstring on every public command.
 - Match the surrounding naming and comment density.
