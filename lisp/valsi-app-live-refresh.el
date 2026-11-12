@@ -567,8 +567,9 @@ IMMEDIATE skips the idle debounce for an explicit user refresh."
      patterns)))
 
 (defun valsi-app-live-refresh--ignored-directory-p (root directory git ignores)
-  "Check DIRECTORY below ROOT against Git or backend IGNORES.
-GIT selects `git check-ignore', including nested rules and negations."
+  "Return non-nil when DIRECTORY below ROOT should be ignored.
+Use backend IGNORES patterns and, when GIT is non-nil, `git check-ignore'
+including nested rules and negations."
   (or (valsi-app-live-refresh--excluded-directory-p root directory)
       (file-symlink-p (directory-file-name directory))
       (and (not (equal root directory))
