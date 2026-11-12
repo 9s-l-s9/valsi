@@ -12,12 +12,18 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'compile)
 (require 'subr-x)
 (require 'valsi-node)
 (require 'valsi-parse)
 (require 'valsi-plan)
 (require 'valsi-plan-review)
 (require 'valsi-terminal-agent)
+
+(declare-function valsi--call-browse-editable "valsi" (fn))
+
+(defvar-local valsi-plan--verification nil
+  "Pending completion as (PROCESS TASK-MARKER ORIGINAL-SUBTREE).")
 
 (defun valsi-plan--task-group-title (root task)
   "Return the title of the nearest heading group preceding TASK in ROOT."
@@ -157,36 +163,114 @@ The `**Verify:**' label itself is dropped; only its body is kept."
   (when (valsi-plan-next-actionable)
     (valsi-plan-dispatch-task)))
 
+(defun valsi-plan--clear-verification ()
+  "Release the source marker held by this verification buffer."
+  (when valsi-plan--verification
+    (set-marker (nth 1 valsi-plan--verification) nil)
+    (setq valsi-plan--verification nil)))
+
+(defun valsi-plan--complete-verified-task (marker original)
+  "Mark the task at MARKER done if its subtree still equals ORIGINAL."
+  (with-current-buffer (marker-buffer marker)
+    (save-excursion
+      (save-restriction
+        (widen)
+        (goto-char marker)
+        (let* ((root (valsi-plan--buffer-tree))
+               (task (valsi-plan--task-at-line (valsi-node-of-type root 'task)))
+               (region (and task (valsi-plan--task-region task))))
+          (if (not (and region (= (car region) (point))
+                        (equal original (buffer-substring-no-properties
+                                         (car region) (cdr region)))))
+              (message "Verification passed; task changed, verify again")
+            (let ((edit (lambda ()
+                          (when (looking-at valsi-parse-checkbox-re)
+                            (replace-match "x" t t nil 2)))))
+              (if (fboundp 'valsi--call-browse-editable)
+                  (valsi--call-browse-editable edit)
+                (funcall edit))
+              (message "Verified %s -> done"
+                       (or (valsi-node-prop task :id) "task")))))))))
+
+(defun valsi-plan--finish-verification (buffer _status)
+  "Complete BUFFER's original task after a successful verification process.
+Ignore the human-readable _STATUS; use the recorded process's exit status."
+  (with-current-buffer buffer
+    (when-let* ((pending valsi-plan--verification))
+      (pcase-let ((`(,process ,marker ,original) pending))
+        ;; A later `recompile' must not complete a task a second time.
+        (setq valsi-plan--verification nil)
+        (unwind-protect
+            (cond
+             ((not (and (eq (process-status process) 'exit)
+                        (zerop (process-exit-status process))))
+              (message "Verification failed; task unchanged (see %s)"
+                       (buffer-name buffer)))
+             ((not (marker-buffer marker))
+              (message "Verification passed; source buffer was closed"))
+             (t
+              (condition-case err
+                  (valsi-plan--complete-verified-task marker original)
+                (error
+                 (message "Verification passed; task unchanged: %s"
+                          (error-message-string err))))))
+          (set-marker marker nil))))))
+
+(defun valsi-plan--start-verification (complete)
+  "Review and asynchronously run the current task's verification command.
+When COMPLETE is non-nil, mark the unchanged task done on success."
+  (save-restriction
+    (widen)
+    (let* ((root (valsi-plan--buffer-tree))
+           (task (valsi-plan--task-at-line (valsi-node-of-type root 'task)))
+           (command (and task (valsi-plan--verify-command task))))
+      (unless task (user-error "No task on this line"))
+      (if (null command)
+          (message "No verification command; use `valsi-plan-toggle' to mark done")
+        (let* ((default-directory
+                (or (valsi-project-current-root)
+                    (and buffer-file-name (file-name-directory buffer-file-name))
+                    default-directory))
+               (region (valsi-plan--task-region task))
+               (original (buffer-substring-no-properties (car region) (cdr region)))
+               (command (read-shell-command
+                         (format "Verify in %s: " (abbreviate-file-name default-directory))
+                         command))
+               (name (generate-new-buffer-name
+                      (format "*valsi-verify: %s*"
+                              (or (valsi-node-prop task :id) (buffer-name)))))
+               marker started)
+          (when (string-blank-p command)
+            (user-error "Empty verification command"))
+          (setq marker (and complete (copy-marker (car region) t)))
+          (unwind-protect
+              (let ((compilation-buffer-name-function (lambda (_) name))
+                    (compilation-start-hook
+                     (cons
+                      (lambda (process)
+                        (when complete
+                          (with-current-buffer (process-buffer process)
+                            (setq valsi-plan--verification
+                                  (list process marker original))
+                            (add-hook 'compilation-finish-functions
+                                      #'valsi-plan--finish-verification nil t)
+                            (add-hook 'kill-buffer-hook
+                                      #'valsi-plan--clear-verification nil t))))
+                      compilation-start-hook)))
+                (prog1 (compile command)
+                  (setq started t)))
+            (when (and marker (not started)) (set-marker marker nil))))))))
+
 (defun valsi-plan-run-verification ()
-  "Run the verification command for the task at point in `compilation-mode'."
+  "Review and run the task's command asynchronously from the project root."
   (interactive)
-  (let* ((root (valsi-plan--buffer-tree))
-         (task (valsi-plan--task-at-line (valsi-node-of-type root 'task)))
-         (command (and task (valsi-plan--verify-command task))))
-    (if command
-        (compile command)
-      (message "No verification command for this task"))))
+  (valsi-plan--start-verification nil))
 
 (defun valsi-plan-complete-with-verification ()
-  "Run task verification and mark it done only when the command succeeds."
+  "Review and run verification; complete the unchanged task only on success.
+Output appears in `compilation-mode'.  Failure leaves the task unchanged."
   (interactive)
-  (let* ((root (valsi-plan--buffer-tree))
-         (task (valsi-plan--task-at-line (valsi-node-of-type root 'task)))
-         (command (and task (valsi-plan--verify-command task))))
-    (unless task
-      (user-error "No task on this line"))
-    (if (null command)
-        (message "No verification command; use `valsi-plan-toggle' to mark done")
-      (let ((code (call-process-shell-command command nil "*valsi-verify*")))
-        (if (zerop code)
-            (save-excursion
-              (beginning-of-line)
-              (when (looking-at valsi-parse-checkbox-re)
-                (replace-match "x" t t nil 2))
-              (message "Verified %s -> done"
-                       (or (valsi-node-prop task :id) "task")))
-          (when (y-or-n-p "Verification failed; block this task? ")
-            (valsi-plan-block)))))))
+  (valsi-plan--start-verification t))
 
 (defun valsi-plan-distill-done (content ids)
   "Return a node diff marking each ID in IDS done in plan CONTENT."

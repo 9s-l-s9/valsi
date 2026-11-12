@@ -39,11 +39,18 @@ prepare a prompt.
 ## Verify
 
 `valsi-plan-run-verification` extracts the first backtick command from the task's
-`**Verify:**` meta and runs it in `compilation-mode`.
+`**Verify:**` meta and presents it in the minibuffer for review and editing.
+Accepting the prompt runs the command asynchronously in `compilation-mode`,
+from the project root (or the plan's directory outside a project). Cancelling
+the prompt runs nothing. Verification metadata belongs to its own task; it is
+not inherited from a parent or borrowed from a child.
 
 `valsi-plan-complete-with-verification` runs that command and marks the task done
-**only on success** (exit 0); on failure it offers to `block` the task. This
-closes the loop: a task is not "done" until its own stated check passes.
+**only on success** (exit 0), provided the original task and its subtree are
+still unchanged. Moving point or editing another task during the run cannot
+redirect completion. Failure, cancellation, a closed source buffer, or edits
+to the task leave it unchanged; output remains in the compilation buffer.
+Each invocation has its own output buffer, so concurrent checks stay separate.
 
 ## Review — the node-diff
 

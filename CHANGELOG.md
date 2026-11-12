@@ -63,6 +63,9 @@ grammar activates.
 
 ### Fixed
 
+- Plan verification prompts for an editable command, runs asynchronously from
+  the project root, and completes only the unchanged original task on success
+  (#95).
 - Standalone test, conformance, and benchmark runs load newer source instead
   of stale bytecode left by an earlier build (#92).
 - Family dashboards refresh from their source artifacts, including unsaved
