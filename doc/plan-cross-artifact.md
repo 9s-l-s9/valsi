@@ -22,6 +22,14 @@ on the task line at point, trying in order:
 Requirement/story ids are matched as **whole tokens** (`\_<1.1\_>`), so `1.1`
 never matches inside `11.1`.
 
+File references resolve against the project root first, then the plan's own
+directory. Lint, Flymake, navigation, stale checks, and terminal handoff use
+this same order, including plans under `specs/`, `.kiro/specs/`, and `.planning/`.
+Terminal prompts name the base directory and adjust plan-local references to
+that base. AAP context bundles retain the paths as written in the document.
+Flymake skips filesystem checks for remote buffers; explicit lint still checks
+remote references when requested.
+
 ## Coverage
 
 `valsi-plan-coverage` renders a **requirements ↔ tasks** table: one row per
@@ -42,6 +50,9 @@ for each task path-ref that resolves on disk, it compares the target file's
 modification time against the plan file's. A target **newer than the plan** means
 the code moved after the task was last written — the task is *trailing its
 target* and worth review. Results appear in `*valsi-plan-stale*`.
+
+This is a filesystem signal, not Git history: saving the plan clears older
+findings, and checkout or clone times do not describe when code was authored.
 
 > Modification-time is the portable signal used by default; a git-log-based
 > variant (last-commit time per file) is a natural refinement where the tree is

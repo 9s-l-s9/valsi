@@ -18,6 +18,7 @@
 (require 'flymake)
 (require 'valsi-node)
 (require 'valsi-parse)
+(require 'valsi-project)
 (require 'valsi-registry)
 (require 'valsi-view)
 
@@ -747,19 +748,21 @@ sub-id is never confused with a top-level id of the same prefix."
     parent))
 
 (defun valsi-plan-complete-with-children ()
-  "Mark the task at point done, and every descendant task done too (Kiro interior)."
+  "Complete the task at point and its open or active descendants.
+Preserve cancelled tasks, unknown checkboxes, and examples in fenced code."
   (interactive)
   (let* ((root (valsi-plan--buffer-tree))
          (task (valsi-plan--task-at-line (valsi-node-of-type root 'task))))
     (unless task (user-error "No task on this line"))
-    (let ((region (valsi-plan--task-region task)) (n 0))
+    (let ((n 0))
       (atomic-change-group
         (save-excursion
-          (goto-char (car region))
-          (while (< (point) (cdr region))
-            (when (looking-at valsi-parse-checkbox-re)
-              (replace-match "x" t t nil 2) (cl-incf n))
-            (forward-line 1))))
+          (dolist (child (valsi-node-of-type task 'task))
+            (when (memq (valsi-node-prop child :state) '(open in-progress))
+              (goto-char (+ (point-min) (valsi-node-beg child)))
+              (when (looking-at valsi-parse-checkbox-re)
+                (replace-match "x" t t nil 2)
+                (cl-incf n))))))
       (message "Completed %d task(s) with children" n))))
 
 (defun valsi-plan-split-task ()
@@ -944,11 +947,37 @@ Return nil when REF is a URL or a glob rather than a single file."
               (string-match-p "[*?[]" ref))
     (car (split-string ref ":"))))
 
+(defun valsi-plan--reference-directories (&optional dir)
+  "Return search directories for path-refs: project root, then plan directory.
+DIR overrides the plan directory, normally derived from the variable
+`buffer-file-name'."
+  (let* ((dir (file-name-as-directory
+               (expand-file-name
+                (or dir (and buffer-file-name (file-name-directory buffer-file-name))
+                    default-directory))))
+         (default-directory dir)
+         ;; A supplied directory may belong to a different project from the
+         ;; caller's buffer, for example when scanning several project hubs.
+         (valsi-project-root (and valsi-project-root
+                                  (string-prefix-p valsi-project-root dir)
+                                  valsi-project-root)))
+    (delete-dups (delq nil (list (valsi-project-current-root) dir)))))
+
+(defun valsi-plan--resolve-pathref (ref directories)
+  "Return the first existing file for REF in DIRECTORIES, or nil.
+Skip URLs and globs, and strip any line suffix before resolving."
+  (when-let* ((file (valsi-plan--pathref-file ref)))
+    (cl-some (lambda (dir)
+               (let ((path (expand-file-name file dir)))
+                 (and (file-exists-p path) path)))
+             directories)))
+
 (defun valsi-plan--missing-file-findings (root &optional dir)
   "Return (NODE . MESSAGE) findings for done tasks whose manifest files are gone.
-ROOT is the plan tree.  DIR (default `default-directory') resolves relative
-path-refs."
-  (let ((dir (or dir default-directory))
+ROOT is the plan tree.  Search the project root before the plan directory;
+DIR overrides the latter.  Check each distinct file only once per run."
+  (let ((directories (valsi-plan--reference-directories dir))
+        (resolved (make-hash-table :test #'equal))
         (states (valsi-plan--state-index root))
         (found nil))
     (dolist (tk (valsi-node-of-type root 'task))
@@ -956,7 +985,11 @@ path-refs."
         (dolist (pr (valsi-node-prop tk :pathrefs))
           (let ((file (valsi-plan--pathref-file pr)))
             (unless (or (null file)
-                        (file-exists-p (expand-file-name file dir)))
+                        (let ((cached (gethash file resolved 'unknown)))
+                          (if (eq cached 'unknown)
+                              (puthash file (valsi-plan--resolve-pathref file directories)
+                                       resolved)
+                            cached)))
               (push (cons tk (format "%s: done but manifest file missing: %s"
                                      (or (valsi-node-prop tk :id) "?") file))
                     found))))))
@@ -993,11 +1026,13 @@ missing manifest files, placeholders, and unknown state chars."
 
 (defun valsi-plan-flymake (report-fn &rest _)
   "Report plan lint diagnostics through Flymake REPORT-FN.
-Registered by `valsi-plan-flymake-setup'; parses the current buffer fresh."
+Registered by `valsi-plan-flymake-setup'; parses the current buffer fresh.
+Remote buffers get structural checks only; use explicit lint for file checks."
   (let* ((root (valsi-plan--buffer-tree))
          (diags nil))
     (dolist (pair (append (valsi-plan--lint-collect root)
-                          (valsi-plan--missing-file-findings root)))
+                          (unless (file-remote-p (or buffer-file-name default-directory))
+                            (valsi-plan--missing-file-findings root))))
       (let* ((node (car pair)) (msg (cdr pair))
              (beg (if node (+ (valsi-node-beg node) (point-min)) (point-min)))
              (beg (min beg (point-max)))
@@ -1034,17 +1069,20 @@ Registered by `valsi-plan-flymake-setup'; parses the current buffer fresh."
 
 (defun valsi-plan--follow-pathref-at-point ()
   "If a backtick path-ref is on this line, visit it.  Return non-nil if handled."
-  (save-excursion
-    (beginning-of-line)
-    (when (re-search-forward "`\\([^`\n]*?/[^`\n]*?\\)`" (line-end-position) t)
-      (let* ((ref (match-string-no-properties 1))
-             (parts (split-string ref ":"))
-             (file (car parts))
-             (line (and (cadr parts) (string-to-number (cadr parts)))))
-        (if (file-exists-p file)
+  (let* ((refs (valsi-parse-pathrefs
+                (buffer-substring-no-properties (line-beginning-position)
+                                                (line-end-position))))
+         (ref (cl-find-if #'valsi-plan--pathref-file refs)))
+    (when ref
+      (let* ((file (valsi-plan--resolve-pathref
+                    ref (valsi-plan--reference-directories)))
+             (line (and (string-match ":\\([0-9]+\\)\\'" ref)
+                        (string-to-number (match-string 1 ref)))))
+        (if file
             (progn (find-file-other-window file)
-                   (when line (goto-char (point-min)) (forward-line (1- line))))
-          (message "No such file: %s" file))
+                   (when line (goto-char (point-min))
+                         (forward-line (max 0 (1- line)))))
+          (message "No such file: %s" (valsi-plan--pathref-file ref)))
         t))))
 
 (defun valsi-plan--follow-anchor (file id kind)
@@ -1154,14 +1192,14 @@ A pair is stale when its task's path-ref target is newer than the plan."
   (let ((plan-mtime (and (file-exists-p plan-file)
                          (file-attribute-modification-time
                           (file-attributes plan-file))))
-        (dir (file-name-directory plan-file))
+        (directories (valsi-plan--reference-directories (file-name-directory plan-file)))
         out)
     (when plan-mtime
       (dolist (tk (valsi-node-of-type root 'task))
         (dolist (pr (valsi-node-prop tk :pathrefs))
           (let* ((file (valsi-plan--pathref-file pr))
-                 (abs (and file (expand-file-name file dir))))
-            (when (and abs (file-exists-p abs)
+                 (abs (and file (valsi-plan--resolve-pathref file directories))))
+            (when (and abs
                        (time-less-p plan-mtime
                                     (file-attribute-modification-time
                                      (file-attributes abs))))
@@ -1169,7 +1207,9 @@ A pair is stale when its task's path-ref target is newer than the plan."
     (nreverse out)))
 
 (defun valsi-plan-stale-check ()
-  "Flag tasks whose referenced files are newer than this plan file (git mtime)."
+  "Flag targets newer than this plan using filesystem modification times.
+Saving the plan or checking out files changes this signal;
+it is not Git history."
   (interactive)
   (unless buffer-file-name
     (user-error "Buffer is not visiting a file"))

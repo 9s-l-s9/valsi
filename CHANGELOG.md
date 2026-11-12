@@ -63,6 +63,10 @@ grammar activates.
 
 ### Fixed
 
+- Nested plans resolve file references against the project root before their
+  own directory, consistently across lint, follow, stale checks, and terminal
+  handoff. Remote Flymake checks avoid filesystem probes; subtree completion
+  preserves cancelled and unknown checkboxes and fenced examples (#104).
 - Plan verification prompts for an editable command, runs asynchronously from
   the project root, and completes only the unchanged original task on success
   (#95).

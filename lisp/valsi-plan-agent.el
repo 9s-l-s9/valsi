@@ -134,11 +134,23 @@ The `**Verify:**' label itself is dropped; only its body is kept."
   "Return a review-before-submit terminal prompt for TASK in ROOT."
   (let* ((bundle (valsi-plan-context-bundle root task))
          (id (plist-get bundle :id))
-         (source (and buffer-file-name (file-truename buffer-file-name))))
+         (source (and buffer-file-name (file-truename buffer-file-name)))
+         (directories (valsi-plan--reference-directories)))
+    ;; Keep AAP's context bundle pure and its paths as written.  The terminal
+    ;; handoff can resolve local files and name the base the agent will use.
+    (plist-put bundle :files
+               (mapcar (lambda (file)
+                         (file-relative-name
+                          (or (valsi-plan--resolve-pathref file directories)
+                              (expand-file-name file (car directories)))
+                          (car directories)))
+                       (plist-get bundle :files)))
     (string-join
      (delq nil
            (list
             (valsi-plan-bundle->prompt bundle)
+            (and (plist-get bundle :files)
+                 (format "File paths are relative to: %s" (car directories)))
             (and source
                  (format "Task source: @task:%s from %s" (or id "?") source))
             (concat
