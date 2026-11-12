@@ -183,3 +183,109 @@ test("issue #80: close() kills a server that ignores EOF after the grace period"
 	await new Promise((resolve) => setTimeout(resolve, 40));
 	assert.deepEqual(polite.kills, []);
 });
+
+function documentClient() {
+	const documents = new Map();
+	const calls = [];
+	const child = fakeProcess((record, process) => {
+		const { id, method, params } = JSON.parse(record);
+		calls.push([method, params.uri, params.text]);
+		if (method === "artifact/didOpen") documents.set(params.uri, params.text);
+		if (method === "artifact/didClose") documents.delete(params.uri);
+		queueMicrotask(() => process.stdout.emit("data",
+			JSON.stringify({ id, result: documents.get(params.uri) ?? null }) + "\n"));
+	});
+	const client = new AAPClient("unused", [], { spawn: () => child });
+	return { client, child, documents, calls };
+}
+
+test("temporary documents close on success, query failure, and cancellation", async () => {
+	for (const mode of ["success", "failure", "abort"]) {
+		const { client, documents, calls } = documentClient();
+		const controller = new AbortController();
+		const operation = client.withDocument("PLAN.md", "plan", async (aap) => {
+			if (mode === "failure") throw new Error("query failed");
+			if (mode === "abort") controller.abort(new Error("cancel query"));
+			return aap.request("artifact/symbols", { uri: "PLAN.md" }, controller.signal);
+		}, controller.signal);
+		if (mode === "success") assert.equal(await operation, "plan");
+		else await assert.rejects(operation, /query failed|cancel query/);
+		assert.equal(documents.size, 0);
+		assert.equal(client.documents.size, 0);
+		assert.equal(calls.at(-1)[0], "artifact/didClose");
+		assert.equal(client.pending.size, 0);
+	}
+});
+
+test("same-path calls serialize their own snapshots; other paths remain independent", async () => {
+	const { client, documents } = documentClient();
+	let finish;
+	let entered;
+	const ready = new Promise(resolve => { entered = resolve; });
+	const first = client.withDocument("PLAN.md", "first", () => {
+		entered();
+		return new Promise(resolve => { finish = resolve; });
+	});
+	await ready;
+	const second = client.withDocument("PLAN.md", "second",
+		aap => aap.request("artifact/symbols", { uri: "PLAN.md" }));
+	assert.equal(await client.withDocument("OTHER.md", "other",
+		aap => aap.request("artifact/symbols", { uri: "OTHER.md" })), "other");
+	assert.equal(documents.get("PLAN.md"), "first");
+	finish("first query");
+	assert.equal(await first, "first query");
+	assert.equal(await second, "second");
+	assert.equal(documents.size, 0);
+	assert.equal(client.documents.size, 0);
+});
+
+test("a cancelled queued query never opens its document", async () => {
+	const { client, calls } = documentClient();
+	let finish;
+	let entered;
+	const ready = new Promise(resolve => { entered = resolve; });
+	const first = client.withDocument("PLAN.md", "first", () => {
+		entered(); return new Promise(resolve => { finish = resolve; });
+	});
+	await ready;
+	const controller = new AbortController();
+	const second = client.withDocument("PLAN.md", "cancelled", () => assert.fail(), controller.signal);
+	controller.abort(new Error("cancel queued"));
+	const rejected = assert.rejects(second, /cancel queued/);
+	finish();
+	await Promise.all([first, rejected]);
+	assert.equal(calls.filter(([method]) => method === "artifact/didOpen").length, 1);
+	assert.equal(client.documents.size, 0);
+});
+
+test("failed cleanup retires the server and preserves the original query error", async () => {
+	const { client } = documentClient();
+	const request = client.request.bind(client);
+	client.request = (method, ...args) => method === "artifact/didClose"
+		? Promise.reject(new Error("close failed")) : request(method, ...args);
+	await assert.rejects(client.withDocument("PLAN.md", "text", () => {
+		throw new Error("original query failure");
+	}), /original query failure/);
+	assert.equal(client.running, false);
+	assert.equal(client.documents.size, 0);
+});
+
+test("cancelling didOpen still closes the document that reached the server", async () => {
+	const controller = new AbortController();
+	const documents = new Map();
+	const child = fakeProcess((record, process) => {
+		const { id, method, params } = JSON.parse(record);
+		if (method === "artifact/didOpen") {
+			documents.set(params.uri, params.text);
+			queueMicrotask(() => controller.abort(new Error("cancel open")));
+		} else if (method === "artifact/didClose") {
+			documents.delete(params.uri);
+			queueMicrotask(() => process.stdout.emit("data", JSON.stringify({ id, result: null }) + "\n"));
+		}
+	});
+	const client = new AAPClient("unused", [], { spawn: () => child });
+	await assert.rejects(client.withDocument("PLAN.md", "text", () => assert.fail(), controller.signal), /cancel open/);
+	assert.equal(documents.size, 0);
+	assert.equal(client.pending.size, 0);
+	assert.equal(client.documents.size, 0);
+});

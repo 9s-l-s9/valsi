@@ -11,6 +11,7 @@ export class AAPClient {
 	constructor(command, args, options = {}) {
 		this.nextId = 1;
 		this.pending = new Map();
+		this.documents = new Map();
 		this.buffer = "";
 		this.timeoutMs = options.timeoutMs ?? AAP_TIMEOUT_MS;
 		this.closeGraceMs = options.closeGraceMs ?? AAP_CLOSE_GRACE_MS;
@@ -130,6 +131,40 @@ export class AAPClient {
 			pending.reject(error);
 		}
 		this.pending.clear();
+	}
+
+	/** Run one query with temporary document state; serialize calls for one URI. */
+	withDocument(uri, text, query, signal) {
+		const previous = this.documents.get(uri) ?? Promise.resolve();
+		const operation = previous.catch(() => {}).then(async () => {
+			if (signal?.aborted) throw signal.reason ?? new Error("AAP request aborted");
+			let failed = false;
+			try {
+				await this.request("artifact/didOpen", { uri, text }, signal);
+				return await query(this);
+			} catch (error) {
+				failed = true;
+				throw error;
+			} finally {
+				// Even an aborted didOpen may already be queued in the server.
+				// Close without the caller's signal, after that queued request.
+				if (this.running) {
+					try {
+						await this.request("artifact/didClose", { uri });
+					} catch (error) {
+						// A server that cannot release the document is not reusable.
+						this.close();
+						if (!failed) throw error;
+					}
+				}
+			}
+		});
+		this.documents.set(uri, operation);
+		const release = () => {
+			if (this.documents.get(uri) === operation) this.documents.delete(uri);
+		};
+		operation.then(release, release);
+		return operation;
 	}
 
 	/** End the server's stdin; kill it if it has not exited after the grace period. */

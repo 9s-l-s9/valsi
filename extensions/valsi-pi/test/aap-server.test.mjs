@@ -8,10 +8,13 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { accessSync, constants } from "node:fs";
+import { mkdtemp, writeFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { AAPClient } from "../aap-client.mjs";
+import { queryArtifact } from "../artifact-tool.mjs";
 
 const lispDirectory = resolve(
 	dirname(fileURLToPath(import.meta.url)),
@@ -28,7 +31,7 @@ function executable(file) {
 }
 
 function findEmacs() {
-	for (const candidate of [process.env.Valsi_AAP_EMACS, process.env.EMACS]) {
+	for (const candidate of [process.env.VALSI_AAP_EMACS, process.env.Valsi_AAP_EMACS, process.env.EMACS]) {
 		if (!candidate || candidate === "t") continue;
 		if (candidate.includes("/")) {
 			if (executable(candidate)) return candidate;
@@ -62,6 +65,29 @@ function realServerSkip(emacs, run = spawnSync) {
 
 const emacs = findEmacs();
 const skip = realServerSkip(emacs);
+
+test("artifact tool closes real documents and returns filtered, bounded symbols", { skip }, async () => {
+	const root = await mkdtemp(join(tmpdir(), "valsi-artifact-"));
+	const client = realServer();
+	try {
+		const path = join(root, "PLAN.md");
+		await writeFile(path, "# Plan\n\n" + Array.from({ length: 1000 },
+			(_, i) => `- [ ] T${i + 1} work item\n`).join(""));
+		const params = { path: "PLAN.md", action: "symbols", nodeTypes: ["task"], maxNodes: 3 };
+		const results = await Promise.all([queryArtifact(() => client, root, params),
+			queryArtifact(() => client, root, { path: "PLAN.md", action: "capabilities" })]);
+		assert.equal(results[0].details.nodes.length, 3);
+		assert.ok(results[0].details.nodes.every(node => node.type === "task"));
+		assert.equal(results[0].details.truncated, true);
+		assert.equal(results[0].content[0].text, JSON.stringify(results[0].details));
+		assert.equal(await client.request("artifact/symbols", { uri: path }), null);
+		assert.equal(client.documents.size, 0);
+		const missing = await queryArtifact(() => client, root,
+			{ path: "PLAN.md", action: "plan_context", taskId: "missing" });
+		assert.equal(missing.details, null);
+		assert.equal(await client.request("artifact/symbols", { uri: path }), null);
+	} finally { client.close(); await rm(root, { recursive: true, force: true }); }
+});
 
 test("issue #87: the real-server tests skip without native JSON", () => {
 	const calls = [];

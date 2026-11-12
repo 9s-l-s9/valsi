@@ -63,6 +63,10 @@ grammar activates.
 
 ### Fixed
 
+- The Pi artifact tool releases documents after each query, serializes
+  concurrent access to one path, bounds and filters symbol output, enforces
+  project-relative paths, and accepts documented uppercase configuration
+  variables (#98).
 - CI pins action revisions, checks Emacs 29.1, 30.2, and 31.1 plus an
   advisory snapshot job, and treats manual-build warnings as failures (#93).
 - Named Pi terminals select separate, resumable sessions per project and name.
